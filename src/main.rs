@@ -10,8 +10,8 @@ use axum::{
     routing::{get}, Router,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use auth_service::handlers::{index, protected};
-use auth_service::routes;
+use keylo::handlers::{index, protected};
+use keylo::routes;
 // Quick instructions
 //
 // - get an authorization token:

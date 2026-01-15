@@ -1,11 +1,11 @@
 [package]
-name = "auth-service"
+name = "keylo"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
 path = "src/main.rs"
-name = "auth-service"
+name = "keylo"
 
 [lib]
 path = "src/lib.rs"
