@@ -20,7 +20,7 @@ use auth_service::routes;
 //     -w '\n' \
 //     -H 'Content-Type: application/json' \
 //     -d '{"client_id":"foo","client_secret":"bar"}' \
-//     http://localhost:3000/v1/auth/token
+//     http://localhost:2345/v1/auth/token
 //
 // - visit the protected area using the authorized token
 //
@@ -28,7 +28,7 @@ use auth_service::routes;
 //     -w '\n' \
 //     -H 'Content-Type: application/json' \
 //     -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJiQGIuY29tIiwiY29tcGFueSI6IkFDTUUiLCJleHAiOjEwMDAwMDAwMDAwfQ.M3LAZmrzUkXDC1q5mSzFAs_kJrwuKz3jOoDmjJ0G4gM' \
-//     http://localhost:3000/protected
+//     http://localhost:2345/protected
 //
 // - try to visit the protected area using an invalid token
 //
@@ -36,7 +36,7 @@ use auth_service::routes;
 //     -w '\n' \
 //     -H 'Content-Type: application/json' \
 //     -H 'Authorization: Bearer blahblahblah' \
-//     http://localhost:3000/protected
+//     http://localhost:2345/protected
 
 
 #[tokio::main]
@@ -54,7 +54,7 @@ async fn main() {
         .route("/protected", get(protected))
         .merge(routes::auth::router());
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:2345")
         .await
         .unwrap();
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
