@@ -68,7 +68,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index))
         .route("/protected", get(protected))
-        .route("/authorize", post(authorize));
+        .route("/v1/auth/token", post(auth_token));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
@@ -91,7 +91,7 @@ async fn protected(claims: Claims) -> Result<String, AuthError> {
     ))
 }
 
-async fn authorize(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
+async fn auth_token(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
     // Check if the user sent the credentials
     if payload.client_id.is_empty() || payload.client_secret.is_empty() {
         return Err(AuthError::MissingCredentials);
