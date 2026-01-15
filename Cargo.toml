@@ -1,0 +1,22 @@
+[package]
+name = "auth-service"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+async-session = "3"
+axum = { version = "0.8" }
+axum-extra = { version = "0.12", features = ["typed-header"] }
+http = "1.0.0"
+oauth2 = "5"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Use Rustls because it makes it easier to cross-compile on CI
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "any", "postgres"] }
