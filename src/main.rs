@@ -32,7 +32,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 //     -w '\n' \
 //     -H 'Content-Type: application/json' \
 //     -d '{"client_id":"foo","client_secret":"bar"}' \
-//     http://localhost:3000/authorize
+//     http://localhost:3000/v1/auth/token
 //
 // - visit the protected area using the authorized token
 //
