@@ -77,11 +77,9 @@ async fn main() {
     let _ = axum::serve(listener, app).await;
 }
 
-async fn index(claims: Claims) -> Result<String, AuthError> {
+async fn index() -> Result<String, AuthError> {
     // Send the protected data to the user
-    Ok(format!(
-        "Welcome to the protected area :)\nYour data:\n{claims}",
-    ))
+    Ok("Welcome to the index :)".to_string())
 }
 
 async fn protected(claims: Claims) -> Result<String, AuthError> {
