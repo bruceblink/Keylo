@@ -54,7 +54,7 @@ async fn main() {
         .route("/protected", get(protected))
         .merge(routes::auth::router());
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:2345")
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:2345")
         .await
         .unwrap();
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
