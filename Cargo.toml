@@ -3,6 +3,13 @@ name = "auth-service"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+path = "src/main.rs"
+name = "auth-service"
+
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1"
 async-session = "3"
