@@ -1,10 +1,9 @@
 use crate::errors::AuthError;
 use crate::models::{AuthBody, AuthPayload, Claims, MeResponse, KEYS};
-use crate::state::AppState;
-use axum::extract::State;
 use axum::Json;
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use jsonwebtoken::{encode, Header};
+use uuid::Uuid;
 
 pub async fn auth_token(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
     // Check if the user sent the credentials
@@ -16,14 +15,16 @@ pub async fn auth_token(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBod
         return Err(AuthError::WrongCredentials);
     }
 
-    let now = Utc::now();
-    let exp = now + Duration::minutes(15);
+    let now = Utc::now().timestamp();
 
     let claims = Claims {
-        sub: "client:admin-backend".to_string(),
-        scope: vec![],
-        exp: exp.timestamp(),
+        sub: format!("client:{}", payload.client_id),
         iss: "keylo".to_string(),
+        aud: "admin-backend".to_string(),
+        scope: vec!["internal".into(), "write".into()],
+        iat: now,
+        exp: now + 900, // 15 minutes
+        jti: Uuid::new_v4().to_string(),
     };
     // Create the authorization token
     let token = encode(&Header::default(), &claims, &KEYS.encoding)
@@ -39,21 +40,12 @@ pub async fn auth_logout(Json(_payload): Json<AuthPayload>) -> Result<Json<AuthB
 
 pub async fn auth_me(
     claims: Claims,
-    State(_state): State<AppState>,) -> Result<Json<MeResponse>, AuthError> {
-
-    // 这里你可以根据 claims.sub 查数据库决定 scope
-    // 暂时我们直接写死一些示例 scope
-    let scopes = match claims.sub.as_str() {
-        "client:admin-backend" => vec!["internal", "write"],
-        "client:crawler" => vec!["read"],
-        _ => vec![],
-    };
-
-    let resp = MeResponse {
+) -> Result<Json<MeResponse>, AuthError> {
+    Ok(Json(MeResponse {
         sub: claims.sub,
-        scope: scopes.iter().map(|s | s.to_string()).collect(),
+        scope: claims.scope,
+        aud: claims.aud,
         exp: claims.exp,
-        iss: "keylo".to_string(),
-    };
-    Ok(Json(resp))
+        iss: claims.iss,
+    }))
 }

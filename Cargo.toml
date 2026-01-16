@@ -28,3 +28,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "any", "postgres"] }
 chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
