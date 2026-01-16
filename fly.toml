@@ -1,0 +1,29 @@
+app = "keylo"
+primary_region = "sin"
+
+kill_signal = "SIGINT"
+kill_timeout = 5
+processes = []
+
+[env]
+APP_ENV = "production"
+TZ = "Asia/Shanghai"
+
+[[services]]
+internal_port = 2345
+protocol = "tcp"
+
+# 使用 Fly 的 HTTP/HTTPS 代理
+[[services.ports]]
+port = 80
+handlers = ["http"]  # HTTP 流量
+
+[[services.ports]]
+port = 443
+handlers = ["tls", "http"]  # HTTPS 流量
+
+[[vm]]
+cpu_kind = "shared"
+cpus = 1
+memory = "256mb"
+memory_mb = 256
