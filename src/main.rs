@@ -50,7 +50,7 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
     // initial AppState
-    let app_state = AppState::new();
+    let app_state = AppState::default();
 
     // pass app_state to auth::router
     let app = Router::new()

@@ -8,6 +8,12 @@ pub struct AppState {
     pub clients: Arc<HashMap<String, String>>,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let jwt_secret =
