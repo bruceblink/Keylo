@@ -9,6 +9,7 @@ use http::request::Parts;
 use jsonwebtoken::{decode, DecodingKey, EncodingKey, Validation};
 use jsonwebtoken::errors::ErrorKind;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use crate::errors::AuthError;
 
 pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
@@ -74,7 +75,7 @@ where
                     ErrorKind::ExpiredSignature => println!("JWT decode failed: token expired"),
                     ErrorKind::InvalidIssuer => println!("JWT decode failed: invalid issuer"),
                     ErrorKind::InvalidAudience => println!("JWT decode failed: invalid audience"),
-                    _ => println!("JWT decode failed: {:?}", err),
+                    _ => warn!("JWT decode failed: {:?}", err),
                 }
                 return Err(AuthError::InvalidToken);
             }
