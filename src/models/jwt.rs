@@ -7,11 +7,12 @@ use axum_extra::headers::authorization::Bearer;
 use axum_extra::TypedHeader;
 use http::request::Parts;
 use jsonwebtoken::{decode, DecodingKey, EncodingKey, Validation};
+use jsonwebtoken::errors::ErrorKind;
 use serde::{Deserialize, Serialize};
 use crate::errors::AuthError;
 
 pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
-    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+    let secret = std::env::var("JWT_SECRET").unwrap_or("my-jwt-secret".to_string());
     Keys::new(secret.as_bytes())
 });
 
@@ -61,9 +62,23 @@ where
             .await
             .map_err(|_| AuthError::InvalidToken)?;
         // Decode the user data
-        let token_data = decode::<Claims>(bearer.token(), &KEYS.decoding, &Validation::default())
-            .map_err(|_| AuthError::InvalidToken)?;
+        let mut validation = Validation::default();
+        validation.set_audience(&["admin-backend", "crawler"]);
 
+        let token_data = match decode::<Claims>(bearer.token(), &KEYS.decoding, &validation) {
+            Ok(data) => data,
+            Err(err) => {
+                match *err.kind() {
+                    ErrorKind::InvalidToken => println!("JWT decode failed: invalid token"),
+                    ErrorKind::InvalidSignature => println!("JWT decode failed: invalid signature"),
+                    ErrorKind::ExpiredSignature => println!("JWT decode failed: token expired"),
+                    ErrorKind::InvalidIssuer => println!("JWT decode failed: invalid issuer"),
+                    ErrorKind::InvalidAudience => println!("JWT decode failed: invalid audience"),
+                    _ => println!("JWT decode failed: {:?}", err),
+                }
+                return Err(AuthError::InvalidToken);
+            }
+        };
         Ok(token_data.claims)
     }
 }
