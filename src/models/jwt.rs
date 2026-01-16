@@ -50,6 +50,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct Keys {
     pub encoding: EncodingKey,
     decoding: DecodingKey,

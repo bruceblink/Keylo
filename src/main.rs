@@ -12,6 +12,7 @@ use axum::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use keylo::handlers::{index, protected};
 use keylo::routes;
+use keylo::state::AppState;
 // Quick instructions
 //
 // - get an authorization token:
@@ -48,11 +49,14 @@ async fn main() {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+    // initial AppState
+    let app_state = AppState::new();
 
+    // pass app_state to auth::router
     let app = Router::new()
         .route("/", get(index))
         .route("/protected", get(protected))
-        .merge(routes::auth::router());
+        .merge(routes::auth::router(app_state));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:2345")
         .await

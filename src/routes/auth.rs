@@ -1,10 +1,12 @@
-use axum::Router;
-use axum::routing::post;
 use crate::handlers::{auth_logout, auth_me, auth_token};
+use crate::state::AppState;
+use axum::routing::{get, post};
+use axum::Router;
 
-pub fn router() -> Router {
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/auth/token", post(auth_token))
         .route("/v1/auth/logout", post(auth_logout))
-        .route("/v1/auth/me", axum::routing::get(auth_me))
+        .route("/v1/auth/me", get(auth_me))
+        .with_state(state)
 }

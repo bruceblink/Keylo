@@ -1,8 +1,10 @@
-use chrono::{Duration, Utc};
-use axum::Json;
-use jsonwebtoken::{encode, Header};
 use crate::errors::AuthError;
-use crate::models::{AuthBody, AuthPayload, Claims, KEYS};
+use crate::models::{AuthBody, AuthPayload, Claims, MeResponse, KEYS};
+use crate::state::AppState;
+use axum::extract::State;
+use axum::Json;
+use chrono::{Duration, Utc};
+use jsonwebtoken::{encode, Header};
 
 pub async fn auth_token(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
     // Check if the user sent the credentials
@@ -35,6 +37,23 @@ pub async fn auth_logout(Json(_payload): Json<AuthPayload>) -> Result<Json<AuthB
     todo!()
 }
 
-pub async fn auth_me(Json(_payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
-    todo!()
+pub async fn auth_me(
+    claims: Claims,
+    State(_state): State<AppState>,) -> Result<Json<MeResponse>, AuthError> {
+
+    // 这里你可以根据 claims.sub 查数据库决定 scope
+    // 暂时我们直接写死一些示例 scope
+    let scopes = match claims.sub.as_str() {
+        "client:admin-backend" => vec!["internal", "write"],
+        "client:crawler" => vec!["read"],
+        _ => vec![],
+    };
+
+    let resp = MeResponse {
+        sub: claims.sub,
+        scope: scopes.iter().map(|s | s.to_string()).collect(),
+        exp: claims.exp,
+        iss: "keylo".to_string(),
+    };
+    Ok(Json(resp))
 }
