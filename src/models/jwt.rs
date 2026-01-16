@@ -18,10 +18,28 @@ pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
+    /// Subject：身份主体
+    /// user:xxx | client:xxx
     pub sub: String,
-    pub scope: Vec<String>,
-    pub exp: i64,
+
+    /// Issuer：签发方
     pub iss: String,
+
+    /// Audience：token 适用对象
+    /// admin-backend | crawler | *
+    pub aud: String,
+
+    /// Scope：权限集合（核心）
+    pub scope: Vec<String>,
+
+    /// Expiration time (unix timestamp)
+    pub exp: i64,
+
+    /// Issued at
+    pub iat: i64,
+
+    /// JWT ID（为吊销、审计预留）
+    pub jti: String,
 }
 
 impl Display for Claims {
