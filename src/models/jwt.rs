@@ -19,13 +19,14 @@ pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
-    pub company: String,
-    pub exp: usize,
+    pub scope: Vec<String>,
+    pub exp: i64,
+    pub iss: String,
 }
 
 impl Display for Claims {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Email: {}\nCompany: {}", self.sub, self.company)
+        write!(f, "Sub: {}\nScop: {:?}", self.sub, self.scope)
     }
 }
 

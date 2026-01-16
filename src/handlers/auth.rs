@@ -1,3 +1,4 @@
+use chrono::{Duration, Utc};
 use axum::Json;
 use jsonwebtoken::{encode, Header};
 use crate::errors::AuthError;
@@ -12,11 +13,15 @@ pub async fn auth_token(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBod
     if payload.client_id != "foo" || payload.client_secret != "bar" {
         return Err(AuthError::WrongCredentials);
     }
+
+    let now = Utc::now();
+    let exp = now + Duration::minutes(15);
+
     let claims = Claims {
-        sub: "b@b.com".to_owned(),
-        company: "ACME".to_owned(),
-        // Mandatory expiry time as UTC timestamp
-        exp: 2000000000, // May 2033
+        sub: "client:admin-backend".to_string(),
+        scope: vec![],
+        exp: exp.timestamp(),
+        iss: "keylo".to_string(),
     };
     // Create the authorization token
     let token = encode(&Header::default(), &claims, &KEYS.encoding)
