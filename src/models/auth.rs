@@ -26,6 +26,7 @@ pub struct MeResponse {
     pub sub: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub scope: Vec<String>,
+    pub aud: String,
     pub exp: i64,
     pub iss: String,
 }
