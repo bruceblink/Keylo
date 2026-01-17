@@ -1,5 +1,4 @@
 use std::fmt::Display;
-use std::sync::LazyLock;
 use axum::extract::FromRequestParts;
 use axum::RequestPartsExt;
 use axum_extra::headers::Authorization;
@@ -11,12 +10,7 @@ use jsonwebtoken::errors::ErrorKind;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 use crate::errors::AuthError;
-
-pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
-    let secret = std::env::var("JWT_SECRET").unwrap_or("my-jwt-secret".to_string());
-    Keys::new(secret.as_bytes())
-});
-
+use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -50,13 +44,10 @@ impl Display for Claims {
     }
 }
 
-impl<S> FromRequestParts<S> for Claims
-where
-    S: Send + Sync,
-{
+impl FromRequestParts<AppState> for Claims {
     type Rejection = AuthError;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         // Extract the token from the authorization header
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
@@ -66,7 +57,7 @@ where
         let mut validation = Validation::default();
         validation.set_audience(&["admin-backend", "crawler"]);
 
-        let token_data = match decode::<Claims>(bearer.token(), &KEYS.decoding, &validation) {
+        let token_data = match decode::<Claims>(bearer.token(), &state.jwt_keys.decoding, &validation) {
             Ok(data) => data,
             Err(err) => {
                 match *err.kind() {

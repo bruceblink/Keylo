@@ -1,11 +1,13 @@
 use crate::errors::AuthError;
-use crate::models::{AuthBody, AuthPayload, Claims, MeResponse, KEYS};
+use crate::models::{AuthBody, AuthPayload, Claims, MeResponse};
+use crate::state::AppState;
+use axum::extract::State;
 use axum::Json;
 use chrono::Utc;
 use jsonwebtoken::{encode, Header};
 use uuid::Uuid;
 
-pub async fn auth_token(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
+pub async fn auth_token(State(state): State<AppState>, Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
     // Check if the user sent the credentials
     if payload.client_id.is_empty() || payload.client_secret.is_empty() {
         return Err(AuthError::MissingCredentials);
@@ -27,7 +29,7 @@ pub async fn auth_token(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBod
         jti: Uuid::new_v4().to_string(),
     };
     // Create the authorization token
-    let token = encode(&Header::default(), &claims, &KEYS.encoding)
+    let token = encode(&Header::default(), &claims, &state.jwt_keys.encoding)
         .map_err(|_| AuthError::TokenCreation)?;
 
     // Send the authorized token
