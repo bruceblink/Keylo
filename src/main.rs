@@ -6,13 +6,8 @@
 //! JWT_SECRET=secret cargo run -p example-jwt
 //! ```
 
-use axum::{
-    routing::{get}, Router,
-};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use keylo::handlers::{index, protected};
-use keylo::routes;
-use keylo::state::AppState;
+use keylo::startup::init_app_router;
 // Quick instructions
 //
 // - get an authorization token:
@@ -49,15 +44,9 @@ async fn main() {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    // initial AppState
-    let app_state = AppState::default();
 
-    // pass app_state to auth::router
-    let app = Router::new()
-        .route("/", get(index))
-        .route("/protected", get(protected))
-        .merge(routes::auth::router())
-        .with_state(app_state);
+    // init app Router
+    let app = init_app_router();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:2345")
         .await
