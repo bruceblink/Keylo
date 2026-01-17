@@ -56,7 +56,8 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index))
         .route("/protected", get(protected))
-        .merge(routes::auth::router(app_state));
+        .merge(routes::auth::router())
+        .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:2345")
         .await
