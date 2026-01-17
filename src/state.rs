@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use crate::models::Keys;
 
 #[derive(Clone)]
@@ -20,10 +20,14 @@ impl Default for AppState {
     }
 }
 
+pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
+    // 从环境变量读取 JWT secret
+    let secret = std::env::var("JWT_SECRET").unwrap_or("my-jwt-secret".to_string());
+    Keys::new(secret.as_bytes())
+});
+
 impl AppState {
     pub fn new() -> Self {
-        // 从环境变量读取 JWT secret
-        let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "my-jwt-secret".to_string());
 
         // 默认客户端，可以替换成从配置文件或数据库加载
         let mut clients = HashMap::new();
@@ -34,7 +38,7 @@ impl AppState {
         let audiences = vec!["admin-backend".into(), "crawler".into()];
 
         Self {
-            jwt_keys: Keys::new(jwt_secret.as_bytes()),
+            jwt_keys: KEYS.clone(),
             clients: Arc::new(clients),
             audiences: Arc::new(audiences),
         }
