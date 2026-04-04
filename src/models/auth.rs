@@ -29,4 +29,5 @@ pub struct MeResponse {
     pub aud: String,
     pub exp: i64,
     pub iss: String,
+    pub jti: String,
 }
