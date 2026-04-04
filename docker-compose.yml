@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:17-alpine
+    container_name: keylo_postgres
+    environment:
+      POSTGRES_USER: keylo_user
+      POSTGRES_PASSWORD: keylo_password
+      POSTGRES_DB: keylo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keylo_user -d keylo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - keylo_network
+
+  # Redis for session/token caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: keylo_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - keylo_network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  keylo_network:
+    driver: bridge
