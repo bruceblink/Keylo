@@ -27,7 +27,76 @@
 
 ---
 
-## 📦 快速开始
+## 🧪 测试
+
+Keylo 包含完整的测试套件，包括单元测试、集成测试、数据库测试和负载测试。
+
+### 运行所有测试
+
+使用提供的测试脚本（推荐）：
+
+```bash
+# Linux/macOS
+./scripts/run_tests.sh
+
+# Windows (PowerShell)
+./scripts/run_tests.ps1
+```
+
+### 手动运行测试
+
+1. **启动测试数据库**：
+```bash
+docker run -d --name keylo-test-db \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=keylo_test \
+  -p 5432:5432 postgres:15
+```
+
+2. **设置环境变量**：
+```bash
+export TEST_DATABASE_URL="postgres://postgres:password@localhost:5432/keylo_test"
+```
+
+3. **运行不同类型的测试**：
+```bash
+# 单元测试
+cargo test --lib
+
+# 集成测试
+cargo test --test integration_test
+
+# 数据库集成测试
+cargo test --test database_integration_test
+
+# 负载测试
+cargo test --test load_test
+
+# 所有测试
+cargo test
+```
+
+### 测试覆盖率
+
+生成测试覆盖率报告：
+
+```bash
+cargo install cargo-tarpaulin
+cargo tarpaulin --out Html
+```
+
+### CI/CD
+
+项目包含 GitHub Actions CI/CD 配置，自动运行：
+- 代码格式检查 (`cargo fmt`)
+- 代码质量检查 (`cargo clippy`)
+- 安全审计 (`cargo audit`)
+- 完整测试套件
+- 覆盖率报告
+
+---
+
+## 🔧 开发
 
 ### 1. 克隆项目
 
