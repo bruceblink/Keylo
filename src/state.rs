@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
+use sqlx::PgPool;
 use crate::models::Keys;
+use crate::config::Config;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -12,11 +14,17 @@ pub struct AppState {
 
     /// 可选：受信任的 JWT audience 白名单
     pub audiences: Arc<Vec<String>>,
+    
+    /// 数据库连接池
+    pub db: Option<Arc<PgPool>>,
+    
+    /// 应用配置
+    pub config: Arc<Config>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::new()
+        Self::new(Config::default(), None)
     }
 }
 
@@ -27,7 +35,7 @@ pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
 });
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(config: Config, db: Option<Arc<PgPool>>) -> Self {
 
         // 默认客户端，可以替换成从配置文件或数据库加载
         let mut clients = HashMap::new();
@@ -41,6 +49,8 @@ impl AppState {
             jwt_keys: KEYS.clone(),
             clients: Arc::new(clients),
             audiences: Arc::new(audiences),
+            db,
+            config: Arc::new(config),
         }
     }
 
@@ -54,5 +64,24 @@ impl AppState {
     /// 获取动态的允许 audience
     pub fn allowed_audiences(&self) -> Vec<&str> {
         self.audiences.iter().map(|s| s.as_str()).collect()
+    }
+    
+    /// 从数据库重新加载客户端列表
+    pub async fn reload_clients_from_db(&mut self) -> Result<(), String> {
+        if let Some(db) = &self.db {
+            match crate::db::get_all_active_clients(db).await {
+                Ok(clients) => {
+                    let mut client_map = HashMap::new();
+                    for (id, secret) in clients {
+                        client_map.insert(id, secret);
+                    }
+                    self.clients = Arc::new(client_map);
+                    Ok(())
+                },
+                Err(e) => Err(e.to_string()),
+            }
+        } else {
+            Err("Database not initialized".to_string())
+        }
     }
 }
