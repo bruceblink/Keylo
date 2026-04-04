@@ -1,10 +1,12 @@
 use axum::Router;
 use axum::routing::get;
+use axum::middleware;
 use std::sync::Arc;
 use crate::config::Config;
 use crate::handlers::{index, protected};
 use crate::routes;
 use crate::state::AppState;
+use crate::middleware::auth;
 
 pub fn init_app_router() -> Router {
     let app_state = AppState::default();
@@ -37,6 +39,7 @@ pub async fn init_app_router_with_db(config: Config, database_url: &str) -> Resu
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::router())
+        .layer(middleware::from_fn_with_state(app_state.clone(), auth::auth_middleware))
         .with_state(app_state))
 }
 

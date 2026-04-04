@@ -19,6 +19,13 @@ pub struct RefreshTokenRequest {
     pub refresh_token: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BlacklistTokenRequest {
+    pub token: String,
+    pub reason: Option<String>,
+    pub expires_at: Option<i64>,
+}
+
 impl AuthBody {
     pub fn new(access_token: String, refresh_token: String, expires_in: i64) -> Self {
         Self {
