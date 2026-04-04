@@ -6,41 +6,83 @@
 
 ## 🚀 特性
 
-* JWT 签发与验证（Access Token + 可扩展 Refresh Token）
-* `/v1/auth/token`、`/v1/auth/logout`、`/v1/auth/me` 核心 API
-* 支持 GitHub OAuth 登录（可扩展其他 OAuth 提供商）
-* 高可维护模块化架构（routes / handlers / db / models / utils）
-* 可与现有数据库表兼容，实现登录互通
-* 使用 **Axum 0.8 + Tokio** 异步高性能框架
-* 可轻松扩展多客户端、多角色、多服务权限控制
+* ✅ JWT 签发与验证（Access Token + 可扩展 Refresh Token）
+* ✅ `/v1/auth/token`、`/v1/auth/logout`、`/v1/auth/me` 核心 API
+* ✅ 支持 GitHub OAuth 登录（可扩展其他 OAuth 提供商）
+* ✅ 高可维护模块化架构（routes / handlers / db / models / utils）
+* ✅ 可与现有数据库表兼容，实现登录互通
+* ✅ 使用 **Axum 0.8 + Tokio** 异步高性能框架
+* ✅ 可轻松扩展多客户端、多角色、多服务权限控制
+* ✅ PostgreSQL 数据库集成，支持自动迁移
+* ✅ 完整的错误处理和日志系统
+* ✅ Docker 容器化支持
 
 ---
 
-## 📦 安装与运行
+## 📋 前置要求
+
+* Rust 1.70+ ([安装 Rust](https://rustup.rs/))
+* PostgreSQL 12+ (或使用 Docker)
+* Docker & Docker Compose (可选，用于本地开发)
+
+---
+
+## 📦 快速开始
 
 ### 1. 克隆项目
 
 ```bash
-  git clone https://github.com/bruceblink/Keylo.git
-  cd keylo
+git clone https://github.com/bruceblink/Keylo.git
+cd keylo
 ```
 
-### 2. 设置环境变量
+### 2. 配置环境变量
+
+复制 `.env.example` 到 `.env`:
 
 ```bash
-  export JWT_SECRET="supersecretkey"
-  export DATABASE_URL="postgres://user:password@localhost/keylo"
+cp .env.example .env
 ```
 
-> Windows 用户可使用 `set JWT_SECRET=supersecretkey`
-
-### 3. 构建并运行
+编辑 `.env` 设置你的配置：
 
 ```bash
-  cargo run
+JWT_SECRET=your-secure-secret-key
+DATABASE_URL=postgres://keylo_user:keylo_password@localhost:5432/keylo
+SERVER_ADDR=127.0.0.1
+SERVER_PORT=2345
+ENVIRONMENT=development
 ```
 
-默认监听 `127.0.0.1:2345`。
+### 3. 启动 PostgreSQL (使用 Docker Compose)
+
+```bash
+docker-compose up -d
+```
+
+这将启动：
+* PostgreSQL 数据库 (监听 `5432`)
+* Redis 服务 (监听 `6379`, 可选)
+
+等待数据库准备好：
+
+```bash
+docker-compose ps
+```
+
+### 4. 构建并运行
+
+```bash
+cargo run
+```
+
+服务将在 `http://127.0.0.1:2345` 启动。
+
+查看日志：
+
+```bash
+RUST_LOG=keylo=debug cargo run
+```
 
 ---
 
@@ -48,10 +90,12 @@
 
 ### 获取 Token
 
+使用默认客户端凭证 (`web:web-secret` 或 `cli:cli-secret`):
+
 ```bash
-  curl -X POST http://127.0.0.1:2345/v1/auth/token \
-    -H "Content-Type: application/json" \
-    -d '{"client_id":"foo","client_secret":"bar"}'
+curl -X POST http://127.0.0.1:2345/v1/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"client_id":"web","client_secret":"web-secret"}'
 ```
 
 返回：
@@ -63,22 +107,47 @@
 }
 ```
 
----
-
 ### 获取当前用户信息
 
 ```bash
-  curl -H "Authorization: Bearer <access_token>" \
-     http://127.0.0.1:2345/v1/auth/me
+curl -H "Authorization: Bearer <access_token>" \
+  http://127.0.0.1:2345/v1/auth/me
 ```
 
----
+返回：
+
+```json
+{
+  "sub": "client:web",
+  "scope": ["read", "write"],
+  "aud": "admin-backend",
+  "exp": 1704067200,
+  "iss": "keylo",
+  "jti": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
 
 ### 登出
 
 ```bash
-  curl -X POST -H "Authorization: Bearer <access_token>" \
-     http://127.0.0.1:2345/v1/auth/logout
+curl -X POST -H "Authorization: Bearer <access_token>" \
+  http://127.0.0.1:2345/v1/auth/logout
+```
+
+返回：
+
+```json
+{
+  "message": "Successfully logged out",
+  "sub": "client:web"
+}
+```
+
+### 测试受保护的路由
+
+```bash
+curl -H "Authorization: Bearer <access_token>" \
+  http://127.0.0.1:2345/protected
 ```
 
 ---
@@ -87,45 +156,228 @@
 
 ```
 src/
-├── main.rs          # 启动入口
-├── config.rs        # 配置管理
-├── state.rs         # AppState 定义
-├── routes/          # 路由
-│   ├── auth.rs
-│   ├── oauth.rs
+├── main.rs          # 启动入口，服务器初始化
+├── lib.rs           # 库根模块
+├── config.rs        # 环境配置管理
+├── state.rs         # AppState 定义，应用全局状态
+├── startup.rs       # 路由初始化，应用启动逻辑
+├── routes/          # 路由定义
+│   ├── auth.rs      # 认证路由
 │   └── mod.rs
 ├── handlers/        # Handler 实现
-├── models/          # 数据模型 / JWT Claims
+│   ├── auth.rs      # 认证 handlers
+│   ├── common.rs    # 通用 handlers
+│   └── mod.rs
+├── models/          # 数据模型
+│   ├── jwt.rs       # JWT Claims 定义
+│   ├── auth.rs      # 认证模型
+│   └── mod.rs
 ├── db/              # 数据库操作
-├── errors.rs        # 错误类型与 IntoResponse
-└── utils.rs         # 工具函数（JWT、密码等）
+│   └── mod.rs       # 数据库初始化、迁移、查询
+├── errors.rs        # 错误类型定义
+└── utils.rs         # 工具函数 (UUID、时间、验证等)
+
+Dockerfile          # 容器镜像配置
+docker-compose.yml  # 开发环境容器编排
+.env.example        # 环境变量示例
+Cargo.toml          # 项目依赖配置
 ```
 
 ---
 
 ## 🛠️ 技术栈
 
-* Rust + Axum 0.8
-* Tokio 异步运行时
-* jsonwebtoken (JWT)
-* Axum Extra（TypedHeader）
-* SQLx / Postgres（数据库，可扩展）
-* tracing + tracing_subscriber（日志/追踪）
+| 组件 | 技术 | 版本 |
+|------|------|------|
+| Web 框架 | Axum | 0.8 |
+| 异步运行时 | Tokio | 1.0 |
+| JWT | jsonwebtoken | 10 |
+| 数据库 | SQLx | 0.8 |
+| 数据库系统 | PostgreSQL | 12+ |
+| 日志 | tracing | 0.1 |
+| 序列化 | serde | 1.0 |
 
 ---
 
-## ✨ 下一步计划
+## 📝 环境变量配置
 
-* 支持 Refresh Token
-* 支持多客户端与 Scope/Role
-* 扩展 OAuth（Google, GitHub, etc.）
-* 管理后台可视化
-* 单元测试和集成测试
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `JWT_SECRET` | `my-jwt-secret-change-in-production` | JWT 签名密钥 |
+| `DATABASE_URL` | `postgres://user:password@localhost/keylo` | 数据库连接字符串 |
+| `SERVER_ADDR` | `127.0.0.1` | 服务器监听地址 |
+| `SERVER_PORT` | `2345` | 服务器监听端口 |
+| `ENVIRONMENT` | `development` | 运行环境 |
+| `TOKEN_EXPIRY_SECONDS` | `900` | Token 过期时间（秒） |
+| `REFRESH_TOKEN_EXPIRY_SECONDS` | `2592000` | 刷新 Token 过期时间（秒） |
+| `RUST_LOG` | `keylo=debug` | 日志级别 |
 
 ---
 
-## ⚡ 联系与贡献
+## 🗄️ 数据库迁移
 
-欢迎提交 Issue 和 PR，让 Keylo 更强大！
+服务启动时会自动创建必要的表：
+
+- `clients` - 客户端信息存储
+- `users` - 用户信息存储
+- `sessions` - 会话管理
 
 ---
+
+## 🧪 运行测试
+
+```bash
+# 运行所有测试
+cargo test
+
+# 运行特定测试
+cargo test test_index
+
+# 输出详细信息
+cargo test -- --nocapture --test-threads=1
+```
+
+---
+
+## 🐳 使用 Docker 部署
+
+### 构建镜像
+
+```bash
+docker build -t keylo:latest .
+```
+
+### 运行容器
+
+```bash
+docker run -p 2345:2345 \
+  -e JWT_SECRET="your-secret" \
+  -e DATABASE_URL="postgres://user:password@db:5432/keylo" \
+  keylo:latest
+```
+
+### Docker Compose 完整部署
+
+```bash
+docker-compose up -d
+# 检查状态
+docker-compose ps
+# 查看日志
+docker-compose logs -f keylo
+```
+
+---
+
+## ✨ 核心功能
+
+### 1. JWT 认证
+
+- 使用 HS256 对称加密
+- 支持自定义 Claim 字段
+- 支持 Token 过期时间设置
+- 支持 JTI（JWT ID）用于 Token 吊销
+
+### 2. 客户端管理
+
+- 支持多客户端凭证
+- 支持从数据库动态加载客户端
+- 支持客户端激活/停用
+
+### 3. Session 管理
+
+- 自动创建 Session 记录
+- 支持 Session 撤销
+- 支持 Session 过期检查
+
+### 4. 错误处理
+
+- 统一的错误响应格式
+- 详细的错误代码和信息
+- 适当的 HTTP 状态码
+
+---
+
+## 🚦 下一步计划
+
+- [ ] Refresh Token 支持
+- [ ] OAuth 2.0 集成 (Google, GitHub)
+- [ ] Token 黑名单 / 吊销机制
+- [ ] 角色与权限管理 (RBAC)
+- [ ] 审计日志系统
+- [ ] 管理后台 API
+- [ ] 集成测试覆盖
+- [ ] GraphQL 支持
+- [ ] 第三方集成文档
+
+---
+
+## 📖 开发指南
+
+### 添加新的认证 Provider
+
+在 `src/handlers/` 中创建新的 handler，然后在 `src/routes/auth.rs` 中注册路由。
+
+### 自定义 Claims
+
+编辑 `src/models/jwt.rs` 中的 `Claims` 结构体，添加所需的字段。
+
+### 数据库操作
+
+在 `src/db/mod.rs` 中添加新的数据库查询函数。
+
+---
+
+## ⚠️ 安全建议
+
+1. **生产环境**:
+   - 生成强大的 `JWT_SECRET` (至少 32 字符)
+   - 使用 HTTPS 而不是 HTTP
+   - 设置 `ENVIRONMENT=production`
+   - 启用日志审计
+
+2. **数据库**:
+   - 使用强数据库密码
+   - 定期备份
+   - 启用 SSL 连接
+
+3. **Token**:
+   - 合理设置过期时间
+   - 实现 Token 黑名单机制
+   - 定期轮换密钥
+
+---
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+```bash
+# Fork 项目
+# 创建特性分支
+git checkout -b feature/your-feature
+
+# 提交更改
+git commit -m "Add your feature"
+
+# 推送分支
+git push origin feature/your-feature
+
+# 创建 Pull Request
+```
+
+---
+
+## 📄 许可证
+
+MIT License - 查看 [LICENSE](LICENSE) 文件
+
+---
+
+## 💬 支持
+
+- 📧 提交 Issue: [GitHub Issues](https://github.com/bruceblink/Keylo/issues)
+- 💡 讨论: [GitHub Discussions](https://github.com/bruceblink/Keylo/discussions)
+
+---
+
+**Last Updated**: 2024年12月
