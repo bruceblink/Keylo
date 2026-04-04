@@ -1,56 +1,82 @@
-//! Example JWT authorization/authentication.
+//! JWT Authorization and Authentication Service (Keylo)
 //!
-//! Run with
-//!
+//! Run with:
 //! ```not_rust
-//! JWT_SECRET=secret cargo run -p example-jwt
+//! JWT_SECRET=your-secret-key cargo run
+//! DATABASE_URL=postgres://user:password@localhost/keylo cargo run
+//! ```
+//!
+//! Quick instructions:
+//!
+//! - Get an authorization token:
+//!
+//! ```bash
+//! curl -s -X POST -H 'Content-Type: application/json' \
+//!   -d '{"client_id":"web","client_secret":"web-secret"}' \
+//!   http://localhost:2345/v1/auth/token
+//! ```
+//!
+//! - Get current user info (replace TOKEN with your access_token):
+//!
+//! ```bash
+//! curl -s -H 'Authorization: Bearer TOKEN' \
+//!   http://localhost:2345/v1/auth/me
+//! ```
+//!
+//! - Logout:
+//!
+//! ```bash
+//! curl -s -X POST -H 'Authorization: Bearer TOKEN' \
+//!   http://localhost:2345/v1/auth/logout
 //! ```
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use keylo::startup::init_app_router;
-// Quick instructions
-//
-// - get an authorization token:
-//
-// curl -s \
-//     -w '\n' \
-//     -H 'Content-Type: application/json' \
-//     -d '{"client_id":"foo","client_secret":"bar"}' \
-//     http://localhost:2345/v1/auth/token
-//
-// - visit the protected area using the authorized token
-//
-// curl -s \
-//     -w '\n' \
-//     -H 'Content-Type: application/json' \
-//     -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJiQGIuY29tIiwiY29tcGFueSI6IkFDTUUiLCJleHAiOjEwMDAwMDAwMDAwfQ.M3LAZmrzUkXDC1q5mSzFAs_kJrwuKz3jOoDmjJ0G4gM' \
-//     http://localhost:2345/protected
-//
-// - try to visit the protected area using an invalid token
-//
-// curl -s \
-//     -w '\n' \
-//     -H 'Content-Type: application/json' \
-//     -H 'Authorization: Bearer blahblahblah' \
-//     http://localhost:2345/protected
-
+use keylo::startup;
+use keylo::config::Config;
+use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() {
+    // Initialize logging
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+                .unwrap_or_else(|_| "keylo=debug,axum=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // init app Router
-    let app = init_app_router();
+    // Load configuration
+    let config = Config::from_env();
+    tracing::info!("Starting Keylo service");
+    tracing::info!("Environment: {}", config.environment);
+    tracing::info!("Server: {}", config.server_url());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:2345")
+    // Try to initialize the app with database, fallback to in-memory if DB is not available
+    let app = match startup::init_app_router_with_db(config.clone(), &config.database_url).await {
+        Ok(app) => {
+            tracing::info!("Database initialized successfully");
+            app
+        }
+        Err(e) => {
+            tracing::warn!("Failed to initialize database: {}. Using in-memory mode.", e);
+            startup::init_app_router_with_config(config.clone())
+        }
+    };
+
+    // Bind to the configured address
+    let addr = SocketAddr::from((
+        config.server_addr.parse::<std::net::IpAddr>().unwrap_or_else(|_| "127.0.0.1".parse().unwrap()),
+        config.server_port,
+    ));
+    
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .unwrap();
-    tracing::info!("listening on {}", listener.local_addr().unwrap());
-    let _ = axum::serve(listener, app).await;
+        .expect(&format!("Failed to bind to {}", addr));
+
+    tracing::info!("🚀 Server listening on {}", addr);
+
+    axum::serve(listener, app)
+        .await
+        .expect("Server error");
 }
