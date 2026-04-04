@@ -324,10 +324,12 @@ cargo build
 ### VS Code
 
 安装扩展：
+
 - Rust Analyzer
 - CodeLLDB (用于调试)
 
 `.vscode/launch.json`:
+
 ```json
 {
     "version": "0.2.0",
