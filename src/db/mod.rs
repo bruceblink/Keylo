@@ -43,8 +43,22 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            token TEXT NOT NULL UNIQUE,
+            expires_at TIMESTAMP NOT NULL,
+            revoked BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            revoked_at TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+        );
+        
         CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_refresh_tokens_client_id ON refresh_tokens(client_id);
+        CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);
+        CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
         "#
     )
     .execute(pool)
@@ -138,4 +152,71 @@ pub async fn get_user_sessions(pool: &PgPool, user_id: &str) -> Result<Vec<(Stri
     Ok(rows.into_iter()
         .map(|row| (row.get("id"), row.get("token")))
         .collect())
+}
+
+/// 创建 Refresh Token
+pub async fn create_refresh_token(
+    pool: &PgPool,
+    token_id: &str,
+    client_id: &str,
+    token: &str,
+    expires_at: i64,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO refresh_tokens (id, client_id, token, expires_at) VALUES ($1, $2, $3, to_timestamp($4))"
+    )
+    .bind(token_id)
+    .bind(client_id)
+    .bind(token)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+/// 验证 Refresh Token
+pub async fn validate_refresh_token(pool: &PgPool, token: &str) -> Result<Option<(String, String)>> {
+    let row = sqlx::query(
+        "SELECT id, client_id FROM refresh_tokens 
+         WHERE token = $1 AND expires_at > NOW() AND revoked = FALSE"
+    )
+    .bind(token)
+    .fetch_optional(pool)
+    .await?;
+    
+    Ok(row.map(|r| (r.get("id"), r.get("client_id"))))
+}
+
+/// 撤销 Refresh Token
+pub async fn revoke_refresh_token(pool: &PgPool, token_id: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE id = $1"
+    )
+    .bind(token_id)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+/// 撤销客户端的所有 Refresh Token
+pub async fn revoke_client_refresh_tokens(pool: &PgPool, client_id: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE client_id = $1"
+    )
+    .bind(client_id)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+/// 清理过期的 Refresh Token
+pub async fn cleanup_expired_refresh_tokens(pool: &PgPool) -> Result<u64> {
+    let result = sqlx::query("DELETE FROM refresh_tokens WHERE expires_at <= NOW()")
+        .execute(pool)
+        .await?;
+    
+    Ok(result.rows_affected())
 }

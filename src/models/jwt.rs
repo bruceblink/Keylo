@@ -28,6 +28,9 @@ pub struct Claims {
     /// Scope：权限集合（核心）
     pub scope: Vec<String>,
 
+    /// Token 类型：access_token 或 refresh_token
+    pub token_type: String,
+
     /// Expiration time (unix timestamp)
     pub exp: i64,
 
@@ -87,5 +90,18 @@ impl Keys {
             encoding: EncodingKey::from_secret(secret),
             decoding: DecodingKey::from_secret(secret),
         }
+    }
+
+    pub fn decode_token(&self, token: &str) -> Result<Claims, AuthError> {
+        let mut validation = Validation::default();
+        validation.set_audience(&["admin-backend", "crawler"]);
+        
+        decode::<Claims>(token, &self.decoding, &validation)
+            .map(|data| data.claims)
+            .map_err(|err| match err.kind() {
+                ErrorKind::ExpiredSignature => AuthError::ExpiredToken,
+                ErrorKind::InvalidSignature => AuthError::InvalidToken,
+                _ => AuthError::InvalidToken,
+            })
     }
 }
