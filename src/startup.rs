@@ -1,5 +1,7 @@
 use axum::Router;
 use axum::routing::get;
+use std::sync::Arc;
+use crate::config::Config;
 use crate::handlers::{index, protected};
 use crate::routes;
 use crate::state::AppState;
@@ -11,6 +13,31 @@ pub fn init_app_router() -> Router {
         .route("/protected", get(protected))
         .merge(routes::auth::router())
         .with_state(app_state)
+}
+
+pub fn init_app_router_with_config(config: Config) -> Router {
+    let app_state = AppState::new(config, None);
+    Router::new()
+        .route("/", get(index))
+        .route("/protected", get(protected))
+        .merge(routes::auth::router())
+        .with_state(app_state)
+}
+
+pub async fn init_app_router_with_db(config: Config, database_url: &str) -> Result<Router, anyhow::Error> {
+    let db = crate::db::init_db_pool(database_url).await?;
+    
+    // Run migrations
+    crate::db::run_migrations(&db).await?;
+    tracing::info!("Database migrations completed");
+    
+    let app_state = AppState::new(config, Some(Arc::new(db)));
+    
+    Ok(Router::new()
+        .route("/", get(index))
+        .route("/protected", get(protected))
+        .merge(routes::auth::router())
+        .with_state(app_state))
 }
 
 #[cfg(test)]
