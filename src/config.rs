@@ -1,0 +1,83 @@
+use std::env;
+
+/// 应用配置
+#[derive(Clone, Debug)]
+pub struct Config {
+    /// JWT密钥
+    pub jwt_secret: String,
+    
+    /// 数据库URL
+    pub database_url: String,
+    
+    /// 服务监听地址
+    pub server_addr: String,
+    
+    /// 服务监听端口
+    pub server_port: u16,
+    
+    /// 环境
+    pub environment: String,
+    
+    /// JWT token过期时间（秒）
+    pub token_expiry_seconds: i64,
+    
+    /// 刷新token过期时间（秒）
+    pub refresh_token_expiry_seconds: i64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl Config {
+    pub fn from_env() -> Self {
+        let jwt_secret = env::var("JWT_SECRET")
+            .unwrap_or_else(|_| "my-jwt-secret-change-in-production".to_string());
+        
+        let database_url = env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://user:password@localhost:5432/keylo".to_string());
+        
+        let server_addr = env::var("SERVER_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        
+        let server_port = env::var("SERVER_PORT")
+            .unwrap_or_else(|_| "2345".to_string())
+            .parse::<u16>()
+            .unwrap_or(2345);
+        
+        let environment = env::var("ENVIRONMENT")
+            .unwrap_or_else(|_| "development".to_string());
+        
+        let token_expiry_seconds = env::var("TOKEN_EXPIRY_SECONDS")
+            .unwrap_or_else(|_| "900".to_string())  // 15 minutes
+            .parse::<i64>()
+            .unwrap_or(900);
+        
+        let refresh_token_expiry_seconds = env::var("REFRESH_TOKEN_EXPIRY_SECONDS")
+            .unwrap_or_else(|_| "2592000".to_string())  // 30 days
+            .parse::<i64>()
+            .unwrap_or(2592000);
+        
+        Self {
+            jwt_secret,
+            database_url,
+            server_addr,
+            server_port,
+            environment,
+            token_expiry_seconds,
+            refresh_token_expiry_seconds,
+        }
+    }
+    
+    /// 获取完整的服务器地址
+    pub fn server_url(&self) -> String {
+        format!("http://{}:{}", self.server_addr, self.server_port)
+    }
+    
+    /// 判断是否生产环境
+    pub fn is_production(&self) -> bool {
+        self.environment.to_lowercase() == "production"
+    }
+}
