@@ -12,7 +12,7 @@ mod load_tests {
     /// 创建测试服务器
     async fn setup_test_server() -> TestServer {
         let app = startup::init_app_router();
-        TestServer::new(app).unwrap()
+        TestServer::new(app)
     }
 
     #[tokio::test]

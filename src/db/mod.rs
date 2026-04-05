@@ -57,6 +57,16 @@ pub async fn get_all_active_clients(pool: &PgPool) -> Result<Vec<(String, String
         .collect())
 }
 
+/// 获取客户端密钥
+pub async fn get_client_secret(pool: &PgPool, client_id: &str) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT secret FROM clients WHERE id = $1 AND active = TRUE")
+        .bind(client_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.map(|r| r.get("secret")))
+}
+
 /// 创建会话记录
 pub async fn create_session(
     pool: &PgPool,

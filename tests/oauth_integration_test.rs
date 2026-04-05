@@ -1,18 +1,18 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axum_test::TestServer;
     use serde_json::json;
-
-    use crate::startup::init_app_router_with_db;
-    use crate::utils::AppState;
+    use keylo::startup::init_app_router_with_db;
+    use keylo::config::Config;
 
     async fn setup_test_server() -> TestServer {
-        let config = crate::config::Config::default();
-        let router = init_app_router_with_db(config, "postgres://postgres:password@localhost:5432/keylo_test")
+        let config = Config::default();
+        let db_url = "postgres://postgres:password@localhost:5432/keylo_test".to_string();
+        
+        let router = init_app_router_with_db(config, &db_url)
             .await
             .expect("Failed to initialize test server");
-        TestServer::new(router).expect("Failed to create test server")
+        TestServer::new(router)
     }
 
     #[tokio::test]
