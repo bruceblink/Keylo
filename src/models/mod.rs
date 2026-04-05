@@ -1,5 +1,5 @@
-mod jwt;
 mod auth;
+mod jwt;
 
-pub use jwt::*;
 pub use auth::*;
+pub use jwt::*;

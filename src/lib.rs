@@ -1,10 +1,10 @@
-pub mod routes;
-pub mod handlers;
-pub mod models;
+pub mod config;
 pub mod db;
 pub mod errors;
-pub mod utils;
-pub mod state;
-pub mod startup;
-pub mod config;
+pub mod handlers;
 pub mod middleware;
+pub mod models;
+pub mod routes;
+pub mod startup;
+pub mod state;
+pub mod utils;

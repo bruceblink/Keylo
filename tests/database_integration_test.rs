@@ -7,8 +7,9 @@ mod database_tests {
 
     /// 设置测试数据库
     async fn setup_test_db() -> Result<PgPool, &'static str> {
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/keylo_test".to_string());
+        let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:password@localhost:5432/keylo_test".to_string()
+        });
 
         let pool = match db::init_db_pool(&database_url).await {
             Ok(pool) => pool,
@@ -96,9 +97,15 @@ mod database_tests {
         };
 
         // 创建客户端
-        db::create_client(&pool, "test-client", "test-secret", "Test Client", Some("Test client"))
-            .await
-            .expect("Failed to create client");
+        db::create_client(
+            &pool,
+            "test-client",
+            "test-secret",
+            "Test Client",
+            Some("Test client"),
+        )
+        .await
+        .expect("Failed to create client");
 
         // 验证客户端存在
         let secret = db::get_client_secret(&pool, "test-client")
@@ -140,7 +147,10 @@ mod database_tests {
             .await
             .expect("Failed to validate refresh token");
 
-        assert_eq!(token_data, Some((token_id.to_string(), client_id.to_string())));
+        assert_eq!(
+            token_data,
+            Some((token_id.to_string(), client_id.to_string()))
+        );
 
         // 撤销token
         db::revoke_refresh_token(&pool, token_id)
@@ -210,14 +220,25 @@ mod database_tests {
 
         // 创建一个过期的refresh token
         let expired_time = 1577836800; // 2020-01-01 (过去的时间)
-        db::create_refresh_token(&pool, "expired-jti", "test-client", "expired.token", expired_time)
-            .await
-            .expect("Failed to create expired refresh token");
+        db::create_refresh_token(
+            &pool,
+            "expired-jti",
+            "test-client",
+            "expired.token",
+            expired_time,
+        )
+        .await
+        .expect("Failed to create expired refresh token");
 
         // 创建一个过期的黑名单token
-        db::blacklist_token(&pool, "expired.blacklisted.token", Some("Expired"), expired_time)
-            .await
-            .expect("Failed to create expired blacklisted token");
+        db::blacklist_token(
+            &pool,
+            "expired.blacklisted.token",
+            Some("Expired"),
+            expired_time,
+        )
+        .await
+        .expect("Failed to create expired blacklisted token");
 
         // 验证它们存在
         let expired_refresh = db::validate_refresh_token(&pool, "expired.token")

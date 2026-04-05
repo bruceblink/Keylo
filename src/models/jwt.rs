@@ -1,16 +1,16 @@
-use std::fmt::Display;
-use axum::extract::FromRequestParts;
-use axum::RequestPartsExt;
-use axum_extra::headers::Authorization;
-use axum_extra::headers::authorization::Bearer;
-use axum_extra::TypedHeader;
-use http::request::Parts;
-use jsonwebtoken::{decode, DecodingKey, EncodingKey, Validation};
-use jsonwebtoken::errors::ErrorKind;
-use serde::{Deserialize, Serialize};
-use tracing::warn;
 use crate::errors::AuthError;
 use crate::state::AppState;
+use axum::extract::FromRequestParts;
+use axum::RequestPartsExt;
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
+use axum_extra::TypedHeader;
+use http::request::Parts;
+use jsonwebtoken::errors::ErrorKind;
+use jsonwebtoken::{decode, DecodingKey, EncodingKey, Validation};
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -50,7 +50,10 @@ impl Display for Claims {
 impl FromRequestParts<AppState> for Claims {
     type Rejection = AuthError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         // Extract the token from the authorization header
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
@@ -60,20 +63,25 @@ impl FromRequestParts<AppState> for Claims {
         let mut validation = Validation::default();
         validation.set_audience(&["admin-backend", "crawler"]);
 
-        let token_data = match decode::<Claims>(bearer.token(), &state.jwt_keys.decoding, &validation) {
-            Ok(data) => data,
-            Err(err) => {
-                match *err.kind() {
-                    ErrorKind::InvalidToken => println!("JWT decode failed: invalid token"),
-                    ErrorKind::InvalidSignature => println!("JWT decode failed: invalid signature"),
-                    ErrorKind::ExpiredSignature => println!("JWT decode failed: token expired"),
-                    ErrorKind::InvalidIssuer => println!("JWT decode failed: invalid issuer"),
-                    ErrorKind::InvalidAudience => println!("JWT decode failed: invalid audience"),
-                    _ => warn!("JWT decode failed: {:?}", err),
+        let token_data =
+            match decode::<Claims>(bearer.token(), &state.jwt_keys.decoding, &validation) {
+                Ok(data) => data,
+                Err(err) => {
+                    match *err.kind() {
+                        ErrorKind::InvalidToken => println!("JWT decode failed: invalid token"),
+                        ErrorKind::InvalidSignature => {
+                            println!("JWT decode failed: invalid signature")
+                        }
+                        ErrorKind::ExpiredSignature => println!("JWT decode failed: token expired"),
+                        ErrorKind::InvalidIssuer => println!("JWT decode failed: invalid issuer"),
+                        ErrorKind::InvalidAudience => {
+                            println!("JWT decode failed: invalid audience")
+                        }
+                        _ => warn!("JWT decode failed: {:?}", err),
+                    }
+                    return Err(AuthError::InvalidToken);
                 }
-                return Err(AuthError::InvalidToken);
-            }
-        };
+            };
         Ok(token_data.claims)
     }
 }
@@ -95,7 +103,7 @@ impl Keys {
     pub fn decode_token(&self, token: &str) -> Result<Claims, AuthError> {
         let mut validation = Validation::default();
         validation.set_audience(&["admin-backend", "crawler"]);
-        
+
         decode::<Claims>(token, &self.decoding, &validation)
             .map(|data| data.claims)
             .map_err(|err| match err.kind() {

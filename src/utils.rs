@@ -1,5 +1,5 @@
-use uuid::Uuid;
 use chrono::Utc;
+use uuid::Uuid;
 
 /// 生成唯一的JWT ID
 pub fn generate_jti() -> String {
@@ -49,7 +49,7 @@ mod tests {
     fn test_is_token_expired() {
         let past = now_timestamp() - 100;
         let future = now_timestamp() + 100;
-        
+
         assert!(is_token_expired(past));
         assert!(!is_token_expired(future));
     }

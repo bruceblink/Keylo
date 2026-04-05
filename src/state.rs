@@ -1,8 +1,8 @@
+use crate::config::Config;
+use crate::models::Keys;
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-use sqlx::PgPool;
-use crate::models::Keys;
-use crate::config::Config;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -14,10 +14,10 @@ pub struct AppState {
 
     /// 可选：受信任的 JWT audience 白名单
     pub audiences: Arc<Vec<String>>,
-    
+
     /// 数据库连接池
     pub db: Option<Arc<PgPool>>,
-    
+
     /// 应用配置
     pub config: Arc<Config>,
 }
@@ -36,7 +36,6 @@ pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
 
 impl AppState {
     pub fn new(config: Config, db: Option<Arc<PgPool>>) -> Self {
-
         // 默认客户端，可以替换成从配置文件或数据库加载
         let mut clients = HashMap::new();
         clients.insert("web".into(), "web-secret".into());
@@ -65,7 +64,7 @@ impl AppState {
     pub fn allowed_audiences(&self) -> Vec<&str> {
         self.audiences.iter().map(|s| s.as_str()).collect()
     }
-    
+
     /// 从数据库重新加载客户端列表
     pub async fn reload_clients_from_db(&mut self) -> Result<(), String> {
         if let Some(db) = &self.db {
@@ -77,7 +76,7 @@ impl AppState {
                     }
                     self.clients = Arc::new(client_map);
                     Ok(())
-                },
+                }
                 Err(e) => Err(e.to_string()),
             }
         } else {

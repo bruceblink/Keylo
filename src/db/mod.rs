@@ -1,6 +1,6 @@
+use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
-use anyhow::Result;
 
 /// 初始化数据库连接池
 pub async fn init_db_pool(database_url: &str) -> Result<PgPool> {
@@ -8,7 +8,7 @@ pub async fn init_db_pool(database_url: &str) -> Result<PgPool> {
         .max_connections(5)
         .connect(database_url)
         .await?;
-    
+
     Ok(pool)
 }
 
@@ -74,7 +74,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     )
     .execute(pool)
     .await?;
-    
+
     Ok(())
 }
 
@@ -84,7 +84,7 @@ pub async fn get_client_secret(pool: &PgPool, client_id: &str) -> Result<Option<
         .bind(client_id)
         .fetch_optional(pool)
         .await?;
-    
+
     Ok(row.map(|r| r.get("secret")))
 }
 
@@ -96,16 +96,14 @@ pub async fn create_client(
     name: &str,
     description: Option<&str>,
 ) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO clients (id, secret, name, description) VALUES ($1, $2, $3, $4)"
-    )
-    .bind(client_id)
-    .bind(client_secret)
-    .bind(name)
-    .bind(description)
-    .execute(pool)
-    .await?;
-    
+    sqlx::query("INSERT INTO clients (id, secret, name, description) VALUES ($1, $2, $3, $4)")
+        .bind(client_id)
+        .bind(client_secret)
+        .bind(name)
+        .bind(description)
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
@@ -114,8 +112,9 @@ pub async fn get_all_active_clients(pool: &PgPool) -> Result<Vec<(String, String
     let rows = sqlx::query("SELECT id, secret FROM clients WHERE active = TRUE")
         .fetch_all(pool)
         .await?;
-    
-    Ok(rows.into_iter()
+
+    Ok(rows
+        .into_iter()
         .map(|row| (row.get("id"), row.get("secret")))
         .collect())
 }
@@ -137,7 +136,7 @@ pub async fn create_session(
     .bind(expires_at)
     .execute(pool)
     .await?;
-    
+
     Ok(())
 }
 
@@ -147,20 +146,20 @@ pub async fn revoke_session(pool: &PgPool, session_id: &str) -> Result<()> {
         .bind(session_id)
         .execute(pool)
         .await?;
-    
+
     Ok(())
 }
 
 /// 获取用户会话
 pub async fn get_user_sessions(pool: &PgPool, user_id: &str) -> Result<Vec<(String, String)>> {
-    let rows = sqlx::query(
-        "SELECT id, token FROM sessions WHERE user_id = $1 AND expires_at > NOW()"
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
-    
-    Ok(rows.into_iter()
+    let rows =
+        sqlx::query("SELECT id, token FROM sessions WHERE user_id = $1 AND expires_at > NOW()")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?;
+
+    Ok(rows
+        .into_iter()
         .map(|row| (row.get("id"), row.get("token")))
         .collect())
 }
@@ -182,44 +181,45 @@ pub async fn create_refresh_token(
     .bind(expires_at)
     .execute(pool)
     .await?;
-    
+
     Ok(())
 }
 
 /// 验证 Refresh Token
-pub async fn validate_refresh_token(pool: &PgPool, token: &str) -> Result<Option<(String, String)>> {
+pub async fn validate_refresh_token(
+    pool: &PgPool,
+    token: &str,
+) -> Result<Option<(String, String)>> {
     let row = sqlx::query(
         "SELECT id, client_id FROM refresh_tokens 
-         WHERE token = $1 AND expires_at > NOW() AND revoked = FALSE"
+         WHERE token = $1 AND expires_at > NOW() AND revoked = FALSE",
     )
     .bind(token)
     .fetch_optional(pool)
     .await?;
-    
+
     Ok(row.map(|r| (r.get("id"), r.get("client_id"))))
 }
 
 /// 撤销 Refresh Token
 pub async fn revoke_refresh_token(pool: &PgPool, token_id: &str) -> Result<()> {
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE id = $1"
-    )
-    .bind(token_id)
-    .execute(pool)
-    .await?;
-    
+    sqlx::query("UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE id = $1")
+        .bind(token_id)
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
 /// 撤销客户端的所有 Refresh Token
 pub async fn revoke_client_refresh_tokens(pool: &PgPool, client_id: &str) -> Result<()> {
     sqlx::query(
-        "UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE client_id = $1"
+        "UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE client_id = $1",
     )
     .bind(client_id)
     .execute(pool)
     .await?;
-    
+
     Ok(())
 }
 
@@ -228,7 +228,7 @@ pub async fn cleanup_expired_refresh_tokens(pool: &PgPool) -> Result<u64> {
     let result = sqlx::query("DELETE FROM refresh_tokens WHERE expires_at <= NOW()")
         .execute(pool)
         .await?;
-    
+
     Ok(result.rows_affected())
 }
 
@@ -242,7 +242,7 @@ pub async fn blacklist_token(
     sqlx::query(
         "INSERT INTO blacklisted_tokens (id, token, reason, expires_at) 
          VALUES ($1, $2, $3, to_timestamp($4))
-         ON CONFLICT (token) DO NOTHING"
+         ON CONFLICT (token) DO NOTHING",
     )
     .bind(format!("bl_{}", token.get(..16).unwrap_or("unknown")))
     .bind(token)
@@ -250,7 +250,7 @@ pub async fn blacklist_token(
     .bind(expires_at)
     .execute(pool)
     .await?;
-    
+
     Ok(())
 }
 
@@ -258,12 +258,12 @@ pub async fn blacklist_token(
 pub async fn is_token_blacklisted(pool: &PgPool, token: &str) -> Result<bool> {
     let row = sqlx::query(
         "SELECT 1 FROM blacklisted_tokens 
-         WHERE token = $1 AND expires_at > NOW() LIMIT 1"
+         WHERE token = $1 AND expires_at > NOW() LIMIT 1",
     )
     .bind(token)
     .fetch_optional(pool)
     .await?;
-    
+
     Ok(row.is_some())
 }
 
@@ -272,7 +272,7 @@ pub async fn cleanup_expired_blacklisted_tokens(pool: &PgPool) -> Result<u64> {
     let result = sqlx::query("DELETE FROM blacklisted_tokens WHERE expires_at <= NOW()")
         .execute(pool)
         .await?;
-    
+
     Ok(result.rows_affected())
 }
 
@@ -282,16 +282,20 @@ pub async fn get_active_blacklisted_tokens(pool: &PgPool) -> Result<Vec<(String,
         "SELECT token, reason, extract(epoch from expires_at)::bigint as expires_at 
          FROM blacklisted_tokens 
          WHERE expires_at > NOW() 
-         ORDER BY blacklisted_at DESC"
+         ORDER BY blacklisted_at DESC",
     )
     .fetch_all(pool)
     .await?;
-    
-    Ok(rows.into_iter()
-        .map(|row| (
-            row.get("token"),
-            row.get::<Option<String>, _>("reason").unwrap_or_else(|| "No reason".to_string()),
-            row.get("expires_at")
-        ))
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get("token"),
+                row.get::<Option<String>, _>("reason")
+                    .unwrap_or_else(|| "No reason".to_string()),
+                row.get("expires_at"),
+            )
+        })
         .collect())
 }

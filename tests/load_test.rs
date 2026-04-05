@@ -22,10 +22,7 @@ mod load_tests {
 
         // 执行多个顺序请求测试基本负载
         for i in 0..50 {
-            let response = timeout(
-                Duration::from_secs(5),
-                server.get("/")
-            ).await;
+            let response = timeout(Duration::from_secs(5), server.get("/")).await;
 
             match response {
                 Ok(resp) => {
@@ -38,8 +35,14 @@ mod load_tests {
         }
 
         let elapsed = start.elapsed();
-        println!("50 health checks completed in {:.2}s", elapsed.as_secs_f64());
-        assert!(elapsed < Duration::from_secs(30), "Should complete within 30 seconds");
+        println!(
+            "50 health checks completed in {:.2}s",
+            elapsed.as_secs_f64()
+        );
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "Should complete within 30 seconds"
+        );
     }
 
     #[tokio::test]
@@ -53,8 +56,9 @@ mod load_tests {
                 Duration::from_secs(5),
                 server
                     .post("/v1/auth/token")
-                    .json(&json!({"invalid": "payload"}))
-            ).await;
+                    .json(&json!({"invalid": "payload"})),
+            )
+            .await;
 
             match response {
                 Ok(resp) => {
@@ -62,18 +66,26 @@ mod load_tests {
                     // 打印实际状态码用于调试
                     println!("Request {} returned status: {}", i, status);
                     // 接受各种错误状态（取决于是否有数据库）
-                    assert!(status == StatusCode::BAD_REQUEST ||
-                           status == StatusCode::UNAUTHORIZED ||
-                           status == StatusCode::INTERNAL_SERVER_ERROR ||
-                           status == StatusCode::UNPROCESSABLE_ENTITY);
+                    assert!(
+                        status == StatusCode::BAD_REQUEST
+                            || status == StatusCode::UNAUTHORIZED
+                            || status == StatusCode::INTERNAL_SERVER_ERROR
+                            || status == StatusCode::UNPROCESSABLE_ENTITY
+                    );
                 }
                 Err(_) => panic!("Request {} timeout", i),
             }
         }
 
         let elapsed = start.elapsed();
-        println!("20 error requests completed in {:.2}s", elapsed.as_secs_f64());
-        assert!(elapsed < Duration::from_secs(20), "Should complete within 20 seconds");
+        println!(
+            "20 error requests completed in {:.2}s",
+            elapsed.as_secs_f64()
+        );
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "Should complete within 20 seconds"
+        );
     }
 
     #[tokio::test]
@@ -85,10 +97,7 @@ mod load_tests {
         for i in 0..30 {
             if i % 2 == 0 {
                 // 健康检查
-                let response = timeout(
-                    Duration::from_secs(2),
-                    server.get("/")
-                ).await;
+                let response = timeout(Duration::from_secs(2), server.get("/")).await;
 
                 match response {
                     Ok(resp) => {
@@ -102,16 +111,19 @@ mod load_tests {
                     Duration::from_secs(2),
                     server
                         .post("/v1/auth/token")
-                        .json(&json!({"invalid": "data"}))
-                ).await;
+                        .json(&json!({"invalid": "data"})),
+                )
+                .await;
 
                 match response {
                     Ok(resp) => {
                         let status = resp.status_code();
-                        assert!(status == StatusCode::BAD_REQUEST ||
-                               status == StatusCode::UNAUTHORIZED ||
-                               status == StatusCode::INTERNAL_SERVER_ERROR ||
-                               status == StatusCode::UNPROCESSABLE_ENTITY);
+                        assert!(
+                            status == StatusCode::BAD_REQUEST
+                                || status == StatusCode::UNAUTHORIZED
+                                || status == StatusCode::INTERNAL_SERVER_ERROR
+                                || status == StatusCode::UNPROCESSABLE_ENTITY
+                        );
                     }
                     Err(_) => panic!("Error request {} timeout", i),
                 }
@@ -119,7 +131,13 @@ mod load_tests {
         }
 
         let elapsed = start.elapsed();
-        println!("30 mixed requests completed in {:.2}s", elapsed.as_secs_f64());
-        assert!(elapsed < Duration::from_secs(15), "Should complete within 15 seconds");
+        println!(
+            "30 mixed requests completed in {:.2}s",
+            elapsed.as_secs_f64()
+        );
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "Should complete within 15 seconds"
+        );
     }
 }
