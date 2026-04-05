@@ -1,0 +1,535 @@
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::Json,
+    routing::{delete, get, post, put},
+    Router,
+};
+use serde_json::json;
+use sqlx::PgPool;
+
+use crate::{
+    db::*,
+    models::*,
+    middleware::auth::AuthUser,
+    utils::{ApiResponse, AppState},
+};
+
+/// 创建RBAC路由
+pub fn rbac_routes() -> Router<AppState> {
+    Router::new()
+        // 角色管理路由
+        .route("/roles", get(get_roles))
+        .route("/roles", post(create_role_handler))
+        .route("/roles/{role_id}", get(get_role))
+        .route("/roles/{role_id}", put(update_role_handler))
+        .route("/roles/{role_id}", delete(delete_role_handler))
+        // 权限管理路由
+        .route("/permissions", get(get_permissions))
+        .route("/permissions", post(create_permission_handler))
+        .route("/permissions/{permission_id}", get(get_permission))
+        .route("/permissions/{permission_id}", put(update_permission_handler))
+        .route("/permissions/{permission_id}", delete(delete_permission_handler))
+        // 用户角色管理路由
+        .route("/users/{user_id}/roles", get(get_user_roles_handler))
+        .route("/users/{user_id}/roles", post(assign_role_to_user_handler))
+        .route("/users/{user_id}/roles/{role_id}", delete(revoke_role_from_user_handler))
+        // 角色权限管理路由
+        .route("/roles/{role_id}/permissions", get(get_role_permissions_handler))
+        .route("/roles/{role_id}/permissions", post(assign_permission_to_role_handler))
+        .route(
+            "/roles/{role_id}/permissions/{permission_id}",
+            delete(revoke_permission_from_role_handler),
+        )
+        // 用户权限查询路由
+        .route("/users/{user_id}/permissions", get(get_user_permissions_handler))
+        .route("/users/{user_id}/check-permission/{permission_name}", get(check_user_permission))
+}
+
+/// 获取所有角色
+async fn get_roles(State(state): State<AppState>) -> ApiResponse {
+    match get_all_roles(&state.db).await {
+        Ok(roles) => Ok(Json(json!({
+            "success": true,
+            "data": roles
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to get roles: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 创建角色
+async fn create_role_handler(
+    State(state): State<AppState>,
+    Json(req): Json<CreateRoleRequest>,
+) -> ApiResponse {
+    match create_role(&state.db, &req.name, req.description.as_deref()).await {
+        Ok(role) => Ok((
+            StatusCode::CREATED,
+            Json(json!({
+                "success": true,
+                "data": role
+            })),
+        )),
+        Err(e) => {
+            if e.to_string().contains("duplicate key") {
+                Err((
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "success": false,
+                        "error": "Role with this name already exists"
+                    })),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to create role: {}", e)
+                    })),
+                ))
+            }
+        }
+    }
+}
+
+/// 获取单个角色
+async fn get_role(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+) -> ApiResponse {
+    match get_role_by_id(&state.db, &role_id).await {
+        Ok(Some(role)) => Ok(Json(json!({
+            "success": true,
+            "data": role
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": "Role not found"
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to get role: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 更新角色
+async fn update_role_handler(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+    Json(req): Json<UpdateRoleRequest>,
+) -> ApiResponse {
+    match update_role(
+        &state.db,
+        &role_id,
+        req.name.as_deref(),
+        req.description.as_deref(),
+    )
+    .await
+    {
+        Ok(Some(role)) => Ok(Json(json!({
+            "success": true,
+            "data": role
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": "Role not found"
+            })),
+        )),
+        Err(e) => {
+            if e.to_string().contains("duplicate key") {
+                Err((
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "success": false,
+                        "error": "Role with this name already exists"
+                    })),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to update role: {}", e)
+                    })),
+                ))
+            }
+        }
+    }
+}
+
+/// 删除角色
+async fn delete_role_handler(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+) -> ApiResponse {
+    match delete_role(&state.db, &role_id).await {
+        Ok(true) => Ok(Json(json!({
+            "success": true,
+            "message": "Role deleted successfully"
+        }))),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": "Role not found"
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to delete role: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 获取所有权限
+async fn get_permissions(State(state): State<AppState>) -> ApiResponse {
+    match get_all_permissions(&state.db).await {
+        Ok(permissions) => Ok(Json(json!({
+            "success": true,
+            "data": permissions
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to get permissions: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 创建权限
+async fn create_permission_handler(
+    State(state): State<AppState>,
+    Json(req): Json<CreatePermissionRequest>,
+) -> ApiResponse {
+    match create_permission(&state.db, &req.name, req.description.as_deref()).await {
+        Ok(permission) => Ok((
+            StatusCode::CREATED,
+            Json(json!({
+                "success": true,
+                "data": permission
+            })),
+        )),
+        Err(e) => {
+            if e.to_string().contains("duplicate key") {
+                Err((
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "success": false,
+                        "error": "Permission with this name already exists"
+                    })),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to create permission: {}", e)
+                    })),
+                ))
+            }
+        }
+    }
+}
+
+/// 获取单个权限
+async fn get_permission(
+    State(state): State<AppState>,
+    Path(permission_id): Path<String>,
+) -> ApiResponse {
+    match get_permission_by_id(&state.db, &permission_id).await {
+        Ok(Some(permission)) => Ok(Json(json!({
+            "success": true,
+            "data": permission
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": "Permission not found"
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to get permission: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 更新权限
+async fn update_permission_handler(
+    State(state): State<AppState>,
+    Path(permission_id): Path<String>,
+    Json(req): Json<UpdatePermissionRequest>,
+) -> ApiResponse {
+    match update_permission(
+        &state.db,
+        &permission_id,
+        req.name.as_deref(),
+        req.description.as_deref(),
+    )
+    .await
+    {
+        Ok(Some(permission)) => Ok(Json(json!({
+            "success": true,
+            "data": permission
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": "Permission not found"
+            })),
+        )),
+        Err(e) => {
+            if e.to_string().contains("duplicate key") {
+                Err((
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "success": false,
+                        "error": "Permission with this name already exists"
+                    })),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to update permission: {}", e)
+                    })),
+                ))
+            }
+        }
+    }
+}
+
+/// 删除权限
+async fn delete_permission_handler(
+    State(state): State<AppState>,
+    Path(permission_id): Path<String>,
+) -> ApiResponse {
+    match delete_permission(&state.db, &permission_id).await {
+        Ok(true) => Ok(Json(json!({
+            "success": true,
+            "message": "Permission deleted successfully"
+        }))),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": "Permission not found"
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to delete permission: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 获取用户的角色
+async fn get_user_roles_handler(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> ApiResponse {
+    match get_user_roles(&state.db, &user_id).await {
+        Ok(roles) => Ok(Json(json!({
+            "success": true,
+            "data": roles
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to get user roles: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 为用户分配角色
+async fn assign_role_to_user_handler(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    Json(req): Json<AssignRoleRequest>,
+) -> ApiResponse {
+    match assign_role_to_user(&state.db, &user_id, &req.role_id).await {
+        Ok(_) => Ok(Json(json!({
+            "success": true,
+            "message": "Role assigned to user successfully"
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to assign role to user: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 撤销用户的角色
+async fn revoke_role_from_user_handler(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    Path(role_id): Path<String>,
+) -> ApiResponse {
+    match revoke_role_from_user(&state.db, &user_id, &role_id).await {
+        Ok(true) => Ok(Json(json!({
+            "success": true,
+            "message": "Role revoked from user successfully"
+        }))),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": "User role assignment not found"
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to revoke role from user: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 获取角色的权限
+async fn get_role_permissions_handler(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+) -> ApiResponse {
+    match get_role_permissions(&state.db, &role_id).await {
+        Ok(permissions) => Ok(Json(json!({
+            "success": true,
+            "data": permissions
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to get role permissions: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 为角色分配权限
+async fn assign_permission_to_role_handler(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+    Json(req): Json<AssignPermissionRequest>,
+) -> ApiResponse {
+    match assign_permission_to_role(&state.db, &role_id, &req.permission_id).await {
+        Ok(_) => Ok(Json(json!({
+            "success": true,
+            "message": "Permission assigned to role successfully"
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to assign permission to role: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 撤销角色的权限
+async fn revoke_permission_from_role_handler(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+    Path(permission_id): Path<String>,
+) -> ApiResponse {
+    match revoke_permission_from_role(&state.db, &role_id, &permission_id).await {
+        Ok(true) => Ok(Json(json!({
+            "success": true,
+            "message": "Permission revoked from role successfully"
+        }))),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "error": "Role permission assignment not found"
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to revoke permission from role: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 获取用户的所有权限
+async fn get_user_permissions_handler(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> ApiResponse {
+    match get_user_permissions(&state.db, &user_id).await {
+        Ok(permissions) => Ok(Json(json!({
+            "success": true,
+            "data": permissions
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to get user permissions: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 检查用户是否有特定权限
+async fn check_user_permission(
+    State(state): State<AppState>,
+    Path((user_id, permission_name)): Path<(String, String)>,
+) -> ApiResponse {
+    match user_has_permission(&state.db, &user_id, &permission_name).await {
+        Ok(has_permission) => Ok(Json(json!({
+            "success": true,
+            "data": {
+                "user_id": user_id,
+                "permission": permission_name,
+                "has_permission": has_permission
+            }
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to check user permission: {}", e)
+            })),
+        )),
+    }
+}

@@ -2,6 +2,10 @@ use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
+mod rbac;
+
+pub use rbac::*;
+
 /// 初始化数据库连接池
 pub async fn init_db_pool(database_url: &str) -> Result<PgPool> {
     let pool = PgPoolOptions::new()
@@ -70,6 +74,46 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);
         CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
         CREATE INDEX IF NOT EXISTS idx_blacklisted_tokens_expires_at ON blacklisted_tokens(expires_at);
+        
+        -- RBAC Tables
+        CREATE TABLE IF NOT EXISTS roles (
+            id TEXT PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+        
+        CREATE TABLE IF NOT EXISTS permissions (
+            id TEXT PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+        
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id TEXT NOT NULL,
+            role_id TEXT NOT NULL,
+            assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, role_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+        );
+        
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_id TEXT NOT NULL,
+            permission_id TEXT NOT NULL,
+            assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (role_id, permission_id),
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_user_roles_user_id ON user_roles(user_id);
+        CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON user_roles(role_id);
+        CREATE INDEX IF NOT EXISTS idx_role_permissions_role_id ON role_permissions(role_id);
+        CREATE INDEX IF NOT EXISTS idx_role_permissions_permission_id ON role_permissions(permission_id);
         "#
     )
     .execute(pool)

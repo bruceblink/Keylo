@@ -9,6 +9,7 @@
 * ✅ JWT 签发与验证（Access Token + 可扩展 Refresh Token）
 * ✅ `/v1/auth/token`、`/v1/auth/logout`、`/v1/auth/me` 核心 API
 * ✅ 支持 GitHub OAuth 登录（可扩展其他 OAuth 提供商）
+* ✅ **RBAC 角色-based访问控制系统**
 * ✅ 高可维护模块化架构（routes / handlers / db / models / utils）
 * ✅ 可与现有数据库表兼容，实现登录互通
 * ✅ 使用 **Axum 0.8 + Tokio** 异步高性能框架
@@ -217,6 +218,55 @@ curl -X POST -H "Authorization: Bearer <access_token>" \
 ```bash
 curl -H "Authorization: Bearer <access_token>" \
   http://127.0.0.1:2345/protected
+```
+
+### RBAC 角色和权限管理
+
+#### 创建角色
+
+```bash
+curl -X POST -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:2345/api/rbac/roles \
+  -d '{"name": "admin", "description": "Administrator role"}'
+```
+
+#### 创建权限
+
+```bash
+curl -X POST -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:2345/api/rbac/permissions \
+  -d '{"name": "user.manage", "description": "Manage users permission"}'
+```
+
+#### 为用户分配角色
+
+```bash
+curl -X POST -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:2345/api/rbac/users/{user_id}/roles \
+  -d '{"role_id": "role-uuid"}'
+```
+
+#### 检查用户权限
+
+```bash
+curl -H "Authorization: Bearer <access_token>" \
+  http://127.0.0.1:2345/api/rbac/users/{user_id}/check-permission/user.manage
+```
+
+返回：
+
+```json
+{
+  "success": true,
+  "data": {
+    "user_id": "user-uuid",
+    "permission": "user.manage",
+    "has_permission": true
+  }
+}
 ```
 
 ---
