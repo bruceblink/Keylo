@@ -13,10 +13,21 @@ use axum_extra::TypedHeader;
 pub async fn auth_middleware(
     State(state): State<AppState>,
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
     let token = auth.token();
+
+    // 先验证 JWT 是否有效（签名、过期、aud 等）
+    let claims = match state.jwt_keys.decode_token(token) {
+        Ok(claims) => claims,
+        Err(err) => return Ok(err.into_response()),
+    };
+
+    // 仅允许 access token 访问受保护接口
+    if claims.token_type != "access" {
+        return Ok(AuthError::InvalidToken.into_response());
+    }
 
     // 检查token是否在黑名单中
     if let Some(db) = &state.db {
@@ -37,6 +48,9 @@ pub async fn auth_middleware(
             }
         }
     }
+
+    // 将 claims 放入扩展，后续中间件或处理器可复用
+    request.extensions_mut().insert(claims);
 
     // 继续处理请求
     Ok(next.run(request).await)

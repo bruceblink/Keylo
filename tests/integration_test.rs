@@ -12,18 +12,18 @@ mod tests {
     /// 设置测试服务器（带数据库）
     async fn setup_test_server() -> TestServer {
         let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://postgres:password@localhost:5432/keylo_test".to_string()
+            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
         });
 
         let config = Config::default();
 
         // 尝试连接数据库，如果失败则使用无数据库版本
         match startup::init_app_router_with_db(config, &database_url).await {
-            Ok(app) => TestServer::new(app).unwrap(),
+            Ok(app) => TestServer::new(app),
             Err(_) => {
                 // 如果数据库不可用，使用无数据库版本
                 let app = startup::init_app_router();
-                TestServer::new(app).unwrap()
+                TestServer::new(app)
             }
         }
     }

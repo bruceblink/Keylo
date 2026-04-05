@@ -1,5 +1,8 @@
 use keylo::db;
 use sqlx::PgPool;
+use std::sync::{LazyLock, Mutex};
+
+static DB_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[cfg(test)]
 mod database_tests {
@@ -8,7 +11,7 @@ mod database_tests {
     /// 设置测试数据库
     async fn setup_test_db() -> Result<PgPool, &'static str> {
         let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://postgres:password@localhost:5432/keylo_test".to_string()
+            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
         });
 
         let pool = match db::init_db_pool(&database_url).await {
@@ -16,41 +19,31 @@ mod database_tests {
             Err(_) => return Err("Database not available, skipping database tests"),
         };
 
-        // 清理并重新创建表
-        if let Err(_) = sqlx::query("DROP TABLE IF EXISTS blacklisted_tokens CASCADE")
-            .execute(&pool)
-            .await
-        {
-            return Err("Failed to clean database");
-        }
-        if let Err(_) = sqlx::query("DROP TABLE IF EXISTS refresh_tokens CASCADE")
-            .execute(&pool)
-            .await
-        {
-            return Err("Failed to clean database");
-        }
-        if let Err(_) = sqlx::query("DROP TABLE IF EXISTS sessions CASCADE")
-            .execute(&pool)
-            .await
-        {
-            return Err("Failed to clean database");
-        }
-        if let Err(_) = sqlx::query("DROP TABLE IF EXISTS users CASCADE")
-            .execute(&pool)
-            .await
-        {
-            return Err("Failed to clean database");
-        }
-        if let Err(_) = sqlx::query("DROP TABLE IF EXISTS clients CASCADE")
-            .execute(&pool)
-            .await
-        {
-            return Err("Failed to clean database");
-        }
-
         // 运行迁移
         if let Err(_) = db::run_migrations(&pool).await {
             return Err("Failed to run migrations");
+        }
+
+        // 清理测试数据，保留表结构
+        if let Err(_) = sqlx::query(
+            "TRUNCATE TABLE
+                user_oauth_accounts,
+                oauth_providers,
+                role_permissions,
+                user_roles,
+                permissions,
+                roles,
+                blacklisted_tokens,
+                refresh_tokens,
+                sessions,
+                users,
+                clients
+             RESTART IDENTITY CASCADE",
+        )
+        .execute(&pool)
+        .await
+        {
+            return Err("Failed to clean database data");
         }
 
         Ok(pool)
@@ -58,6 +51,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_database_migrations() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -88,6 +82,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_client_creation_and_validation() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -124,6 +119,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_refresh_token_operations() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -135,7 +131,17 @@ mod database_tests {
         let token_id = "test-jti";
         let client_id = "test-client";
         let token = "test.jwt.token";
-        let expires_at = 1735689600; // 2025-01-01
+        let expires_at = chrono::Utc::now().timestamp() + 3600;
+
+        db::create_client(
+            &pool,
+            client_id,
+            "test-secret",
+            "Test Client",
+            Some("Test client"),
+        )
+        .await
+        .expect("Failed to create client");
 
         // 创建refresh token
         db::create_refresh_token(&pool, token_id, client_id, token, expires_at)
@@ -167,6 +173,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_blacklist_operations() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -177,7 +184,7 @@ mod database_tests {
 
         let token = "test.blacklisted.token";
         let reason = "Test blacklist";
-        let expires_at = 1735689600; // 2025-01-01
+        let expires_at = chrono::Utc::now().timestamp() + 3600;
 
         // 将token加入黑名单
         db::blacklist_token(&pool, token, Some(reason), expires_at)
@@ -210,6 +217,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_cleanup_operations() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -217,6 +225,16 @@ mod database_tests {
                 return;
             }
         };
+
+        db::create_client(
+            &pool,
+            "test-client",
+            "test-secret",
+            "Test Client",
+            Some("Test client"),
+        )
+        .await
+        .expect("Failed to create client");
 
         // 创建一个过期的refresh token
         let expired_time = 1577836800; // 2020-01-01 (过去的时间)
@@ -260,8 +278,8 @@ mod database_tests {
             .await
             .expect("Failed to cleanup blacklisted tokens");
 
-        // 验证清理结果
-        assert!(refresh_cleaned >= 0);
-        assert!(blacklist_cleaned >= 0);
+        // 验证清理函数可执行（u64 类型总是 >= 0）
+        let _ = refresh_cleaned;
+        let _ = blacklist_cleaned;
     }
 }

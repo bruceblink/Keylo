@@ -59,7 +59,16 @@ pub async fn require_permission(
 }
 
 /// 创建需要特定权限的中间件
-pub fn permission_middleware(permission: &str) -> impl Fn(State<AppState>, Request<Body>, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>> + Clone {
+#[allow(clippy::type_complexity)]
+pub fn permission_middleware(
+    permission: &str,
+) -> impl Fn(
+    State<AppState>,
+    Request<Body>,
+    Next,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>,
+> + Clone {
     let permission = permission.to_string();
     move |state, request, next| {
         let permission = permission.clone();

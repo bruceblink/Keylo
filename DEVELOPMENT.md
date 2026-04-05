@@ -227,6 +227,16 @@ docker logs -f keylo  # 实时查看
 
 ## 测试
 
+### 一键运行（推荐）
+
+```bash
+# Linux/macOS
+./scripts/run_tests.sh
+
+# Windows PowerShell
+./scripts/run_tests.ps1
+```
+
 ### 单元测试
 
 ```bash
@@ -241,6 +251,9 @@ cargo test -- --nocapture
 
 # 单线程运行
 cargo test -- --test-threads=1
+
+# 指定测试数据库（推荐）
+export TEST_DATABASE_URL="postgres://postgres:password@localhost:5432/keylo_test"
 ```
 
 ### 集成测试
@@ -307,7 +320,7 @@ cargo build
 ## 有用的命令
 
 | 命令 | 说明 |
-|------|------|
+| ------ | ------ |
 | `cargo build` | 编译项目 |
 | `cargo run` | 运行项目 |
 | `cargo test` | 运行测试 |

@@ -5,8 +5,8 @@ use uuid::Uuid;
 use crate::models::*;
 
 /// OAuth提供商相关数据库操作
-
 /// 创建OAuth提供商
+#[allow(clippy::too_many_arguments)]
 pub async fn create_oauth_provider(
     pool: &PgPool,
     name: &str,
@@ -66,7 +66,10 @@ pub async fn get_all_oauth_providers(pool: &PgPool) -> Result<Vec<OAuthProvider>
 }
 
 /// 根据ID获取OAuth提供商
-pub async fn get_oauth_provider_by_id(pool: &PgPool, provider_id: &str) -> Result<Option<OAuthProvider>> {
+pub async fn get_oauth_provider_by_id(
+    pool: &PgPool,
+    provider_id: &str,
+) -> Result<Option<OAuthProvider>> {
     let provider = sqlx::query_as!(
         OAuthProvider,
         "SELECT id, name, client_id, client_secret, authorization_url,
@@ -81,7 +84,10 @@ pub async fn get_oauth_provider_by_id(pool: &PgPool, provider_id: &str) -> Resul
 }
 
 /// 根据名称获取OAuth提供商
-pub async fn get_oauth_provider_by_name(pool: &PgPool, name: &str) -> Result<Option<OAuthProvider>> {
+pub async fn get_oauth_provider_by_name(
+    pool: &PgPool,
+    name: &str,
+) -> Result<Option<OAuthProvider>> {
     let provider = sqlx::query_as!(
         OAuthProvider,
         "SELECT id, name, client_id, client_secret, authorization_url,
@@ -96,6 +102,7 @@ pub async fn get_oauth_provider_by_name(pool: &PgPool, name: &str) -> Result<Opt
 }
 
 /// 更新OAuth提供商
+#[allow(clippy::too_many_arguments)]
 pub async fn update_oauth_provider(
     pool: &PgPool,
     provider_id: &str,
@@ -149,16 +156,17 @@ pub async fn update_oauth_provider(
 
 /// 删除OAuth提供商
 pub async fn delete_oauth_provider(pool: &PgPool, provider_id: &str) -> Result<bool> {
-    let result: sqlx::postgres::PgQueryResult = sqlx::query!("DELETE FROM oauth_providers WHERE id = $1", provider_id)
-        .execute(pool)
-        .await?;
+    let result: sqlx::postgres::PgQueryResult =
+        sqlx::query!("DELETE FROM oauth_providers WHERE id = $1", provider_id)
+            .execute(pool)
+            .await?;
 
     Ok(result.rows_affected() > 0)
 }
 
 /// 用户OAuth账户关联操作
-
 /// 关联用户OAuth账户
+#[allow(clippy::too_many_arguments)]
 pub async fn link_oauth_account(
     pool: &PgPool,
     user_id: &str,
@@ -262,7 +270,10 @@ pub async fn find_oauth_account_by_provider_user_id(
 }
 
 /// 获取用户的所有OAuth账户
-pub async fn get_user_oauth_accounts(pool: &PgPool, user_id: &str) -> Result<Vec<UserOAuthAccount>> {
+pub async fn get_user_oauth_accounts(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<UserOAuthAccount>> {
     let accounts = sqlx::query_as!(
         UserOAuthAccount,
         "SELECT id, user_id, provider_id, provider_user_id, provider_username,
@@ -343,8 +354,8 @@ pub async fn get_oauth_account_with_provider(
                 scope: row.scope,
                 redirect_url: row.redirect_url,
                 active: row.active,
-                created_at: row.provider_created_at.into(),
-                updated_at: row.provider_updated_at.into(),
+                created_at: row.provider_created_at,
+                updated_at: row.provider_updated_at,
             };
 
             Ok(Some((account, provider)))

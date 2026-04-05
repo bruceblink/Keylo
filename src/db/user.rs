@@ -133,9 +133,10 @@ pub async fn update_user(
 
 /// 删除用户
 pub async fn delete_user(pool: &PgPool, user_id: &str) -> Result<bool> {
-    let result: sqlx::postgres::PgQueryResult = sqlx::query!("DELETE FROM users WHERE id = $1", user_id)
-        .execute(pool)
-        .await?;
+    let result: sqlx::postgres::PgQueryResult =
+        sqlx::query!("DELETE FROM users WHERE id = $1", user_id)
+            .execute(pool)
+            .await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -169,6 +170,45 @@ pub async fn reset_user_password(pool: &PgPool, user_id: &str, password: &str) -
         "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1",
         user_id,
         password_hash,
+        chrono::Local::now().naive_utc()
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// 用户更改密码（需要验证当前密码）
+pub async fn change_user_password(
+    pool: &PgPool,
+    user_id: &str,
+    current_password: &str,
+    new_password: &str,
+) -> Result<bool> {
+    // 首先验证当前密码
+    if let Some(user) = get_user_by_id(pool, user_id).await? {
+        if !user.active {
+            return Ok(false);
+        }
+
+        if let Some(password_hash) = user.password_hash.as_deref() {
+            if !verify_password_hash(current_password, password_hash)? {
+                return Ok(false); // 当前密码不正确
+            }
+        } else {
+            return Ok(false); // 用户没有密码
+        }
+    } else {
+        return Ok(false); // 用户不存在
+    }
+
+    // 验证通过，更新密码
+    let new_password_hash = hash_password(new_password)?;
+
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
+        "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1",
+        user_id,
+        new_password_hash,
         chrono::Local::now().naive_utc()
     )
     .execute(pool)

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::{
     db::*,
-    models::*,
+    models::{Claims, *},
     state::AppState,
     utils::{require_db, ApiResponse},
 };
@@ -19,13 +19,14 @@ pub fn user_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/admin/users", get(list_users_handler))
         .route("/v1/admin/users", post(create_user_handler))
-        .route("/v1/admin/users/:user_id", get(get_user_handler))
-        .route("/v1/admin/users/:user_id", put(update_user_handler))
-        .route("/v1/admin/users/:user_id", delete(delete_user_handler))
+        .route("/v1/admin/users/{user_id}", get(get_user_handler))
+        .route("/v1/admin/users/{user_id}", put(update_user_handler))
+        .route("/v1/admin/users/{user_id}", delete(delete_user_handler))
         .route(
-            "/v1/admin/users/:user_id/reset-password",
+            "/v1/admin/users/{user_id}/reset-password",
             post(reset_user_password_handler),
         )
+        .route("/v1/user/change-password", post(change_password_handler))
 }
 
 async fn list_users_handler(
@@ -92,7 +93,10 @@ async fn create_user_handler(
     }
 }
 
-async fn get_user_handler(State(state): State<AppState>, Path(user_id): Path<String>) -> ApiResponse {
+async fn get_user_handler(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> ApiResponse {
     let db = require_db(&state)?;
 
     match crate::db::user::get_user_by_id(db, &user_id).await {
@@ -207,6 +211,121 @@ async fn reset_user_password_handler(
             Json(json!({
                 "success": false,
                 "error": format!("Failed to reset password: {}", e),
+            })),
+        )),
+    }
+}
+
+async fn change_password_handler(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(req): Json<ChangePasswordRequest>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+
+    // 从JWT claims中提取用户ID
+    // sub字段格式可能是 "user:username" 或 "client:username" 或直接的UUID
+    let user_id = if claims.sub.starts_with("user:") {
+        // 如果是user格式，从数据库中通过用户名查找用户ID
+        let username = &claims.sub[5..]; // 移除"user:"前缀
+        println!("Looking up user by username: {}", username);
+        match crate::db::user::get_user_by_username(db, username).await {
+            Ok(Some(user)) => {
+                println!("Found user: {}", user.id);
+                user.id
+            }
+            Ok(None) => {
+                println!("User not found for username: {}", username);
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "success": false,
+                        "error": "User not found",
+                    })),
+                ));
+            }
+            Err(e) => {
+                println!("Database error: {}", e);
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to find user: {}", e),
+                    })),
+                ));
+            }
+        }
+    } else if claims.sub.starts_with("client:") {
+        // 如果是client格式，从数据库中通过用户名查找用户ID
+        let username = &claims.sub[7..]; // 移除"client:"前缀
+        println!("Looking up user by username: {}", username);
+        match crate::db::user::get_user_by_username(db, username).await {
+            Ok(Some(user)) => {
+                println!("Found user: {}", user.id);
+                user.id
+            }
+            Ok(None) => {
+                println!("User not found for username: {}", username);
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "success": false,
+                        "error": "User not found",
+                    })),
+                ));
+            }
+            Err(e) => {
+                println!("Database error: {}", e);
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": format!("Failed to find user: {}", e),
+                    })),
+                ));
+            }
+        }
+    } else {
+        // 直接使用sub作为用户ID（OAuth情况）
+        println!("Using sub directly as user_id: {}", claims.sub);
+        claims.sub.clone()
+    };
+
+    // 验证新密码长度
+    if req.new_password.len() < 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "error": "New password must be at least 8 characters long",
+            })),
+        ));
+    }
+
+    match crate::db::user::change_user_password(
+        db,
+        &user_id,
+        &req.current_password,
+        &req.new_password,
+    )
+    .await
+    {
+        Ok(true) => Ok(Json(json!({
+            "success": true,
+            "message": "Password changed successfully",
+        }))),
+        Ok(false) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "error": "Current password is incorrect or user not found",
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to change password: {}", e),
             })),
         )),
     }

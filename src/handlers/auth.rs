@@ -1,3 +1,4 @@
+use crate::db::user::get_user_by_username;
 use crate::errors::AuthError;
 use crate::models::{
     AuthBody, AuthPayload, BlacklistTokenRequest, Claims, MeResponse, RefreshTokenRequest,
@@ -9,6 +10,7 @@ use axum::Json;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
+use bcrypt::verify;
 use chrono::Utc;
 use jsonwebtoken::{encode, Header};
 use serde_json::json;
@@ -22,16 +24,55 @@ pub async fn auth_token(
         return Err(AuthError::MissingCredentials);
     }
 
-    // Validate client credentials
-    if !state.validate_client(&payload.client_id, &payload.client_secret) {
-        return Err(AuthError::WrongCredentials);
-    }
+    let db = match &state.db {
+        Some(db) => db,
+        None => {
+            return Err(AuthError::DatabaseError(
+                "Database not available".to_string(),
+            ))
+        }
+    };
+
+    // First try to authenticate as a user
+    let user_result = get_user_by_username(db, &payload.client_id).await;
+    let (is_user_valid, _user_id) = match user_result {
+        Ok(Some(user)) => {
+            // Verify password
+            if let Some(ref password_hash) = user.password_hash {
+                let result = verify(&payload.client_secret, password_hash)
+                    .map_err(|_| AuthError::WrongCredentials)?;
+                println!("Password verification result: {}", result);
+                (result, Some(user.id))
+            } else {
+                println!("User has no password hash");
+                (false, None)
+            }
+        }
+        Ok(None) => {
+            println!("User not found: {}", payload.client_id);
+            (false, None)
+        }
+        Err(e) => {
+            println!("Database error getting user: {:?}", e);
+            return Err(AuthError::DatabaseError("Failed to get user".to_string()));
+        }
+    };
+
+    let subject_prefix = if is_user_valid {
+        "user"
+    } else {
+        // If user auth failed, try client auth
+        if !state.validate_client(&payload.client_id, &payload.client_secret) {
+            return Err(AuthError::WrongCredentials);
+        }
+        "client"
+    };
 
     let now = Utc::now().timestamp();
 
     // Create access token claims
     let access_claims = Claims {
-        sub: format!("client:{}", payload.client_id),
+        sub: format!("{}:{}", subject_prefix, payload.client_id),
         iss: "keylo".to_string(),
         aud: "admin-backend".to_string(),
         scope: vec!["read".into(), "write".into()],
@@ -43,7 +84,7 @@ pub async fn auth_token(
 
     // Create refresh token claims
     let refresh_claims = Claims {
-        sub: format!("client:{}", payload.client_id),
+        sub: format!("{}:{}", subject_prefix, payload.client_id),
         iss: "keylo".to_string(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -64,17 +105,19 @@ pub async fn auth_token(
     )
     .map_err(|_| AuthError::TokenCreation)?;
 
-    // Store refresh token in database
+    // Store refresh token in database (only for client auth)
     if let Some(db) = &state.db {
-        crate::db::create_refresh_token(
-            db,
-            &refresh_claims.jti,
-            &payload.client_id,
-            &refresh_token,
-            refresh_claims.exp,
-        )
-        .await
-        .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
+        if !is_user_valid {
+            crate::db::create_refresh_token(
+                db,
+                &refresh_claims.jti,
+                &payload.client_id,
+                &refresh_token,
+                refresh_claims.exp,
+            )
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
+        }
     } else {
         return Err(AuthError::DatabaseError(
             "Database not available".to_string(),

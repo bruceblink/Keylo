@@ -2,12 +2,12 @@ use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
-pub mod rbac;
 pub mod oauth;
+pub mod rbac;
 pub mod user;
 
-pub use rbac::*;
 pub use oauth::*;
+pub use rbac::*;
 pub use user::*;
 
 /// 初始化数据库连接池
@@ -55,6 +55,16 @@ pub async fn get_all_active_clients(pool: &PgPool) -> Result<Vec<(String, String
         .into_iter()
         .map(|row| (row.get("id"), row.get("secret")))
         .collect())
+}
+
+/// 获取客户端密钥
+pub async fn get_client_secret(pool: &PgPool, client_id: &str) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT secret FROM clients WHERE id = $1 AND active = TRUE")
+        .bind(client_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.map(|r| r.get("secret")))
 }
 
 /// 创建会话记录

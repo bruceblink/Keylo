@@ -82,6 +82,30 @@ else
     exit 1
 fi
 
+print_status "Running user integration tests..."
+if cargo test --test user_integration_test; then
+    print_success "User integration tests passed"
+else
+    print_error "User integration tests failed"
+    exit 1
+fi
+
+print_status "Running RBAC integration tests..."
+if cargo test --test rbac_integration_test; then
+    print_success "RBAC integration tests passed"
+else
+    print_error "RBAC integration tests failed"
+    exit 1
+fi
+
+print_status "Running OAuth integration tests..."
+if cargo test --test oauth_integration_test; then
+    print_success "OAuth integration tests passed"
+else
+    print_error "OAuth integration tests failed"
+    exit 1
+fi
+
 print_status "Running database integration tests..."
 if cargo test --test database_integration_test; then
     print_success "Database integration tests passed"

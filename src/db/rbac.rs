@@ -5,13 +5,8 @@ use uuid::Uuid;
 use crate::models::*;
 
 /// 角色相关数据库操作
-
 /// 创建角色
-pub async fn create_role(
-    pool: &PgPool,
-    name: &str,
-    description: Option<&str>,
-) -> Result<Role> {
+pub async fn create_role(pool: &PgPool, name: &str, description: Option<&str>) -> Result<Role> {
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().naive_utc();
 
@@ -104,15 +99,15 @@ pub async fn update_role(
 
 /// 删除角色
 pub async fn delete_role(pool: &PgPool, role_id: &str) -> Result<bool> {
-    let result: sqlx::postgres::PgQueryResult = sqlx::query!("DELETE FROM roles WHERE id = $1", role_id)
-        .execute(pool)
-        .await?;
+    let result: sqlx::postgres::PgQueryResult =
+        sqlx::query!("DELETE FROM roles WHERE id = $1", role_id)
+            .execute(pool)
+            .await?;
 
     Ok(result.rows_affected() > 0)
 }
 
 /// 权限相关数据库操作
-
 /// 创建权限
 pub async fn create_permission(
     pool: &PgPool,
@@ -154,7 +149,10 @@ pub async fn get_all_permissions(pool: &PgPool) -> Result<Vec<Permission>> {
 }
 
 /// 根据ID获取权限
-pub async fn get_permission_by_id(pool: &PgPool, permission_id: &str) -> Result<Option<Permission>> {
+pub async fn get_permission_by_id(
+    pool: &PgPool,
+    permission_id: &str,
+) -> Result<Option<Permission>> {
     let permission = sqlx::query_as!(
         Permission,
         "SELECT id, name, description, created_at, updated_at FROM permissions WHERE id = $1",
@@ -211,15 +209,15 @@ pub async fn update_permission(
 
 /// 删除权限
 pub async fn delete_permission(pool: &PgPool, permission_id: &str) -> Result<bool> {
-    let result: sqlx::postgres::PgQueryResult = sqlx::query!("DELETE FROM permissions WHERE id = $1", permission_id)
-        .execute(pool)
-        .await?;
+    let result: sqlx::postgres::PgQueryResult =
+        sqlx::query!("DELETE FROM permissions WHERE id = $1", permission_id)
+            .execute(pool)
+            .await?;
 
     Ok(result.rows_affected() > 0)
 }
 
 /// 用户角色关系操作
-
 /// 为用户分配角色
 pub async fn assign_role_to_user(pool: &PgPool, user_id: &str, role_id: &str) -> Result<()> {
     sqlx::query!(
@@ -272,13 +270,14 @@ pub async fn get_role_users(pool: &PgPool, role_id: &str) -> Result<Vec<String>>
         user_id: String,
     }
 
-    let user_ids: Vec<String> = sqlx::query_as::<_, Row>("SELECT user_id FROM user_roles WHERE role_id = $1")
-        .bind(role_id)
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|row| row.user_id)
-        .collect();
+    let user_ids: Vec<String> =
+        sqlx::query_as::<_, Row>("SELECT user_id FROM user_roles WHERE role_id = $1")
+            .bind(role_id)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| row.user_id)
+            .collect();
 
     Ok(user_ids)
 }
@@ -304,7 +303,6 @@ pub async fn user_has_role(pool: &PgPool, user_id: &str, role_name: &str) -> Res
 }
 
 /// 角色权限关系操作
-
 /// 为角色分配权限
 pub async fn assign_permission_to_role(
     pool: &PgPool,
@@ -365,13 +363,14 @@ pub async fn get_permission_roles(pool: &PgPool, permission_id: &str) -> Result<
         role_id: String,
     }
 
-    let role_ids: Vec<String> = sqlx::query_as::<_, Row>("SELECT role_id FROM role_permissions WHERE permission_id = $1")
-        .bind(permission_id)
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|row| row.role_id)
-        .collect();
+    let role_ids: Vec<String> =
+        sqlx::query_as::<_, Row>("SELECT role_id FROM role_permissions WHERE permission_id = $1")
+            .bind(permission_id)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| row.role_id)
+            .collect();
 
     Ok(role_ids)
 }
