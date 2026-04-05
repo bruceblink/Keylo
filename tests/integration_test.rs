@@ -8,6 +8,7 @@ use serde_json::json;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// 设置测试服务器（带数据库）
     async fn setup_test_server() -> TestServer {
@@ -106,6 +107,36 @@ mod tests {
         // 如果数据库不可用，返回500；否则返回400（无效令牌）
         let status = response.status_code();
         assert!(status == StatusCode::INTERNAL_SERVER_ERROR || status == StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_login_lockout_after_repeated_failures() {
+        let server = setup_test_server().await;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let principal = format!("invalid-lockout-{}", ts);
+
+        let auth_payload = json!({
+            "client_id": principal,
+            "client_secret": "wrong-password"
+        });
+
+        // 数据库不可用场景下，接口会返回500，跳过此测试
+        let first = server.post("/v1/auth/token").json(&auth_payload).await;
+        if first.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        assert_eq!(first.status_code(), StatusCode::UNAUTHORIZED);
+
+        for _ in 0..4 {
+            let response = server.post("/v1/auth/token").json(&auth_payload).await;
+            assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+        }
+
+        let locked = server.post("/v1/auth/token").json(&auth_payload).await;
+        assert_eq!(locked.status_code(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

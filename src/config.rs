@@ -17,6 +17,10 @@ pub struct Config {
     pub token_expiry_seconds: i64,
     /// 刷新token过期时间（秒）
     pub refresh_token_expiry_seconds: i64,
+    /// 连续登录失败次数阈值
+    pub max_failed_login_attempts: u32,
+    /// 登录锁定时长（秒）
+    pub login_lockout_seconds: i64,
 }
 
 impl Default for Config {
@@ -52,6 +56,16 @@ impl Config {
             .parse::<i64>()
             .unwrap_or(2592000);
 
+        let max_failed_login_attempts = env::var("MAX_FAILED_LOGIN_ATTEMPTS")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse::<u32>()
+            .unwrap_or(5);
+
+        let login_lockout_seconds = env::var("LOGIN_LOCKOUT_SECONDS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse::<i64>()
+            .unwrap_or(300);
+
         Self {
             jwt_secret,
             database_url,
@@ -60,6 +74,8 @@ impl Config {
             environment,
             token_expiry_seconds,
             refresh_token_expiry_seconds,
+            max_failed_login_attempts,
+            login_lockout_seconds,
         }
     }
 

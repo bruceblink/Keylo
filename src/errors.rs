@@ -15,6 +15,7 @@ pub enum AuthError {
     NotFound,
     Unauthorized,
     Forbidden,
+    TooManyRequests,
     InternalServerError(String),
 }
 
@@ -30,6 +31,7 @@ impl fmt::Display for AuthError {
             AuthError::NotFound => write!(f, "Resource not found"),
             AuthError::Unauthorized => write!(f, "Unauthorized"),
             AuthError::Forbidden => write!(f, "Forbidden"),
+            AuthError::TooManyRequests => write!(f, "Too many requests"),
             AuthError::InternalServerError(msg) => write!(f, "Internal server error: {}", msg),
         }
     }
@@ -59,6 +61,9 @@ impl IntoResponse for AuthError {
             AuthError::NotFound => (StatusCode::NOT_FOUND, 1007, "Resource not found"),
             AuthError::Unauthorized => (StatusCode::UNAUTHORIZED, 1008, "Unauthorized"),
             AuthError::Forbidden => (StatusCode::FORBIDDEN, 1009, "Forbidden"),
+            AuthError::TooManyRequests => {
+                (StatusCode::TOO_MANY_REQUESTS, 1011, "Too many requests")
+            }
             AuthError::InternalServerError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 1010,

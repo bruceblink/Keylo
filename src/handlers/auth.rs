@@ -32,6 +32,10 @@ pub async fn auth_token(
         return Err(AuthError::MissingCredentials);
     }
 
+    if state.is_login_locked(&payload.client_id).await.is_some() {
+        return Err(AuthError::TooManyRequests);
+    }
+
     let db = match &state.db {
         Some(db) => db,
         None => {
@@ -77,10 +81,19 @@ pub async fn auth_token(
         };
 
         if !client_valid {
+            state
+                .record_login_failure(
+                    &payload.client_id,
+                    state.config.max_failed_login_attempts,
+                    state.config.login_lockout_seconds,
+                )
+                .await;
             return Err(AuthError::WrongCredentials);
         }
         "client"
     };
+
+    state.clear_login_failures(&payload.client_id).await;
 
     let now = Utc::now().timestamp();
 

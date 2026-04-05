@@ -24,6 +24,9 @@ pub struct AppState {
 
     /// OAuth state 临时存储（用于防止 CSRF/replay）
     pub oauth_states: Arc<RwLock<HashMap<String, i64>>>,
+
+    /// 登录失败记录：client_id/username -> (failed_count, locked_until_unix_ts)
+    pub login_attempts: Arc<RwLock<HashMap<String, (u32, i64)>>>,
 }
 
 impl Default for AppState {
@@ -55,6 +58,7 @@ impl AppState {
             db,
             config: Arc::new(config),
             oauth_states: Arc::new(RwLock::new(HashMap::new())),
+            login_attempts: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -108,5 +112,50 @@ impl AppState {
             }
             _ => false,
         }
+    }
+
+    pub async fn is_login_locked(&self, principal: &str) -> Option<i64> {
+        let now = chrono::Utc::now().timestamp();
+        let mut attempts = self.login_attempts.write().await;
+
+        // 清理过期且无失败计数的记录
+        attempts.retain(|_, (count, locked_until)| *locked_until > now || *count > 0);
+
+        match attempts.get(principal).copied() {
+            Some((_, locked_until)) if locked_until > now => Some(locked_until - now),
+            Some((_, locked_until)) if locked_until <= now && locked_until > 0 => {
+                attempts.remove(principal);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    pub async fn record_login_failure(
+        &self,
+        principal: &str,
+        max_failed_attempts: u32,
+        lockout_seconds: i64,
+    ) {
+        let now = chrono::Utc::now().timestamp();
+        let mut attempts = self.login_attempts.write().await;
+
+        let entry = attempts.entry(principal.to_string()).or_insert((0, 0));
+
+        // 仍在锁定中，不重复累计
+        if entry.1 > now {
+            return;
+        }
+
+        entry.0 += 1;
+        if entry.0 >= max_failed_attempts {
+            entry.0 = 0;
+            entry.1 = now + lockout_seconds;
+        }
+    }
+
+    pub async fn clear_login_failures(&self, principal: &str) {
+        let mut attempts = self.login_attempts.write().await;
+        attempts.remove(principal);
     }
 }
