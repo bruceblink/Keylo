@@ -1,5 +1,9 @@
-use uuid::Uuid;
+use axum::http::StatusCode;
+use axum::response::Json;
 use chrono::Utc;
+use serde_json::json;
+use sqlx::PgPool;
+use uuid::Uuid;
 
 /// 生成唯一的JWT ID
 pub fn generate_jti() -> String {
@@ -26,6 +30,20 @@ pub fn is_token_expired(exp: i64) -> bool {
     now_timestamp() > exp
 }
 
+pub type ApiResponse = Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)>;
+
+pub fn require_db(state: &crate::state::AppState) -> Result<&PgPool, (StatusCode, Json<serde_json::Value>)> {
+    state.db.as_deref().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": "Database not initialized",
+            })),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,7 +67,7 @@ mod tests {
     fn test_is_token_expired() {
         let past = now_timestamp() - 100;
         let future = now_timestamp() + 100;
-        
+
         assert!(is_token_expired(past));
         assert!(!is_token_expired(future));
     }

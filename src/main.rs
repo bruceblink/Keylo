@@ -30,10 +30,10 @@
 //!   http://localhost:2345/v1/auth/logout
 //! ```
 
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use keylo::startup;
 use keylo::config::Config;
+use keylo::startup;
 use std::net::SocketAddr;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
@@ -59,24 +59,28 @@ async fn main() {
             app
         }
         Err(e) => {
-            tracing::warn!("Failed to initialize database: {}. Using in-memory mode.", e);
+            tracing::warn!(
+                "Failed to initialize database: {}. Using in-memory mode.",
+                e
+            );
             startup::init_app_router_with_config(config.clone())
         }
     };
 
     // Bind to the configured address
     let addr = SocketAddr::from((
-        config.server_addr.parse::<std::net::IpAddr>().unwrap_or_else(|_| "127.0.0.1".parse().unwrap()),
+        config
+            .server_addr
+            .parse::<std::net::IpAddr>()
+            .unwrap_or_else(|_| "127.0.0.1".parse().unwrap()),
         config.server_port,
     ));
-    
+
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect(&format!("Failed to bind to {}", addr));
+        .unwrap_or_else(|_| panic!("Failed to bind to {}", addr));
 
     tracing::info!("🚀 Server listening on {}", addr);
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server error");
+    axum::serve(listener, app).await.expect("Server error");
 }

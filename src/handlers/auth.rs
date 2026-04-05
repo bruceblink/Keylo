@@ -1,15 +1,17 @@
 use crate::errors::AuthError;
-use crate::models::{AuthBody, AuthPayload, BlacklistTokenRequest, Claims, MeResponse, RefreshTokenRequest};
+use crate::models::{
+    AuthBody, AuthPayload, BlacklistTokenRequest, Claims, MeResponse, RefreshTokenRequest,
+};
 use crate::state::AppState;
+use crate::utils;
 use axum::extract::State;
 use axum::Json;
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
+use axum_extra::TypedHeader;
 use chrono::Utc;
 use jsonwebtoken::{encode, Header};
 use serde_json::json;
-use crate::utils;
-use axum_extra::headers::Authorization;
-use axum_extra::headers::authorization::Bearer;
-use axum_extra::TypedHeader;
 
 pub async fn auth_token(
     State(state): State<AppState>,
@@ -19,7 +21,7 @@ pub async fn auth_token(
     if payload.client_id.is_empty() || payload.client_secret.is_empty() {
         return Err(AuthError::MissingCredentials);
     }
-    
+
     // Validate client credentials
     if !state.validate_client(&payload.client_id, &payload.client_secret) {
         return Err(AuthError::WrongCredentials);
@@ -38,7 +40,7 @@ pub async fn auth_token(
         jti: utils::generate_jti(),
         token_type: "access".to_string(),
     };
-    
+
     // Create refresh token claims
     let refresh_claims = Claims {
         sub: format!("client:{}", payload.client_id),
@@ -50,27 +52,42 @@ pub async fn auth_token(
         jti: utils::generate_jti(),
         token_type: "refresh".to_string(),
     };
-    
+
     // Create the authorization tokens
     let access_token = encode(&Header::default(), &access_claims, &state.jwt_keys.encoding)
         .map_err(|_| AuthError::TokenCreation)?;
-    
-    let refresh_token = encode(&Header::default(), &refresh_claims, &state.jwt_keys.encoding)
-        .map_err(|_| AuthError::TokenCreation)?;
+
+    let refresh_token = encode(
+        &Header::default(),
+        &refresh_claims,
+        &state.jwt_keys.encoding,
+    )
+    .map_err(|_| AuthError::TokenCreation)?;
 
     // Store refresh token in database
     if let Some(db) = &state.db {
-        crate::db::create_refresh_token(db, &refresh_claims.jti, &payload.client_id, &refresh_token, refresh_claims.exp)
-            .await
-            .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
+        crate::db::create_refresh_token(
+            db,
+            &refresh_claims.jti,
+            &payload.client_id,
+            &refresh_token,
+            refresh_claims.exp,
+        )
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
     } else {
-        return Err(AuthError::DatabaseError("Database not available".to_string()));
+        return Err(AuthError::DatabaseError(
+            "Database not available".to_string(),
+        ));
     }
 
     // Send the authorized tokens
-    Ok(Json(AuthBody::new(access_token, refresh_token, state.config.token_expiry_seconds)))
+    Ok(Json(AuthBody::new(
+        access_token,
+        refresh_token,
+        state.config.token_expiry_seconds,
+    )))
 }
-
 
 pub async fn auth_blacklist_token(
     State(state): State<AppState>,
@@ -87,12 +104,16 @@ pub async fn auth_blacklist_token(
             db,
             &payload.token,
             payload.reason.as_deref(),
-            payload.expires_at.unwrap_or_else(|| Utc::now().timestamp() + 3600) // 默认1小时
+            payload
+                .expires_at
+                .unwrap_or_else(|| Utc::now().timestamp() + 3600), // 默认1小时
         )
         .await
         .map_err(|_| AuthError::DatabaseError("Failed to blacklist token".to_string()))?;
     } else {
-        return Err(AuthError::DatabaseError("Database not available".to_string()));
+        return Err(AuthError::DatabaseError(
+            "Database not available".to_string(),
+        ));
     }
 
     Ok(Json(json!({
@@ -113,7 +134,9 @@ pub async fn auth_get_blacklisted_tokens(
     if let Some(db) = &state.db {
         let tokens = crate::db::get_active_blacklisted_tokens(db)
             .await
-            .map_err(|_| AuthError::DatabaseError("Failed to get blacklisted tokens".to_string()))?;
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to get blacklisted tokens".to_string())
+            })?;
 
         Ok(Json(json!({
             "blacklisted_tokens": tokens.into_iter().map(|(token, reason, expires_at)| {
@@ -125,13 +148,13 @@ pub async fn auth_get_blacklisted_tokens(
             }).collect::<Vec<_>>()
         })))
     } else {
-        Err(AuthError::DatabaseError("Database not available".to_string()))
+        Err(AuthError::DatabaseError(
+            "Database not available".to_string(),
+        ))
     }
 }
 
-pub async fn auth_me(
-    claims: Claims,
-) -> Result<Json<MeResponse>, AuthError> {
+pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
     Ok(Json(MeResponse {
         sub: claims.sub,
         scope: claims.scope,
@@ -153,7 +176,9 @@ pub async fn auth_refresh(
             _ => return Err(AuthError::InvalidToken),
         }
     } else {
-        return Err(AuthError::DatabaseError("Database not available".to_string()));
+        return Err(AuthError::DatabaseError(
+            "Database not available".to_string(),
+        ));
     };
 
     let now = Utc::now().timestamp();
@@ -186,8 +211,12 @@ pub async fn auth_refresh(
     let access_token = encode(&Header::default(), &access_claims, &state.jwt_keys.encoding)
         .map_err(|_| AuthError::TokenCreation)?;
 
-    let new_refresh_token = encode(&Header::default(), &new_refresh_claims, &state.jwt_keys.encoding)
-        .map_err(|_| AuthError::TokenCreation)?;
+    let new_refresh_token = encode(
+        &Header::default(),
+        &new_refresh_claims,
+        &state.jwt_keys.encoding,
+    )
+    .map_err(|_| AuthError::TokenCreation)?;
 
     // Revoke old refresh token
     if let Some(db) = &state.db {
@@ -198,12 +227,22 @@ pub async fn auth_refresh(
 
     // Store new refresh token
     if let Some(db) = &state.db {
-        crate::db::create_refresh_token(db, &new_refresh_claims.jti, &client_id, &new_refresh_token, new_refresh_claims.exp)
-            .await
-            .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
+        crate::db::create_refresh_token(
+            db,
+            &new_refresh_claims.jti,
+            &client_id,
+            &new_refresh_token,
+            new_refresh_claims.exp,
+        )
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
     }
 
-    Ok(Json(AuthBody::new(access_token, new_refresh_token, state.config.token_expiry_seconds)))
+    Ok(Json(AuthBody::new(
+        access_token,
+        new_refresh_token,
+        state.config.token_expiry_seconds,
+    )))
 }
 
 pub async fn auth_logout(
@@ -214,18 +253,13 @@ pub async fn auth_logout(
     // 将当前access token加入黑名单
     if let Some(db) = &state.db {
         let token = auth.token();
-        crate::db::blacklist_token(
-            db,
-            token,
-            Some("User logout"),
-            claims.exp
-        )
-        .await
-        .map_err(|_| AuthError::DatabaseError("Failed to blacklist token".to_string()))?;
+        crate::db::blacklist_token(db, token, Some("User logout"), claims.exp)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to blacklist token".to_string()))?;
     }
 
     tracing::info!("User {} logged out", claims.sub);
-    
+
     Ok(Json(json!({
         "message": "Successfully logged out",
         "sub": claims.sub,

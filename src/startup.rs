@@ -1,12 +1,12 @@
-use axum::Router;
-use axum::routing::get;
-use axum::middleware;
-use std::sync::Arc;
 use crate::config::Config;
 use crate::handlers::{index, protected};
+use crate::middleware::auth;
 use crate::routes;
 use crate::state::AppState;
-use crate::middleware::auth;
+use axum::middleware;
+use axum::routing::get;
+use axum::Router;
+use std::sync::Arc;
 
 pub fn init_app_router() -> Router {
     let app_state = AppState::default();
@@ -26,33 +26,42 @@ pub fn init_app_router_with_config(config: Config) -> Router {
         .with_state(app_state)
 }
 
-pub async fn init_app_router_with_db(config: Config, database_url: &str) -> Result<Router, anyhow::Error> {
+pub async fn init_app_router_with_db(
+    config: Config,
+    database_url: &str,
+) -> Result<Router, anyhow::Error> {
     let db = crate::db::init_db_pool(database_url).await?;
-    
+
     // Run migrations
     crate::db::run_migrations(&db).await?;
     tracing::info!("Database migrations completed");
-    
+
     let app_state = AppState::new(config, Some(Arc::new(db)));
-    
+
     Ok(Router::new()
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::router())
-        .layer(middleware::from_fn_with_state(app_state.clone(), auth::auth_middleware))
+        .merge(routes::oauth::oauth_routes())
+        .merge(routes::rbac::rbac_routes())
+        .merge(routes::user::user_routes())
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::auth_middleware,
+        ))
         .with_state(app_state))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
     use super::*;
+    use axum::extract::connect_info::MockConnectInfo;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
     };
-    use axum::extract::connect_info::MockConnectInfo;
     use http_body_util::BodyExt;
+    use std::net::SocketAddr;
     use tokio::net::TcpListener;
     use tower::{Service, ServiceExt};
 
@@ -109,12 +118,8 @@ mod tests {
             .layer(MockConnectInfo(SocketAddr::from(([0, 0, 0, 0], 3001))))
             .into_service();
 
-        let request = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
+        let request = Request::builder().uri("/").body(Body::empty()).unwrap();
         let response = app.ready().await.unwrap().call(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
-
 }

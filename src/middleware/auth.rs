@@ -1,13 +1,13 @@
+use crate::errors::AuthError;
+use crate::state::AppState;
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::body::Body;
-use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
-use crate::state::AppState;
-use crate::errors::AuthError;
 
 /// 认证中间件 - 检查token是否在黑名单中
 pub async fn auth_middleware(
@@ -31,7 +31,8 @@ pub async fn auth_middleware(
             }
             Err(_) => {
                 // 数据库错误，返回500
-                let error_response = AuthError::DatabaseError("Database error during token validation".to_string());
+                let error_response =
+                    AuthError::DatabaseError("Database error during token validation".to_string());
                 return Ok(error_response.into_response());
             }
         }

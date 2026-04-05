@@ -46,14 +46,24 @@ impl IntoResponse for AuthError {
         let (status, code, message) = match self {
             AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, 1001, "Wrong credentials"),
             AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, 1002, "Missing credentials"),
-            AuthError::TokenCreation => (StatusCode::INTERNAL_SERVER_ERROR, 1003, "Token creation error"),
+            AuthError::TokenCreation => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                1003,
+                "Token creation error",
+            ),
             AuthError::InvalidToken => (StatusCode::BAD_REQUEST, 1004, "Invalid token"),
             AuthError::ExpiredToken => (StatusCode::UNAUTHORIZED, 1005, "Token expired"),
-            AuthError::DatabaseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, 1006, "Database error"),
+            AuthError::DatabaseError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, 1006, "Database error")
+            }
             AuthError::NotFound => (StatusCode::NOT_FOUND, 1007, "Resource not found"),
             AuthError::Unauthorized => (StatusCode::UNAUTHORIZED, 1008, "Unauthorized"),
             AuthError::Forbidden => (StatusCode::FORBIDDEN, 1009, "Forbidden"),
-            AuthError::InternalServerError(_) => (StatusCode::INTERNAL_SERVER_ERROR, 1010, "Internal server error"),
+            AuthError::InternalServerError(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                1010,
+                "Internal server error",
+            ),
         };
 
         let body = Json(ErrorResponse {

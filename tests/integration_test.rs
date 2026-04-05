@@ -1,9 +1,9 @@
+use axum::body::Bytes;
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use keylo::startup;
 use keylo::config::Config;
+use keylo::startup;
 use serde_json::json;
-use axum::body::Bytes;
 
 #[cfg(test)]
 mod tests {
@@ -11,8 +11,9 @@ mod tests {
 
     /// 设置测试服务器（带数据库）
     async fn setup_test_server() -> TestServer {
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:password@localhost:5432/keylo_test".to_string());
+        let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:password@localhost:5432/keylo_test".to_string()
+        });
 
         let config = Config::default();
 
@@ -47,10 +48,7 @@ mod tests {
             "client_secret": "invalid"
         });
 
-        let response = server
-            .post("/v1/auth/token")
-            .json(&auth_payload)
-            .await;
+        let response = server.post("/v1/auth/token").json(&auth_payload).await;
 
         // 如果数据库不可用，返回500；否则返回401（错误凭据）
         let status = response.status_code();
@@ -76,10 +74,7 @@ mod tests {
             "client_secret": ""
         });
 
-        let response = server
-            .post("/v1/auth/token")
-            .json(&empty_payload)
-            .await;
+        let response = server.post("/v1/auth/token").json(&empty_payload).await;
 
         response.assert_status(StatusCode::BAD_REQUEST);
     }
@@ -106,10 +101,7 @@ mod tests {
             "refresh_token": "invalid.jwt.token"
         });
 
-        let response = server
-            .post("/v1/auth/refresh")
-            .json(&refresh_payload)
-            .await;
+        let response = server.post("/v1/auth/refresh").json(&refresh_payload).await;
 
         // 如果数据库不可用，返回500；否则返回400（无效令牌）
         let status = response.status_code();
@@ -127,15 +119,17 @@ mod tests {
             .await;
 
         // 应该返回400（缺少Authorization header）或401（无权限）
-        assert!(blacklist_response.status_code() == StatusCode::BAD_REQUEST ||
-                blacklist_response.status_code() == StatusCode::UNAUTHORIZED);
+        assert!(
+            blacklist_response.status_code() == StatusCode::BAD_REQUEST
+                || blacklist_response.status_code() == StatusCode::UNAUTHORIZED
+        );
 
         // 测试获取黑名单端点
-        let list_response = server
-            .get("/v1/admin/blacklisted-tokens")
-            .await;
+        let list_response = server.get("/v1/admin/blacklisted-tokens").await;
 
-        assert!(list_response.status_code() == StatusCode::BAD_REQUEST ||
-                list_response.status_code() == StatusCode::UNAUTHORIZED);
+        assert!(
+            list_response.status_code() == StatusCode::BAD_REQUEST
+                || list_response.status_code() == StatusCode::UNAUTHORIZED
+        );
     }
 }
