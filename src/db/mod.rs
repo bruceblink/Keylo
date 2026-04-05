@@ -143,6 +143,25 @@ pub async fn get_client_auth_info(
     }))
 }
 
+/// 轮换客户端密钥
+pub async fn rotate_client_secret(
+    pool: &PgPool,
+    client_id: &str,
+    new_secret: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE clients
+         SET secret = $2, updated_at = NOW()
+         WHERE id = $1 AND active = TRUE",
+    )
+    .bind(client_id)
+    .bind(new_secret)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// 创建会话记录
 pub async fn create_session(
     pool: &PgPool,

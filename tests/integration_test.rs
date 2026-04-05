@@ -204,4 +204,63 @@ mod tests {
                 || audit_response.status_code() == StatusCode::UNAUTHORIZED
         );
     }
+
+    #[tokio::test]
+    async fn test_admin_rotate_client_secret_revokes_refresh_tokens() {
+        std::env::set_var("ADMIN_CLIENT_ID", "cli-rotate");
+        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-rotate-secret");
+
+        let server = setup_test_server().await;
+        let login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": "cli-rotate",
+                "client_secret": "cli-rotate-secret"
+            }))
+            .await;
+
+        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        login_resp.assert_status_ok();
+        let login_body: serde_json::Value = login_resp.json();
+        let access_token = login_body["access_token"].as_str().unwrap();
+        let refresh_token = login_body["refresh_token"].as_str().unwrap();
+
+        let rotate_resp = server
+            .post("/v1/admin/clients/cli-rotate/rotate-secret")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .json(&json!({}))
+            .await;
+        rotate_resp.assert_status_ok();
+        let rotate_body: serde_json::Value = rotate_resp.json();
+        let new_secret = rotate_body["new_secret"].as_str().unwrap();
+        assert_ne!(new_secret, "cli-rotate-secret");
+
+        let old_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": "cli-rotate",
+                "client_secret": "cli-rotate-secret"
+            }))
+            .await;
+        assert_eq!(old_login.status_code(), StatusCode::UNAUTHORIZED);
+
+        let new_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": "cli-rotate",
+                "client_secret": new_secret
+            }))
+            .await;
+        new_login.assert_status_ok();
+
+        let refresh_resp = server
+            .post("/v1/auth/refresh")
+            .json(&json!({
+                "refresh_token": refresh_token
+            }))
+            .await;
+        assert_eq!(refresh_resp.status_code(), StatusCode::BAD_REQUEST);
+    }
 }

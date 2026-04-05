@@ -2,11 +2,11 @@ use crate::db::user::get_user_by_username;
 use crate::errors::AuthError;
 use crate::models::{
     AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest, MeResponse,
-    RefreshTokenRequest,
+    RefreshTokenRequest, RotateClientSecretRequest,
 };
 use crate::state::AppState;
 use crate::utils;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use axum_extra::headers::authorization::Bearer;
@@ -394,6 +394,62 @@ pub async fn auth_cleanup_audit_logs(
             "Database not available".to_string(),
         ))
     }
+}
+
+pub async fn auth_rotate_client_secret(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(client_id): Path<String>,
+    Json(payload): Json<RotateClientSecretRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if !claims.scope.contains(&"admin".to_string()) {
+        return Err(AuthError::Forbidden);
+    }
+
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+
+    let new_secret = payload
+        .new_secret
+        .filter(|secret| !secret.trim().is_empty())
+        .unwrap_or_else(|| format!("rot_{}", utils::generate_jti()));
+
+    let updated = crate::db::rotate_client_secret(db, &client_id, &new_secret)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to rotate client secret".to_string()))?;
+
+    if !updated {
+        return Err(AuthError::NotFound);
+    }
+
+    let revoke_refresh_tokens = payload.revoke_refresh_tokens.unwrap_or(true);
+    if revoke_refresh_tokens {
+        crate::db::revoke_client_refresh_tokens(db, &client_id)
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to revoke existing refresh tokens".to_string())
+            })?;
+    }
+
+    audit_event(
+        &state,
+        "admin.client.secret_rotated",
+        Some(&claims.sub),
+        Some(&format!(
+            "client_id={}, revoke_refresh_tokens={}",
+            client_id, revoke_refresh_tokens
+        )),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "client_id": client_id,
+        "new_secret": new_secret,
+        "revoke_refresh_tokens": revoke_refresh_tokens,
+    })))
 }
 
 pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {

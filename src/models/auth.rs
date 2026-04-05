@@ -32,6 +32,12 @@ pub struct CleanupAuditLogsRequest {
     pub retention_days: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RotateClientSecretRequest {
+    pub new_secret: Option<String>,
+    pub revoke_refresh_tokens: Option<bool>,
+}
+
 impl AuthBody {
     pub fn new(access_token: String, refresh_token: Option<String>, expires_in: i64) -> Self {
         Self {
