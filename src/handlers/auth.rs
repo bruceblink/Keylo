@@ -1,8 +1,9 @@
 use crate::db::user::get_user_by_username;
 use crate::errors::AuthError;
 use crate::models::{
-    AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest, MeResponse,
-    RefreshTokenRequest, RotateClientSecretRequest,
+    AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest,
+    CreateClientRequest, MeResponse, RefreshTokenRequest, RotateClientSecretRequest,
+    UpdateClientRequest,
 };
 use crate::state::AppState;
 use crate::utils;
@@ -449,6 +450,137 @@ pub async fn auth_rotate_client_secret(
         "client_id": client_id,
         "new_secret": new_secret,
         "revoke_refresh_tokens": revoke_refresh_tokens,
+    })))
+}
+
+pub async fn auth_list_clients(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if !claims.scope.contains(&"admin".to_string()) {
+        return Err(AuthError::Forbidden);
+    }
+
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let clients = crate::db::list_clients_for_admin(db)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to list clients".to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": clients.into_iter().map(|(id, name, description, active, updated_at)| {
+            json!({
+                "id": id,
+                "name": name,
+                "description": description,
+                "active": active,
+                "updated_at": updated_at
+            })
+        }).collect::<Vec<_>>()
+    })))
+}
+
+pub async fn auth_create_client(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(payload): Json<CreateClientRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if !claims.scope.contains(&"admin".to_string()) {
+        return Err(AuthError::Forbidden);
+    }
+
+    if payload.client_id.trim().is_empty()
+        || payload.client_secret.trim().is_empty()
+        || payload.name.trim().is_empty()
+    {
+        return Err(AuthError::MissingCredentials);
+    }
+
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    crate::db::create_management_client(
+        db,
+        &payload.client_id,
+        &payload.client_secret,
+        &payload.name,
+        payload.description.as_deref(),
+        payload.active.unwrap_or(true),
+    )
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("duplicate key") {
+            AuthError::InternalServerError("Client already exists".to_string())
+        } else {
+            AuthError::DatabaseError("Failed to create client".to_string())
+        }
+    })?;
+
+    audit_event(
+        &state,
+        "admin.client.created",
+        Some(&claims.sub),
+        Some(&format!("client_id={}", payload.client_id)),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "client_id": payload.client_id,
+    })))
+}
+
+pub async fn auth_update_client(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(client_id): Path<String>,
+    Json(payload): Json<UpdateClientRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if !claims.scope.contains(&"admin".to_string()) {
+        return Err(AuthError::Forbidden);
+    }
+
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let updated = crate::db::update_management_client(
+        db,
+        &client_id,
+        payload.client_secret.as_deref(),
+        payload.name.as_deref(),
+        payload.description.as_deref(),
+        payload.active,
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Failed to update client".to_string()))?;
+
+    if !updated {
+        return Err(AuthError::NotFound);
+    }
+
+    if payload.active == Some(false) {
+        let _ = crate::db::revoke_client_refresh_tokens(db, &client_id).await;
+    }
+
+    audit_event(
+        &state,
+        "admin.client.updated",
+        Some(&claims.sub),
+        Some(&format!(
+            "client_id={}, active={:?}",
+            client_id, payload.active
+        )),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "client_id": client_id,
     })))
 }
 

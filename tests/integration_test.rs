@@ -207,41 +207,72 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_rotate_client_secret_revokes_refresh_tokens() {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli-rotate");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-rotate-secret");
+        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
+        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
 
         let server = setup_test_server().await;
-        let login_resp = server
+        let admin_login_resp = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": "cli-rotate",
-                "client_secret": "cli-rotate-secret"
+                "client_id": "cli-admin-root",
+                "client_secret": "cli-admin-root-secret"
             }))
             .await;
 
-        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
             return;
         }
-        login_resp.assert_status_ok();
-        let login_body: serde_json::Value = login_resp.json();
-        let access_token = login_body["access_token"].as_str().unwrap();
-        let refresh_token = login_body["refresh_token"].as_str().unwrap();
+        admin_login_resp.assert_status_ok();
+        let admin_login_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_login_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let managed_client = format!("rotate-client-{}", ts);
+
+        let create_resp = server
+            .post("/v1/admin/clients")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "client_id": managed_client,
+                "client_secret": "rotate-old-secret",
+                "name": "Rotate Client",
+                "description": "for rotate test"
+            }))
+            .await;
+        create_resp.assert_status_ok();
+
+        let client_login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": managed_client,
+                "client_secret": "rotate-old-secret"
+            }))
+            .await;
+        client_login_resp.assert_status_ok();
+        let client_login_body: serde_json::Value = client_login_resp.json();
+        let refresh_token = client_login_body["refresh_token"].as_str().unwrap();
 
         let rotate_resp = server
-            .post("/v1/admin/clients/cli-rotate/rotate-secret")
-            .add_header("Authorization", format!("Bearer {}", access_token))
+            .post(&format!(
+                "/v1/admin/clients/{}/rotate-secret",
+                managed_client
+            ))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
             .json(&json!({}))
             .await;
         rotate_resp.assert_status_ok();
         let rotate_body: serde_json::Value = rotate_resp.json();
         let new_secret = rotate_body["new_secret"].as_str().unwrap();
-        assert_ne!(new_secret, "cli-rotate-secret");
+        assert_ne!(new_secret, "rotate-old-secret");
 
         let old_login = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": "cli-rotate",
-                "client_secret": "cli-rotate-secret"
+                "client_id": managed_client,
+                "client_secret": "rotate-old-secret"
             }))
             .await;
         assert_eq!(old_login.status_code(), StatusCode::UNAUTHORIZED);
@@ -249,7 +280,7 @@ mod tests {
         let new_login = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": "cli-rotate",
+                "client_id": managed_client,
                 "client_secret": new_secret
             }))
             .await;
@@ -262,5 +293,75 @@ mod tests {
             }))
             .await;
         assert_eq!(refresh_resp.status_code(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_admin_client_management_api() {
+        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
+        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
+
+        let server = setup_test_server().await;
+        let login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": "cli-admin-root",
+                "client_secret": "cli-admin-root-secret"
+            }))
+            .await;
+        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        login_resp.assert_status_ok();
+        let login_body: serde_json::Value = login_resp.json();
+        let access_token = login_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let managed_client = format!("managed-{}", ts);
+
+        let create_resp = server
+            .post("/v1/admin/clients")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .json(&json!({
+                "client_id": managed_client,
+                "client_secret": "managed-secret",
+                "name": "Managed Client",
+                "description": "created by admin api"
+            }))
+            .await;
+        create_resp.assert_status_ok();
+
+        let list_resp = server
+            .get("/v1/admin/clients")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        list_resp.assert_status_ok();
+        let list_body: serde_json::Value = list_resp.json();
+        let found = list_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == managed_client);
+        assert!(found);
+
+        let disable_resp = server
+            .put(&format!("/v1/admin/clients/{}", managed_client))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .json(&json!({
+                "active": false
+            }))
+            .await;
+        disable_resp.assert_status_ok();
+
+        let disabled_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": managed_client,
+                "client_secret": "managed-secret"
+            }))
+            .await;
+        assert_eq!(disabled_login.status_code(), StatusCode::UNAUTHORIZED);
     }
 }

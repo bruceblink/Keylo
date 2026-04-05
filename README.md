@@ -502,7 +502,7 @@ docker-compose logs -f keylo
 * [x] 审计日志增加更多事件（RBAC 变更、OAuth 绑定/解绑）
 * [x] 将限流、锁定、OAuth state 全量迁移到 Redis（生产建议）
 * [x] 管理员凭证轮换策略与自动失效
-* [ ] 管理后台 API
+* [x] 管理后台 API
 * [ ] GraphQL 支持
 * [ ] 第三方集成文档
 

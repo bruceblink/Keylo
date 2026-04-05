@@ -1,11 +1,11 @@
 use crate::handlers::user::register_user;
 use crate::handlers::{
-    auth_blacklist_token, auth_cleanup_audit_logs, auth_get_audit_logs,
-    auth_get_blacklisted_tokens, auth_logout, auth_me, auth_refresh, auth_rotate_client_secret,
-    auth_token,
+    auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client, auth_get_audit_logs,
+    auth_get_blacklisted_tokens, auth_list_clients, auth_logout, auth_me, auth_refresh,
+    auth_rotate_client_secret, auth_token, auth_update_client,
 };
 use crate::state::AppState;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 
 pub fn router() -> Router<AppState> {
@@ -22,6 +22,9 @@ pub fn router() -> Router<AppState> {
             "/v1/admin/audit-logs/cleanup",
             post(auth_cleanup_audit_logs),
         )
+        .route("/v1/admin/clients", get(auth_list_clients))
+        .route("/v1/admin/clients", post(auth_create_client))
+        .route("/v1/admin/clients/{client_id}", put(auth_update_client))
         .route(
             "/v1/admin/clients/{client_id}/rotate-secret",
             post(auth_rotate_client_secret),

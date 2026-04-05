@@ -38,6 +38,23 @@ pub struct RotateClientSecretRequest {
     pub revoke_refresh_tokens: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateClientRequest {
+    pub client_id: String,
+    pub client_secret: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub active: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateClientRequest {
+    pub client_secret: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub active: Option<bool>,
+}
+
 impl AuthBody {
     pub fn new(access_token: String, refresh_token: Option<String>, expires_in: i64) -> Self {
         Self {

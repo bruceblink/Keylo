@@ -162,6 +162,86 @@ pub async fn rotate_client_secret(
     Ok(result.rows_affected() > 0)
 }
 
+/// 列出所有客户端（管理后台）
+pub async fn list_clients_for_admin(
+    pool: &PgPool,
+) -> Result<Vec<(String, String, Option<String>, bool, i64)>> {
+    let rows = sqlx::query(
+        "SELECT id, name, description, active,
+                extract(epoch from updated_at)::bigint as updated_at
+         FROM clients
+         ORDER BY updated_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get("id"),
+                row.get("name"),
+                row.get("description"),
+                row.get("active"),
+                row.get("updated_at"),
+            )
+        })
+        .collect())
+}
+
+/// 创建管理客户端
+pub async fn create_management_client(
+    pool: &PgPool,
+    client_id: &str,
+    client_secret: &str,
+    name: &str,
+    description: Option<&str>,
+    active: bool,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO clients (id, secret, name, description, active)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(client_id)
+    .bind(client_secret)
+    .bind(name)
+    .bind(description)
+    .bind(active)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// 更新管理客户端
+pub async fn update_management_client(
+    pool: &PgPool,
+    client_id: &str,
+    client_secret: Option<&str>,
+    name: Option<&str>,
+    description: Option<&str>,
+    active: Option<bool>,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE clients
+         SET secret = COALESCE($2, secret),
+             name = COALESCE($3, name),
+             description = COALESCE($4, description),
+             active = COALESCE($5, active),
+             updated_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(client_id)
+    .bind(client_secret)
+    .bind(name)
+    .bind(description)
+    .bind(active)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// 创建会话记录
 pub async fn create_session(
     pool: &PgPool,
