@@ -1,1 +1,8 @@
 /target
+/build
+.idea
+*.iml
+*.log
+*.class
+*.jar
+.env
