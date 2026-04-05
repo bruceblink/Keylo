@@ -19,29 +19,11 @@ mod tests {
     }
 
     async fn get_access_token(server: &TestServer) -> String {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let username = format!("oauth_user_{}", ts);
-        let email = format!("oauth_{}@example.com", ts);
-        let password = "oauth-password-123";
-
-        server
-            .post("/v1/auth/register")
-            .json(&json!({
-                "username": username,
-                "email": email,
-                "password": password
-            }))
-            .await
-            .assert_status_ok();
-
         let login_response = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": username,
-                "client_secret": password
+                "client_id": "cli",
+                "client_secret": "cli-secret"
             }))
             .await;
 

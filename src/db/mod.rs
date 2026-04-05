@@ -45,6 +45,57 @@ pub async fn create_client(
     Ok(())
 }
 
+/// 创建或更新客户端
+pub async fn upsert_client(
+    pool: &PgPool,
+    client_id: &str,
+    client_secret: &str,
+    name: &str,
+    description: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO clients (id, secret, name, description, active)
+         VALUES ($1, $2, $3, $4, TRUE)
+         ON CONFLICT (id) DO UPDATE
+         SET secret = EXCLUDED.secret,
+             name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             active = TRUE,
+             updated_at = NOW()",
+    )
+    .bind(client_id)
+    .bind(client_secret)
+    .bind(name)
+    .bind(description)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// 初始化默认客户端
+pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
+    upsert_client(
+        pool,
+        "web",
+        "web-secret",
+        "Web Client",
+        Some("Default web client"),
+    )
+    .await?;
+
+    upsert_client(
+        pool,
+        "cli",
+        "cli-secret",
+        "CLI Client",
+        Some("Default admin CLI client"),
+    )
+    .await?;
+
+    Ok(())
+}
+
 /// 获取所有活跃客户端
 pub async fn get_all_active_clients(pool: &PgPool) -> Result<Vec<(String, String)>> {
     let rows = sqlx::query("SELECT id, secret FROM clients WHERE active = TRUE")

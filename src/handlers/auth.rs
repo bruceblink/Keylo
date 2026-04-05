@@ -15,6 +15,14 @@ use chrono::Utc;
 use jsonwebtoken::{encode, Header};
 use serde_json::json;
 
+fn access_scope(subject_prefix: &str, client_id: &str) -> Vec<String> {
+    if subject_prefix == "client" && client_id == "cli" {
+        vec!["read".into(), "write".into(), "admin".into()]
+    } else {
+        vec!["read".into(), "write".into()]
+    }
+}
+
 pub async fn auth_token(
     State(state): State<AppState>,
     Json(payload): Json<AuthPayload>,
@@ -61,8 +69,14 @@ pub async fn auth_token(
     let subject_prefix = if is_user_valid {
         "user"
     } else {
-        // If user auth failed, try client auth
-        if !state.validate_client(&payload.client_id, &payload.client_secret) {
+        // If user auth failed, try client auth (prefer DB)
+        let client_valid = match crate::db::get_client_secret(db, &payload.client_id).await {
+            Ok(Some(secret)) => secret == payload.client_secret,
+            Ok(None) => state.validate_client(&payload.client_id, &payload.client_secret),
+            Err(_) => return Err(AuthError::DatabaseError("Failed to get client".to_string())),
+        };
+
+        if !client_valid {
             return Err(AuthError::WrongCredentials);
         }
         "client"
@@ -75,7 +89,7 @@ pub async fn auth_token(
         sub: format!("{}:{}", subject_prefix, payload.client_id),
         iss: "keylo".to_string(),
         aud: "admin-backend".to_string(),
-        scope: vec!["read".into(), "write".into()],
+        scope: access_scope(subject_prefix, &payload.client_id),
         iat: now,
         exp: now + state.config.token_expiry_seconds,
         jti: utils::generate_jti(),
@@ -231,7 +245,7 @@ pub async fn auth_refresh(
         sub: format!("client:{}", client_id),
         iss: "keylo".to_string(),
         aud: "admin-backend".to_string(),
-        scope: vec!["read".into(), "write".into()],
+        scope: access_scope("client", &client_id),
         iat: now,
         exp: now + state.config.token_expiry_seconds,
         jti: utils::generate_jti(),

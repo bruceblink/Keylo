@@ -1,4 +1,5 @@
 use crate::errors::AuthError;
+use crate::models::Claims;
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::State;
@@ -53,5 +54,22 @@ pub async fn auth_middleware(
     request.extensions_mut().insert(claims);
 
     // 继续处理请求
+    Ok(next.run(request).await)
+}
+
+/// 管理员权限中间件
+pub async fn admin_scope_middleware(
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let claims = match request.extensions().get::<Claims>() {
+        Some(claims) => claims,
+        None => return Ok(AuthError::Unauthorized.into_response()),
+    };
+
+    if !claims.scope.iter().any(|s| s == "admin") {
+        return Ok(AuthError::Forbidden.into_response());
+    }
+
     Ok(next.run(request).await)
 }

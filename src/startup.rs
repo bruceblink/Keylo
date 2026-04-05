@@ -39,6 +39,10 @@ pub async fn init_app_router_with_db(
     crate::db::run_migrations(&db).await?;
     tracing::info!("Database migrations completed");
 
+    // Seed default clients
+    crate::db::seed_default_clients(&db).await?;
+    tracing::info!("Default clients seeded");
+
     let app_state = AppState::new(config, Some(Arc::new(db)));
 
     let public_routes = Router::new()
@@ -49,8 +53,16 @@ pub async fn init_app_router_with_db(
     let protected_routes = Router::new()
         .route("/protected", get(protected))
         .merge(routes::auth::router())
-        .nest("/api/oauth", routes::oauth::oauth_admin_routes())
-        .nest("/api/rbac", routes::rbac::rbac_routes())
+        .nest(
+            "/api/oauth",
+            routes::oauth::oauth_admin_routes()
+                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+        )
+        .nest(
+            "/api/rbac",
+            routes::rbac::rbac_routes()
+                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+        )
         .merge(routes::user::user_routes())
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
