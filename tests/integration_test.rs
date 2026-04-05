@@ -12,11 +12,13 @@ mod tests {
 
     /// 设置测试服务器（带数据库）
     async fn setup_test_server() -> TestServer {
+        setup_test_server_with_config(Config::default()).await
+    }
+
+    async fn setup_test_server_with_config(config: Config) -> TestServer {
         let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
             "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
         });
-
-        let config = Config::default();
 
         // 尝试连接数据库，如果失败则使用无数据库版本
         match startup::init_app_router_with_db(config, &database_url).await {
@@ -137,6 +139,37 @@ mod tests {
 
         let locked = server.post("/v1/auth/token").json(&auth_payload).await;
         assert_eq!(locked.status_code(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_auth_token_rate_limit() {
+        let mut config = Config::default();
+        config.max_failed_login_attempts = 100; // 避免锁定逻辑先触发
+        config.auth_rate_limit_max_requests = 3;
+        config.auth_rate_limit_window_seconds = 60;
+        let server = setup_test_server_with_config(config).await;
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let principal = format!("invalid-ratelimit-{}", ts);
+
+        let auth_payload = json!({
+            "client_id": principal,
+            "client_secret": "wrong-password"
+        });
+
+        for _ in 0..3 {
+            let response = server.post("/v1/auth/token").json(&auth_payload).await;
+            if response.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+                return;
+            }
+            assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+        }
+
+        let limited = server.post("/v1/auth/token").json(&auth_payload).await;
+        assert_eq!(limited.status_code(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

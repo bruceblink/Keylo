@@ -45,6 +45,24 @@ pub async fn auth_token(
         return Err(AuthError::MissingCredentials);
     }
 
+    if !state
+        .allow_auth_request(
+            &payload.client_id,
+            state.config.auth_rate_limit_window_seconds,
+            state.config.auth_rate_limit_max_requests,
+        )
+        .await
+    {
+        audit_event(
+            &state,
+            "auth.token.rate_limited",
+            Some(&payload.client_id),
+            Some("Auth request rate limit exceeded"),
+        )
+        .await;
+        return Err(AuthError::TooManyRequests);
+    }
+
     if state.is_login_locked(&payload.client_id).await.is_some() {
         audit_event(
             &state,

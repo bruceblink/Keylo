@@ -21,6 +21,10 @@ pub struct Config {
     pub max_failed_login_attempts: u32,
     /// 登录锁定时长（秒）
     pub login_lockout_seconds: i64,
+    /// 认证接口限流窗口（秒）
+    pub auth_rate_limit_window_seconds: i64,
+    /// 认证接口限流窗口内最大请求数
+    pub auth_rate_limit_max_requests: u32,
 }
 
 impl Default for Config {
@@ -66,6 +70,16 @@ impl Config {
             .parse::<i64>()
             .unwrap_or(300);
 
+        let auth_rate_limit_window_seconds = env::var("AUTH_RATE_LIMIT_WINDOW_SECONDS")
+            .unwrap_or_else(|_| "60".to_string())
+            .parse::<i64>()
+            .unwrap_or(60);
+
+        let auth_rate_limit_max_requests = env::var("AUTH_RATE_LIMIT_MAX_REQUESTS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse::<u32>()
+            .unwrap_or(30);
+
         Self {
             jwt_secret,
             database_url,
@@ -76,6 +90,8 @@ impl Config {
             refresh_token_expiry_seconds,
             max_failed_login_attempts,
             login_lockout_seconds,
+            auth_rate_limit_window_seconds,
+            auth_rate_limit_max_requests,
         }
     }
 

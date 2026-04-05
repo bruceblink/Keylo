@@ -27,6 +27,9 @@ pub struct AppState {
 
     /// 登录失败记录：client_id/username -> (failed_count, locked_until_unix_ts)
     pub login_attempts: Arc<RwLock<HashMap<String, (u32, i64)>>>,
+
+    /// 认证接口频率限制记录：principal -> timestamps(unix)
+    pub auth_rate_limits: Arc<RwLock<HashMap<String, Vec<i64>>>>,
 }
 
 impl Default for AppState {
@@ -59,6 +62,7 @@ impl AppState {
             config: Arc::new(config),
             oauth_states: Arc::new(RwLock::new(HashMap::new())),
             login_attempts: Arc::new(RwLock::new(HashMap::new())),
+            auth_rate_limits: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -157,5 +161,26 @@ impl AppState {
     pub async fn clear_login_failures(&self, principal: &str) {
         let mut attempts = self.login_attempts.write().await;
         attempts.remove(principal);
+    }
+
+    pub async fn allow_auth_request(
+        &self,
+        principal: &str,
+        window_seconds: i64,
+        max_requests: u32,
+    ) -> bool {
+        let now = chrono::Utc::now().timestamp();
+        let threshold = now - window_seconds;
+        let mut limits = self.auth_rate_limits.write().await;
+
+        let entries = limits.entry(principal.to_string()).or_default();
+        entries.retain(|ts| *ts > threshold);
+
+        if entries.len() as u32 >= max_requests {
+            return false;
+        }
+
+        entries.push(now);
+        true
     }
 }
