@@ -51,6 +51,12 @@ pub async fn init_app_router_with_db(
     crate::db::seed_default_clients(&db).await?;
     tracing::info!("Default clients seeded");
 
+    // Cleanup old audit logs (best effort)
+    match crate::db::cleanup_old_audit_logs(&db, config.audit_log_retention_days).await {
+        Ok(deleted) => tracing::info!("Audit logs cleanup completed, deleted={}", deleted),
+        Err(e) => tracing::warn!("Audit logs cleanup failed: {}", e),
+    }
+
     let app_state = AppState::new(config, Some(Arc::new(db)));
 
     let public_routes = Router::new()

@@ -349,9 +349,9 @@ pub async fn create_audit_log(
 pub async fn get_recent_audit_logs(
     pool: &PgPool,
     limit: i64,
-) -> Result<Vec<(String, String, i64)>> {
+) -> Result<Vec<(String, Option<String>, Option<String>, i64)>> {
     let rows = sqlx::query(
-        "SELECT event_type, COALESCE(actor, '') as actor, extract(epoch from created_at)::bigint as created_at
+        "SELECT event_type, actor, detail, extract(epoch from created_at)::bigint as created_at
          FROM audit_logs
          ORDER BY created_at DESC
          LIMIT $1",
@@ -366,8 +366,52 @@ pub async fn get_recent_audit_logs(
             (
                 row.get("event_type"),
                 row.get("actor"),
+                row.get("detail"),
                 row.get("created_at"),
             )
         })
         .collect())
+}
+
+/// 分页查询审计日志
+pub async fn list_audit_logs(
+    pool: &PgPool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<(String, Option<String>, Option<String>, i64)>> {
+    let rows = sqlx::query(
+        "SELECT event_type, actor, detail, extract(epoch from created_at)::bigint as created_at
+         FROM audit_logs
+         ORDER BY created_at DESC
+         LIMIT $1 OFFSET $2",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get("event_type"),
+                row.get("actor"),
+                row.get("detail"),
+                row.get("created_at"),
+            )
+        })
+        .collect())
+}
+
+/// 清理旧审计日志
+pub async fn cleanup_old_audit_logs(pool: &PgPool, retention_days: i64) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM audit_logs
+         WHERE created_at < NOW() - ($1::text || ' days')::interval",
+    )
+    .bind(retention_days)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
 }

@@ -228,14 +228,14 @@ async fn change_password_handler(
     let user_id = if claims.sub.starts_with("user:") {
         // 如果是user格式，从数据库中通过用户名查找用户ID
         let username = &claims.sub[5..]; // 移除"user:"前缀
-        println!("Looking up user by username: {}", username);
+        tracing::debug!("Looking up user by username: {}", username);
         match crate::db::user::get_user_by_username(db, username).await {
             Ok(Some(user)) => {
-                println!("Found user: {}", user.id);
+                tracing::debug!("Found user: {}", user.id);
                 user.id
             }
             Ok(None) => {
-                println!("User not found for username: {}", username);
+                tracing::warn!("User not found for username: {}", username);
                 return Err((
                     StatusCode::UNAUTHORIZED,
                     Json(json!({
@@ -245,7 +245,7 @@ async fn change_password_handler(
                 ));
             }
             Err(e) => {
-                println!("Database error: {}", e);
+                tracing::warn!("Database error: {}", e);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
@@ -258,14 +258,14 @@ async fn change_password_handler(
     } else if claims.sub.starts_with("client:") {
         // 如果是client格式，从数据库中通过用户名查找用户ID
         let username = &claims.sub[7..]; // 移除"client:"前缀
-        println!("Looking up user by username: {}", username);
+        tracing::debug!("Looking up user by username: {}", username);
         match crate::db::user::get_user_by_username(db, username).await {
             Ok(Some(user)) => {
-                println!("Found user: {}", user.id);
+                tracing::debug!("Found user: {}", user.id);
                 user.id
             }
             Ok(None) => {
-                println!("User not found for username: {}", username);
+                tracing::warn!("User not found for username: {}", username);
                 return Err((
                     StatusCode::UNAUTHORIZED,
                     Json(json!({
@@ -275,7 +275,7 @@ async fn change_password_handler(
                 ));
             }
             Err(e) => {
-                println!("Database error: {}", e);
+                tracing::warn!("Database error: {}", e);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
@@ -287,7 +287,7 @@ async fn change_password_handler(
         }
     } else {
         // 直接使用sub作为用户ID（OAuth情况）
-        println!("Using sub directly as user_id: {}", claims.sub);
+        tracing::debug!("Using sub directly as user_id: {}", claims.sub);
         claims.sub.clone()
     };
 

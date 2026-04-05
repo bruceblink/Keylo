@@ -25,6 +25,12 @@ pub struct Config {
     pub auth_rate_limit_window_seconds: i64,
     /// 认证接口限流窗口内最大请求数
     pub auth_rate_limit_max_requests: u32,
+    /// 全局认证接口限流窗口内最大请求数
+    pub auth_global_rate_limit_max_requests: u32,
+    /// Redis URL（可选，配置后用于分布式状态存储）
+    pub redis_url: Option<String>,
+    /// 审计日志保留天数
+    pub audit_log_retention_days: i64,
 }
 
 impl Default for Config {
@@ -80,6 +86,18 @@ impl Config {
             .parse::<u32>()
             .unwrap_or(30);
 
+        let auth_global_rate_limit_max_requests = env::var("AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse::<u32>()
+            .unwrap_or(300);
+
+        let redis_url = env::var("REDIS_URL").ok();
+
+        let audit_log_retention_days = env::var("AUDIT_LOG_RETENTION_DAYS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse::<i64>()
+            .unwrap_or(30);
+
         Self {
             jwt_secret,
             database_url,
@@ -92,6 +110,9 @@ impl Config {
             login_lockout_seconds,
             auth_rate_limit_window_seconds,
             auth_rate_limit_max_requests,
+            auth_global_rate_limit_max_requests,
+            redis_url,
+            audit_log_retention_days,
         }
     }
 

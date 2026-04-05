@@ -146,6 +146,7 @@ mod tests {
         let mut config = Config::default();
         config.max_failed_login_attempts = 100; // 避免锁定逻辑先触发
         config.auth_rate_limit_max_requests = 3;
+        config.auth_global_rate_limit_max_requests = 100;
         config.auth_rate_limit_window_seconds = 60;
         let server = setup_test_server_with_config(config).await;
 
@@ -194,6 +195,13 @@ mod tests {
         assert!(
             list_response.status_code() == StatusCode::BAD_REQUEST
                 || list_response.status_code() == StatusCode::UNAUTHORIZED
+        );
+
+        // 测试获取审计日志端点
+        let audit_response = server.get("/v1/admin/audit-logs").await;
+        assert!(
+            audit_response.status_code() == StatusCode::BAD_REQUEST
+                || audit_response.status_code() == StatusCode::UNAUTHORIZED
         );
     }
 }

@@ -35,9 +35,10 @@ http-body-util = "0.1.0"
 hyper-util = { version = "0.1", features = ["client", "http1", "client-legacy"] }
 mime = "0.3"
 tower-http = { version = "0.6", features = ["trace"] }
+redis = { version = "0.31", features = ["tokio-comp"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-axum-test = "20.0"
+axum-test = "19.0.0"
 http-body-util = "0.1.0"
 hyper-util = { version = "0.1", features = ["client", "http1", "client-legacy"] }

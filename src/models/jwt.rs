@@ -68,15 +68,13 @@ impl FromRequestParts<AppState> for Claims {
                 Ok(data) => data,
                 Err(err) => {
                     match *err.kind() {
-                        ErrorKind::InvalidToken => println!("JWT decode failed: invalid token"),
+                        ErrorKind::InvalidToken => warn!("JWT decode failed: invalid token"),
                         ErrorKind::InvalidSignature => {
-                            println!("JWT decode failed: invalid signature")
+                            warn!("JWT decode failed: invalid signature")
                         }
-                        ErrorKind::ExpiredSignature => println!("JWT decode failed: token expired"),
-                        ErrorKind::InvalidIssuer => println!("JWT decode failed: invalid issuer"),
-                        ErrorKind::InvalidAudience => {
-                            println!("JWT decode failed: invalid audience")
-                        }
+                        ErrorKind::ExpiredSignature => warn!("JWT decode failed: token expired"),
+                        ErrorKind::InvalidIssuer => warn!("JWT decode failed: invalid issuer"),
+                        ErrorKind::InvalidAudience => warn!("JWT decode failed: invalid audience"),
                         _ => warn!("JWT decode failed: {:?}", err),
                     }
                     return Err(AuthError::InvalidToken);

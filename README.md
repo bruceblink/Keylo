@@ -322,6 +322,24 @@ curl -H "Authorization: Bearer <access_token>" \
   http://127.0.0.1:2345/api/oauth/accounts
 ```
 
+### 审计日志（管理员）
+
+#### 查询审计日志
+
+```bash
+curl -H "Authorization: Bearer <admin_token>" \
+  "http://127.0.0.1:2345/v1/admin/audit-logs?limit=50&offset=0"
+```
+
+#### 清理历史审计日志
+
+```bash
+curl -X POST -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:2345/v1/admin/audit-logs/cleanup \
+  -d '{"retention_days": 30}'
+```
+
 ---
 
 ## 🏗️ 项目结构
@@ -382,6 +400,15 @@ Cargo.toml          # 项目依赖配置
 | `ENVIRONMENT` | `development` | 运行环境 |
 | `TOKEN_EXPIRY_SECONDS` | `900` | Token 过期时间（秒） |
 | `REFRESH_TOKEN_EXPIRY_SECONDS` | `2592000` | 刷新 Token 过期时间（秒） |
+| `MAX_FAILED_LOGIN_ATTEMPTS` | `5` | 连续登录失败锁定阈值 |
+| `LOGIN_LOCKOUT_SECONDS` | `300` | 登录锁定时长（秒） |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | `60` | 登录限流窗口（秒） |
+| `AUTH_RATE_LIMIT_MAX_REQUESTS` | `30` | 限流窗口内单主体最大请求数 |
+| `AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS` | `300` | 限流窗口内全局最大请求数 |
+| `ADMIN_CLIENT_ID` | `` | 管理员客户端 ID（建议生产配置） |
+| `ADMIN_CLIENT_SECRET` | `` | 管理员客户端密钥（建议生产配置） |
+| `REDIS_URL` | `` | Redis 地址（配置后启用分布式状态存储） |
+| `AUDIT_LOG_RETENTION_DAYS` | `30` | 审计日志保留天数 |
 | `RUST_LOG` | `keylo=debug` | 日志级别 |
 
 ---
@@ -471,11 +498,9 @@ docker-compose logs -f keylo
 
 ## 🚦 下一步计划
 
-* [ ] 补充 RBAC / OAuth 管理接口的 `admin` 级权限校验
-* [ ] 完善 OAuth `state` 参数校验与重放防护
-* [ ] 将默认客户端从内存迁移为数据库 seed 机制
-* [ ] 增加审计日志（登录、登出、角色变更、OAuth 绑定）
-* [ ] 增加接口级限流与暴力破解防护
+* [ ] 审计日志增加更多事件（RBAC 变更、OAuth 绑定/解绑）
+* [ ] 将限流、锁定、OAuth state 全量迁移到 Redis（生产建议）
+* [ ] 管理员凭证轮换策略与自动失效
 * [ ] 管理后台 API
 * [ ] GraphQL 支持
 * [ ] 第三方集成文档

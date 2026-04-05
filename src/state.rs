@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::models::Keys;
+use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -30,6 +31,9 @@ pub struct AppState {
 
     /// 认证接口频率限制记录：principal -> timestamps(unix)
     pub auth_rate_limits: Arc<RwLock<HashMap<String, Vec<i64>>>>,
+
+    /// Redis 客户端（可选）
+    pub redis_client: Option<redis::Client>,
 }
 
 impl Default for AppState {
@@ -52,6 +56,10 @@ impl AppState {
 
         // 默认允许的 audience
         let audiences = vec!["admin-backend".into(), "crawler".into()];
+        let redis_client = config
+            .redis_url
+            .as_deref()
+            .and_then(|url| redis::Client::open(url).ok());
 
         Self {
             jwt_keys: KEYS.clone(),
@@ -62,6 +70,7 @@ impl AppState {
             oauth_states: Arc::new(RwLock::new(HashMap::new())),
             login_attempts: Arc::new(RwLock::new(HashMap::new())),
             auth_rate_limits: Arc::new(RwLock::new(HashMap::new())),
+            redis_client,
         }
     }
 
@@ -97,11 +106,33 @@ impl AppState {
     }
 
     pub async fn store_oauth_state(&self, state: String, expires_at: i64) {
+        if let Some(redis_client) = &self.redis_client {
+            let ttl = (expires_at - chrono::Utc::now().timestamp()).max(1) as u64;
+            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+                let key = format!("oauth:state:{}", state);
+                if conn.set_ex::<_, _, ()>(&key, "1", ttl).await.is_ok() {
+                    return;
+                }
+            }
+        }
+
         let mut states = self.oauth_states.write().await;
         states.insert(state, expires_at);
     }
 
     pub async fn consume_oauth_state(&self, state: &str) -> bool {
+        if let Some(redis_client) = &self.redis_client {
+            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+                let key = format!("oauth:state:{}", state);
+                let existed = conn.exists::<_, bool>(&key).await.unwrap_or(false);
+                if existed {
+                    let _ = conn.del::<_, i32>(&key).await;
+                    return true;
+                }
+                return false;
+            }
+        }
+
         let now = chrono::Utc::now().timestamp();
         let mut states = self.oauth_states.write().await;
 
@@ -118,6 +149,20 @@ impl AppState {
     }
 
     pub async fn is_login_locked(&self, principal: &str) -> Option<i64> {
+        if let Some(redis_client) = &self.redis_client {
+            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+                let key = format!("auth:lock:{}", principal);
+                if let Ok(Some(locked_until)) = conn.get::<_, Option<i64>>(&key).await {
+                    let now = chrono::Utc::now().timestamp();
+                    if locked_until > now {
+                        return Some(locked_until - now);
+                    }
+                    let _ = conn.del::<_, i32>(&key).await;
+                    return None;
+                }
+            }
+        }
+
         let now = chrono::Utc::now().timestamp();
         let mut attempts = self.login_attempts.write().await;
 
@@ -140,6 +185,29 @@ impl AppState {
         max_failed_attempts: u32,
         lockout_seconds: i64,
     ) {
+        if let Some(redis_client) = &self.redis_client {
+            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+                let now = chrono::Utc::now().timestamp();
+                let lock_key = format!("auth:lock:{}", principal);
+                let fail_key = format!("auth:fail:{}", principal);
+
+                if conn.exists::<_, bool>(&lock_key).await.unwrap_or(false) {
+                    return;
+                }
+
+                let failures = conn.incr::<_, _, i64>(&fail_key, 1).await.unwrap_or(1);
+                let _ = conn.expire::<_, bool>(&fail_key, lockout_seconds).await;
+                if failures as u32 >= max_failed_attempts {
+                    let locked_until = now + lockout_seconds;
+                    let _ = conn
+                        .set_ex::<_, _, ()>(&lock_key, locked_until, lockout_seconds as u64)
+                        .await;
+                    let _ = conn.del::<_, i32>(&fail_key).await;
+                }
+                return;
+            }
+        }
+
         let now = chrono::Utc::now().timestamp();
         let mut attempts = self.login_attempts.write().await;
 
@@ -158,6 +226,16 @@ impl AppState {
     }
 
     pub async fn clear_login_failures(&self, principal: &str) {
+        if let Some(redis_client) = &self.redis_client {
+            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+                let fail_key = format!("auth:fail:{}", principal);
+                let lock_key = format!("auth:lock:{}", principal);
+                let _ = conn.del::<_, i32>(&fail_key).await;
+                let _ = conn.del::<_, i32>(&lock_key).await;
+                return;
+            }
+        }
+
         let mut attempts = self.login_attempts.write().await;
         attempts.remove(principal);
     }
@@ -168,6 +246,19 @@ impl AppState {
         window_seconds: i64,
         max_requests: u32,
     ) -> bool {
+        if let Some(redis_client) = &self.redis_client {
+            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+                let now = chrono::Utc::now().timestamp();
+                let bucket = now / window_seconds.max(1);
+                let key = format!("auth:rate:{}:{}", principal, bucket);
+                let count = conn.incr::<_, _, i64>(&key, 1).await.unwrap_or(1);
+                if count == 1 {
+                    let _ = conn.expire::<_, bool>(&key, window_seconds).await;
+                }
+                return (count as u32) <= max_requests;
+            }
+        }
+
         let now = chrono::Utc::now().timestamp();
         let threshold = now - window_seconds;
         let mut limits = self.auth_rate_limits.write().await;

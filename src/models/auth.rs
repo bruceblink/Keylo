@@ -27,6 +27,11 @@ pub struct BlacklistTokenRequest {
     pub expires_at: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CleanupAuditLogsRequest {
+    pub retention_days: Option<i64>,
+}
+
 impl AuthBody {
     pub fn new(access_token: String, refresh_token: Option<String>, expires_in: i64) -> Self {
         Self {

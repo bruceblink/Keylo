@@ -310,6 +310,6 @@ mod database_tests {
 
         assert!(!logs.is_empty());
         assert_eq!(logs[0].0, "auth.token.success");
-        assert_eq!(logs[0].1, "cli");
+        assert_eq!(logs[0].1.as_deref(), Some("cli"));
     }
 }

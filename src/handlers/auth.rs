@@ -1,11 +1,13 @@
 use crate::db::user::get_user_by_username;
 use crate::errors::AuthError;
 use crate::models::{
-    AuthBody, AuthPayload, BlacklistTokenRequest, Claims, MeResponse, RefreshTokenRequest,
+    AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest, MeResponse,
+    RefreshTokenRequest,
 };
 use crate::state::AppState;
 use crate::utils;
-use axum::extract::State;
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
@@ -14,6 +16,7 @@ use bcrypt::verify;
 use chrono::Utc;
 use jsonwebtoken::{encode, Header};
 use serde_json::json;
+use std::collections::HashMap;
 
 fn access_scope(subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
     if subject_prefix == "client" && is_admin_client {
@@ -36,8 +39,29 @@ async fn audit_event(
     }
 }
 
+fn extract_client_ip(headers: &HeaderMap) -> String {
+    if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = value.split(',').next() {
+            let ip = first.trim();
+            if !ip.is_empty() {
+                return ip.to_string();
+            }
+        }
+    }
+
+    if let Some(value) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let ip = value.trim();
+        if !ip.is_empty() {
+            return ip.to_string();
+        }
+    }
+
+    "unknown".to_string()
+}
+
 pub async fn auth_token(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<AuthPayload>,
 ) -> Result<Json<AuthBody>, AuthError> {
     // Check if the user sent the credentials
@@ -45,9 +69,31 @@ pub async fn auth_token(
         return Err(AuthError::MissingCredentials);
     }
 
+    let client_ip = extract_client_ip(&headers);
+    let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
+    let global_rate_key = format!("global:{}", client_ip);
+
     if !state
         .allow_auth_request(
-            &payload.client_id,
+            &global_rate_key,
+            state.config.auth_rate_limit_window_seconds,
+            state.config.auth_global_rate_limit_max_requests,
+        )
+        .await
+    {
+        audit_event(
+            &state,
+            "auth.token.rate_limited.global",
+            Some(&payload.client_id),
+            Some("Global auth request rate limit exceeded"),
+        )
+        .await;
+        return Err(AuthError::TooManyRequests);
+    }
+
+    if !state
+        .allow_auth_request(
+            &scoped_rate_key,
             state.config.auth_rate_limit_window_seconds,
             state.config.auth_rate_limit_max_requests,
         )
@@ -91,19 +137,18 @@ pub async fn auth_token(
             if let Some(ref password_hash) = user.password_hash {
                 let result = verify(&payload.client_secret, password_hash)
                     .map_err(|_| AuthError::WrongCredentials)?;
-                println!("Password verification result: {}", result);
                 (result, Some(user.id))
             } else {
-                println!("User has no password hash");
+                tracing::debug!("User has no password hash: {}", payload.client_id);
                 (false, None)
             }
         }
         Ok(None) => {
-            println!("User not found: {}", payload.client_id);
+            tracing::debug!("User not found: {}", payload.client_id);
             (false, None)
         }
         Err(e) => {
-            println!("Database error getting user: {:?}", e);
+            tracing::warn!("Database error getting user: {:?}", e);
             return Err(AuthError::DatabaseError("Failed to get user".to_string()));
         }
     };
@@ -269,6 +314,80 @@ pub async fn auth_get_blacklisted_tokens(
                     "expires_at": expires_at,
                 })
             }).collect::<Vec<_>>()
+        })))
+    } else {
+        Err(AuthError::DatabaseError(
+            "Database not available".to_string(),
+        ))
+    }
+}
+
+pub async fn auth_get_audit_logs(
+    State(state): State<AppState>,
+    claims: Claims,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if !claims.scope.contains(&"admin".to_string()) {
+        return Err(AuthError::Forbidden);
+    }
+
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let offset = params
+        .get("offset")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+
+    if let Some(db) = &state.db {
+        let logs = crate::db::list_audit_logs(db, limit, offset)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to query audit logs".to_string()))?;
+
+        Ok(Json(json!({
+            "success": true,
+            "data": logs.into_iter().map(|(event_type, actor, detail, created_at)| {
+                json!({
+                    "event_type": event_type,
+                    "actor": actor,
+                    "detail": detail,
+                    "created_at": created_at
+                })
+            }).collect::<Vec<_>>()
+        })))
+    } else {
+        Err(AuthError::DatabaseError(
+            "Database not available".to_string(),
+        ))
+    }
+}
+
+pub async fn auth_cleanup_audit_logs(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(payload): Json<CleanupAuditLogsRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if !claims.scope.contains(&"admin".to_string()) {
+        return Err(AuthError::Forbidden);
+    }
+
+    let retention_days = payload
+        .retention_days
+        .unwrap_or(state.config.audit_log_retention_days)
+        .clamp(1, 3650);
+
+    if let Some(db) = &state.db {
+        let deleted = crate::db::cleanup_old_audit_logs(db, retention_days)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to cleanup audit logs".to_string()))?;
+
+        Ok(Json(json!({
+            "success": true,
+            "retention_days": retention_days,
+            "deleted": deleted
         })))
     } else {
         Err(AuthError::DatabaseError(
