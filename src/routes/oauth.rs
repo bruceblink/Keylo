@@ -254,7 +254,11 @@ async fn oauth_login(
     };
 
     // 生成state参数用于CSRF保护
-    let state = Uuid::new_v4().to_string();
+    let oauth_state = Uuid::new_v4().to_string();
+    let state_exp = chrono::Utc::now().timestamp() + 600;
+    state
+        .store_oauth_state(oauth_state.clone(), state_exp)
+        .await;
 
     // 构建授权URL
     let mut auth_url = format!(
@@ -263,7 +267,7 @@ async fn oauth_login(
         provider.client_id,
         urlencoding::encode(&provider.redirect_url),
         urlencoding::encode(&provider.scope),
-        state
+        oauth_state
     );
 
     // 添加额外的查询参数
@@ -281,6 +285,29 @@ async fn oauth_callback(
     Path(provider_name): Path<String>,
     Query(query): Query<OAuthAuthorizeQuery>,
 ) -> Result<Json<OAuthLoginResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let callback_state = match query.state.as_deref() {
+        Some(value) => value,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "success": false,
+                    "error": "Missing OAuth state",
+                })),
+            ));
+        }
+    };
+
+    if !state.consume_oauth_state(callback_state).await {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "error": "Invalid or expired OAuth state",
+            })),
+        ));
+    }
+
     let db = require_db(&state)?;
     // 获取OAuth提供商配置
     let provider = match get_oauth_provider_by_name(db, &provider_name).await {

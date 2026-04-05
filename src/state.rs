@@ -3,6 +3,7 @@ use crate::models::Keys;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,6 +21,9 @@ pub struct AppState {
 
     /// 应用配置
     pub config: Arc<Config>,
+
+    /// OAuth state 临时存储（用于防止 CSRF/replay）
+    pub oauth_states: Arc<RwLock<HashMap<String, i64>>>,
 }
 
 impl Default for AppState {
@@ -50,6 +54,7 @@ impl AppState {
             audiences: Arc::new(audiences),
             db,
             config: Arc::new(config),
+            oauth_states: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -81,6 +86,27 @@ impl AppState {
             }
         } else {
             Err("Database not initialized".to_string())
+        }
+    }
+
+    pub async fn store_oauth_state(&self, state: String, expires_at: i64) {
+        let mut states = self.oauth_states.write().await;
+        states.insert(state, expires_at);
+    }
+
+    pub async fn consume_oauth_state(&self, state: &str) -> bool {
+        let now = chrono::Utc::now().timestamp();
+        let mut states = self.oauth_states.write().await;
+
+        // 清理过期 state
+        states.retain(|_, exp| *exp > now);
+
+        match states.get(state).copied() {
+            Some(exp) if exp > now => {
+                states.remove(state);
+                true
+            }
+            _ => false,
         }
     }
 }
