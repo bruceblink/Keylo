@@ -51,12 +51,24 @@ jobs:
     - name: Check code formatting
       run: cargo fmt --all -- --check
 
+    - name: Wait for Postgres
+      env:
+        PGPASSWORD: password
+      run: |
+        until pg_isready -h localhost -p 5432 -U postgres; do
+          echo "Waiting for postgres..."
+          sleep 1
+        done
+
     - name: Apply DB migrations for SQLx compile-time checks
+      env:
+        PGPASSWORD: password
       run: |
         for f in $(find migrations -name up.sql | sort); do
           echo "Applying migration: $f"
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -f "$f"
         done
+        psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -c "SELECT to_regclass('public.users') AS users_table;"
 
     - name: Run clippy
       run: cargo clippy -- -D warnings
@@ -130,12 +142,24 @@ jobs:
     - name: Install cargo-tarpaulin
       run: cargo install cargo-tarpaulin
 
+    - name: Wait for Postgres
+      env:
+        PGPASSWORD: password
+      run: |
+        until pg_isready -h localhost -p 5432 -U postgres; do
+          echo "Waiting for postgres..."
+          sleep 1
+        done
+
     - name: Apply DB migrations for SQLx compile-time checks
+      env:
+        PGPASSWORD: password
       run: |
         for f in $(find migrations -name up.sql | sort); do
           echo "Applying migration: $f"
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -f "$f"
         done
+        psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -c "SELECT to_regclass('public.users') AS users_table;"
 
     - name: Run tests with coverage
       run: cargo tarpaulin --out Xml
