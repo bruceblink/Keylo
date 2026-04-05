@@ -49,7 +49,6 @@ impl AppState {
         // 默认客户端，可以替换成从配置文件或数据库加载
         let mut clients = HashMap::new();
         clients.insert("web".into(), "web-secret".into());
-        clients.insert("cli".into(), "cli-secret".into());
 
         // 默认允许的 audience
         let audiences = vec!["admin-backend".into(), "crawler".into()];

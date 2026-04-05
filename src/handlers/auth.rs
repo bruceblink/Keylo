@@ -15,8 +15,8 @@ use chrono::Utc;
 use jsonwebtoken::{encode, Header};
 use serde_json::json;
 
-fn access_scope(subject_prefix: &str, client_id: &str) -> Vec<String> {
-    if subject_prefix == "client" && client_id == "cli" {
+fn access_scope(subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
+    if subject_prefix == "client" && is_admin_client {
         vec!["read".into(), "write".into(), "admin".into()]
     } else {
         vec!["read".into(), "write".into()]
@@ -108,12 +108,16 @@ pub async fn auth_token(
         }
     };
 
+    let mut is_admin_client = false;
     let subject_prefix = if is_user_valid {
         "user"
     } else {
         // If user auth failed, try client auth (prefer DB)
-        let client_valid = match crate::db::get_client_secret(db, &payload.client_id).await {
-            Ok(Some(secret)) => secret == payload.client_secret,
+        let client_valid = match crate::db::get_client_auth_info(db, &payload.client_id).await {
+            Ok(Some((secret, is_admin))) => {
+                is_admin_client = is_admin;
+                secret == payload.client_secret
+            }
             Ok(None) => state.validate_client(&payload.client_id, &payload.client_secret),
             Err(_) => return Err(AuthError::DatabaseError("Failed to get client".to_string())),
         };
@@ -154,7 +158,7 @@ pub async fn auth_token(
         sub: format!("{}:{}", subject_prefix, payload.client_id),
         iss: "keylo".to_string(),
         aud: "admin-backend".to_string(),
-        scope: access_scope(subject_prefix, &payload.client_id),
+        scope: access_scope(subject_prefix, is_admin_client),
         iat: now,
         exp: now + state.config.token_expiry_seconds,
         jti: utils::generate_jti(),
@@ -162,46 +166,43 @@ pub async fn auth_token(
     };
 
     // Create refresh token claims
-    let refresh_claims = Claims {
-        sub: format!("{}:{}", subject_prefix, payload.client_id),
-        iss: "keylo".to_string(),
-        aud: "admin-backend".to_string(),
-        scope: vec!["refresh".into()],
-        iat: now,
-        exp: now + state.config.refresh_token_expiry_seconds,
-        jti: utils::generate_jti(),
-        token_type: "refresh".to_string(),
-    };
-
-    // Create the authorization tokens
+    // Create the authorization token
     let access_token = encode(&Header::default(), &access_claims, &state.jwt_keys.encoding)
         .map_err(|_| AuthError::TokenCreation)?;
 
-    let refresh_token = encode(
-        &Header::default(),
-        &refresh_claims,
-        &state.jwt_keys.encoding,
-    )
-    .map_err(|_| AuthError::TokenCreation)?;
+    let refresh_token = if !is_user_valid {
+        let refresh_claims = Claims {
+            sub: format!("{}:{}", subject_prefix, payload.client_id),
+            iss: "keylo".to_string(),
+            aud: "admin-backend".to_string(),
+            scope: vec!["refresh".into()],
+            iat: now,
+            exp: now + state.config.refresh_token_expiry_seconds,
+            jti: utils::generate_jti(),
+            token_type: "refresh".to_string(),
+        };
 
-    // Store refresh token in database (only for client auth)
-    if let Some(db) = &state.db {
-        if !is_user_valid {
-            crate::db::create_refresh_token(
-                db,
-                &refresh_claims.jti,
-                &payload.client_id,
-                &refresh_token,
-                refresh_claims.exp,
-            )
-            .await
-            .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
-        }
+        let token = encode(
+            &Header::default(),
+            &refresh_claims,
+            &state.jwt_keys.encoding,
+        )
+        .map_err(|_| AuthError::TokenCreation)?;
+
+        crate::db::create_refresh_token(
+            db,
+            &refresh_claims.jti,
+            &payload.client_id,
+            &token,
+            refresh_claims.exp,
+        )
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
+
+        Some(token)
     } else {
-        return Err(AuthError::DatabaseError(
-            "Database not available".to_string(),
-        ));
-    }
+        None
+    };
 
     // Send the authorized tokens
     Ok(Json(AuthBody::new(
@@ -305,12 +306,21 @@ pub async fn auth_refresh(
 
     let now = Utc::now().timestamp();
 
+    let is_admin_client = if let Some(db) = &state.db {
+        match crate::db::get_client_auth_info(db, &client_id).await {
+            Ok(Some((_, is_admin))) => is_admin,
+            _ => false,
+        }
+    } else {
+        false
+    };
+
     // Create new access token claims
     let access_claims = Claims {
         sub: format!("client:{}", client_id),
         iss: "keylo".to_string(),
         aud: "admin-backend".to_string(),
-        scope: access_scope("client", &client_id),
+        scope: access_scope("client", is_admin_client),
         iat: now,
         exp: now + state.config.token_expiry_seconds,
         jti: utils::generate_jti(),
@@ -362,7 +372,7 @@ pub async fn auth_refresh(
 
     Ok(Json(AuthBody::new(
         access_token,
-        new_refresh_token,
+        Some(new_refresh_token),
         state.config.token_expiry_seconds,
     )))
 }

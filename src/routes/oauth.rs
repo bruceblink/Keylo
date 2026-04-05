@@ -455,7 +455,7 @@ async fn oauth_callback(
     let access_claims = crate::models::Claims {
         sub: user_id.clone(),
         iss: "keylo".to_string(),
-        aud: "oauth-client".to_string(),
+        aud: "admin-backend".to_string(),
         scope: vec!["read".into(), "write".into()],
         iat: now,
         exp: now + token_expires_in,

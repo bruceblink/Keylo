@@ -165,12 +165,12 @@ RUST_LOG=keylo=debug cargo run
 
 ### 获取 Token
 
-使用默认客户端凭证 (`web:web-secret` 或 `cli:cli-secret`):
+使用客户端凭证获取 token（请使用你在数据库或环境中配置的客户端）:
 
 ```bash
 curl -X POST http://127.0.0.1:2345/v1/auth/token \
   -H "Content-Type: application/json" \
-  -d '{"client_id":"web","client_secret":"web-secret"}'
+  -d '{"client_id":"web","client_secret":"<your-client-secret>"}'
 ```
 
 返回：

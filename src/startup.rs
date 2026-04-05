@@ -33,6 +33,14 @@ pub async fn init_app_router_with_db(
     config: Config,
     database_url: &str,
 ) -> Result<Router, anyhow::Error> {
+    if config.is_production() {
+        let has_admin_id = std::env::var("ADMIN_CLIENT_ID").ok().is_some();
+        let has_admin_secret = std::env::var("ADMIN_CLIENT_SECRET").ok().is_some();
+        if !has_admin_id || !has_admin_secret {
+            anyhow::bail!("ADMIN_CLIENT_ID and ADMIN_CLIENT_SECRET must be set in production");
+        }
+    }
+
     let db = crate::db::init_db_pool(database_url).await?;
 
     // Run migrations

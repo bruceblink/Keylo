@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize)]
 pub struct AuthBody {
     pub access_token: String,
-    pub refresh_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
     pub token_type: String,
     pub expires_in: i64,
 }
@@ -27,7 +28,7 @@ pub struct BlacklistTokenRequest {
 }
 
 impl AuthBody {
-    pub fn new(access_token: String, refresh_token: String, expires_in: i64) -> Self {
+    pub fn new(access_token: String, refresh_token: Option<String>, expires_in: i64) -> Self {
         Self {
             access_token,
             refresh_token,

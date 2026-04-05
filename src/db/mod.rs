@@ -85,14 +85,19 @@ pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
-    upsert_client(
-        pool,
-        "cli",
-        "cli-secret",
-        "CLI Client",
-        Some("Default admin CLI client"),
-    )
-    .await?;
+    let admin_client_id = std::env::var("ADMIN_CLIENT_ID").ok();
+    let admin_client_secret = std::env::var("ADMIN_CLIENT_SECRET").ok();
+
+    if let (Some(id), Some(secret)) = (admin_client_id, admin_client_secret) {
+        upsert_client(
+            pool,
+            &id,
+            &secret,
+            "Admin Client",
+            Some("Configured admin client"),
+        )
+        .await?;
+    }
 
     Ok(())
 }
@@ -117,6 +122,25 @@ pub async fn get_client_secret(pool: &PgPool, client_id: &str) -> Result<Option<
         .await?;
 
     Ok(row.map(|r| r.get("secret")))
+}
+
+/// 获取客户端凭证信息
+pub async fn get_client_auth_info(
+    pool: &PgPool,
+    client_id: &str,
+) -> Result<Option<(String, bool)>> {
+    let row = sqlx::query("SELECT secret FROM clients WHERE id = $1 AND active = TRUE")
+        .bind(client_id)
+        .fetch_optional(pool)
+        .await?;
+
+    let configured_admin_id = std::env::var("ADMIN_CLIENT_ID").ok();
+    Ok(row.map(|r| {
+        let is_admin = configured_admin_id
+            .as_deref()
+            .is_some_and(|admin_id| admin_id == client_id);
+        (r.get("secret"), is_admin)
+    }))
 }
 
 /// 创建会话记录

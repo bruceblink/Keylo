@@ -7,6 +7,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     async fn setup_test_server() -> TestServer {
+        std::env::set_var("ADMIN_CLIENT_ID", "cli");
+        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-secret");
+
         let config = Config::default();
         let db_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
             "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
