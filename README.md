@@ -269,6 +269,54 @@ curl -H "Authorization: Bearer <access_token>" \
 }
 ```
 
+### OAuth 第三方登录
+
+#### 配置OAuth提供商
+
+```bash
+curl -X POST -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:2345/api/oauth/providers \
+  -d '{
+    "name": "github",
+    "client_id": "your_github_client_id",
+    "client_secret": "your_github_client_secret",
+    "authorization_url": "https://github.com/login/oauth/authorize",
+    "token_url": "https://github.com/login/oauth/access_token",
+    "user_info_url": "https://api.github.com/user",
+    "scope": "read:user user:email",
+    "redirect_url": "http://yourapp.com/callback/github"
+  }'
+```
+
+#### 发起GitHub登录
+
+```bash
+curl -L http://127.0.0.1:2345/v1/auth/oauth/login/github
+```
+
+这将重定向到GitHub授权页面。
+
+#### 关联OAuth账户
+
+```bash
+curl -X POST -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:2345/api/oauth/link \
+  -d '{
+    "provider": "github",
+    "code": "authorization_code_from_callback",
+    "state": "state_parameter"
+  }'
+```
+
+#### 获取用户的OAuth账户
+
+```bash
+curl -H "Authorization: Bearer <access_token>" \
+  http://127.0.0.1:2345/api/oauth/accounts
+```
+
 ---
 
 ## 🏗️ 项目结构

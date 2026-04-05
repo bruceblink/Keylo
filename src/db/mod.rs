@@ -3,8 +3,10 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
 mod rbac;
+mod oauth;
 
 pub use rbac::*;
+pub use oauth::*;
 
 /// 初始化数据库连接池
 pub async fn init_db_pool(database_url: &str) -> Result<PgPool> {
@@ -114,6 +116,43 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON user_roles(role_id);
         CREATE INDEX IF NOT EXISTS idx_role_permissions_role_id ON role_permissions(role_id);
         CREATE INDEX IF NOT EXISTS idx_role_permissions_permission_id ON role_permissions(permission_id);
+        
+        -- OAuth Tables
+        CREATE TABLE IF NOT EXISTS oauth_providers (
+            id TEXT PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            client_id TEXT NOT NULL,
+            client_secret TEXT NOT NULL,
+            authorization_url TEXT NOT NULL,
+            token_url TEXT NOT NULL,
+            user_info_url TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            redirect_url TEXT NOT NULL,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+        
+        CREATE TABLE IF NOT EXISTS user_oauth_accounts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            provider_user_id TEXT NOT NULL,
+            provider_username TEXT,
+            provider_email TEXT,
+            access_token TEXT,
+            refresh_token TEXT,
+            token_expires_at TIMESTAMP,
+            linked_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_login_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (provider_id) REFERENCES oauth_providers(id) ON DELETE CASCADE,
+            UNIQUE (provider_id, provider_user_id)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_user_oauth_accounts_user_id ON user_oauth_accounts(user_id);
+        CREATE INDEX IF NOT EXISTS idx_user_oauth_accounts_provider_id ON user_oauth_accounts(provider_id);
+        CREATE INDEX IF NOT EXISTS idx_user_oauth_accounts_provider_user_id ON user_oauth_accounts(provider_id, provider_user_id);
         "#
     )
     .execute(pool)
@@ -122,14 +161,23 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-/// 获取客户端凭证
-pub async fn get_client_secret(pool: &PgPool, client_id: &str) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT secret FROM clients WHERE id = $1 AND active = TRUE")
-        .bind(client_id)
-        .fetch_optional(pool)
-        .await?;
+/// 创建用户
+pub async fn create_user(
+    pool: &PgPool,
+    user_id: &str,
+    username: &str,
+    email: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO users (id, username, email) VALUES ($1, $2, $3)"
+    )
+    .bind(user_id)
+    .bind(username)
+    .bind(email)
+    .execute(pool)
+    .await?;
 
-    Ok(row.map(|r| r.get("secret")))
+    Ok(())
 }
 
 /// 创建客户端
