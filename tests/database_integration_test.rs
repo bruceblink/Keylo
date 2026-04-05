@@ -33,6 +33,7 @@ mod database_tests {
                 user_roles,
                 permissions,
                 roles,
+                audit_logs,
                 blacklisted_tokens,
                 refresh_tokens,
                 sessions,
@@ -281,5 +282,34 @@ mod database_tests {
         // 验证清理函数可执行（u64 类型总是 >= 0）
         let _ = refresh_cleaned;
         let _ = blacklist_cleaned;
+    }
+
+    #[tokio::test]
+    async fn test_audit_log_operations() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_audit_log_operations: {}", msg);
+                return;
+            }
+        };
+
+        db::create_audit_log(
+            &pool,
+            "auth.token.success",
+            Some("cli"),
+            Some("Access token issued"),
+        )
+        .await
+        .expect("Failed to create audit log");
+
+        let logs = db::get_recent_audit_logs(&pool, 10)
+            .await
+            .expect("Failed to query audit logs");
+
+        assert!(!logs.is_empty());
+        assert_eq!(logs[0].0, "auth.token.success");
+        assert_eq!(logs[0].1, "cli");
     }
 }

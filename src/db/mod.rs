@@ -1,6 +1,7 @@
 use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
+use uuid::Uuid;
 
 pub mod oauth;
 pub mod rbac;
@@ -294,6 +295,54 @@ pub async fn get_active_blacklisted_tokens(pool: &PgPool) -> Result<Vec<(String,
                 row.get::<Option<String>, _>("reason")
                     .unwrap_or_else(|| "No reason".to_string()),
                 row.get("expires_at"),
+            )
+        })
+        .collect())
+}
+
+/// 写入审计日志
+pub async fn create_audit_log(
+    pool: &PgPool,
+    event_type: &str,
+    actor: Option<&str>,
+    detail: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO audit_logs (id, event_type, actor, detail)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(event_type)
+    .bind(actor)
+    .bind(detail)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// 查询最近审计日志
+pub async fn get_recent_audit_logs(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<(String, String, i64)>> {
+    let rows = sqlx::query(
+        "SELECT event_type, COALESCE(actor, '') as actor, extract(epoch from created_at)::bigint as created_at
+         FROM audit_logs
+         ORDER BY created_at DESC
+         LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get("event_type"),
+                row.get("actor"),
+                row.get("created_at"),
             )
         })
         .collect())

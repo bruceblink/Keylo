@@ -23,6 +23,19 @@ fn access_scope(subject_prefix: &str, client_id: &str) -> Vec<String> {
     }
 }
 
+async fn audit_event(
+    state: &AppState,
+    event_type: &str,
+    actor: Option<&str>,
+    detail: Option<&str>,
+) {
+    if let Some(db) = &state.db {
+        if let Err(err) = crate::db::create_audit_log(db, event_type, actor, detail).await {
+            tracing::warn!("Failed to write audit log: {}", err);
+        }
+    }
+}
+
 pub async fn auth_token(
     State(state): State<AppState>,
     Json(payload): Json<AuthPayload>,
@@ -33,6 +46,13 @@ pub async fn auth_token(
     }
 
     if state.is_login_locked(&payload.client_id).await.is_some() {
+        audit_event(
+            &state,
+            "auth.token.locked",
+            Some(&payload.client_id),
+            Some("Login is locked due to repeated failures"),
+        )
+        .await;
         return Err(AuthError::TooManyRequests);
     }
 
@@ -88,12 +108,26 @@ pub async fn auth_token(
                     state.config.login_lockout_seconds,
                 )
                 .await;
+            audit_event(
+                &state,
+                "auth.token.failed",
+                Some(&payload.client_id),
+                Some("Wrong credentials"),
+            )
+            .await;
             return Err(AuthError::WrongCredentials);
         }
         "client"
     };
 
     state.clear_login_failures(&payload.client_id).await;
+    audit_event(
+        &state,
+        "auth.token.success",
+        Some(&payload.client_id),
+        Some("Access token issued"),
+    )
+    .await;
 
     let now = Utc::now().timestamp();
 
@@ -329,6 +363,13 @@ pub async fn auth_logout(
     }
 
     tracing::info!("User {} logged out", claims.sub);
+    audit_event(
+        &state,
+        "auth.logout",
+        Some(&claims.sub),
+        Some("User logged out and token blacklisted"),
+    )
+    .await;
 
     Ok(Json(json!({
         "message": "Successfully logged out",
