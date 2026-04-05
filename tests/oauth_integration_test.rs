@@ -4,7 +4,7 @@ mod tests {
     use keylo::config::Config;
     use keylo::startup::init_app_router_with_db;
     use serde_json::json;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use uuid::Uuid;
 
     async fn setup_test_server() -> TestServer {
         std::env::set_var("ADMIN_CLIENT_ID", "cli");
@@ -39,13 +39,7 @@ mod tests {
     async fn test_create_oauth_provider() {
         let server = setup_test_server().await;
         let token = get_access_token(&server).await;
-        let provider_name = format!(
-            "github-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        );
+        let provider_name = format!("github-{}", Uuid::new_v4().simple());
 
         let response = server
             .post("/api/oauth/providers")
@@ -91,13 +85,7 @@ mod tests {
         // First create a provider
         let server = setup_test_server().await;
         let token = get_access_token(&server).await;
-        let provider_name = format!(
-            "github-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        );
+        let provider_name = format!("github-{}", Uuid::new_v4().simple());
 
         let _ = server
             .post("/api/oauth/providers")
