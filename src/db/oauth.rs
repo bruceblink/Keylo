@@ -19,7 +19,7 @@ pub async fn create_oauth_provider(
     redirect_url: &str,
 ) -> Result<OAuthProvider> {
     let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now().naive_utc();
 
     let provider = sqlx::query_as!(
         OAuthProvider,
@@ -109,7 +109,7 @@ pub async fn update_oauth_provider(
     redirect_url: Option<&str>,
     active: Option<bool>,
 ) -> Result<Option<OAuthProvider>> {
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now().naive_utc();
 
     let provider = sqlx::query_as!(
         OAuthProvider,
@@ -149,7 +149,7 @@ pub async fn update_oauth_provider(
 
 /// 删除OAuth提供商
 pub async fn delete_oauth_provider(pool: &PgPool, provider_id: &str) -> Result<bool> {
-    let result = sqlx::query!("DELETE FROM oauth_providers WHERE id = $1", provider_id)
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!("DELETE FROM oauth_providers WHERE id = $1", provider_id)
         .execute(pool)
         .await?;
 
@@ -168,10 +168,10 @@ pub async fn link_oauth_account(
     provider_email: Option<&str>,
     access_token: Option<&str>,
     refresh_token: Option<&str>,
-    token_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    token_expires_at: Option<chrono::NaiveDateTime>,
 ) -> Result<UserOAuthAccount> {
     let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now().naive_utc();
 
     let account = sqlx::query_as!(
         UserOAuthAccount,
@@ -210,9 +210,9 @@ pub async fn update_oauth_account_tokens(
     account_id: &str,
     access_token: Option<&str>,
     refresh_token: Option<&str>,
-    token_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    token_expires_at: Option<chrono::NaiveDateTime>,
 ) -> Result<Option<UserOAuthAccount>> {
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now().naive_utc();
 
     let account = sqlx::query_as!(
         UserOAuthAccount,
@@ -281,7 +281,7 @@ pub async fn get_user_oauth_accounts(pool: &PgPool, user_id: &str) -> Result<Vec
 
 /// 取消关联OAuth账户
 pub async fn unlink_oauth_account(pool: &PgPool, user_id: &str, provider_id: &str) -> Result<bool> {
-    let result = sqlx::query!(
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
         "DELETE FROM user_oauth_accounts WHERE user_id = $1 AND provider_id = $2",
         user_id,
         provider_id
@@ -317,22 +317,23 @@ pub async fn get_oauth_account_with_provider(
 
     match result {
         Some(row) => {
+            let provider_id = row.provider_id;
             let account = UserOAuthAccount {
                 id: row.id,
                 user_id: row.user_id,
-                provider_id: row.provider_id,
+                provider_id: provider_id.clone(),
                 provider_user_id: row.provider_user_id,
                 provider_username: row.provider_username,
                 provider_email: row.provider_email,
                 access_token: row.access_token,
                 refresh_token: row.refresh_token,
-                token_expires_at: row.token_expires_at.map(|dt| dt.into()),
-                linked_at: row.linked_at.into(),
-                last_login_at: row.last_login_at.map(|dt| dt.into()),
+                token_expires_at: row.token_expires_at,
+                linked_at: row.linked_at,
+                last_login_at: row.last_login_at,
             };
 
             let provider = OAuthProvider {
-                id: row.provider_id,
+                id: provider_id,
                 name: row.provider_name,
                 client_id: row.client_id,
                 client_secret: row.client_secret,

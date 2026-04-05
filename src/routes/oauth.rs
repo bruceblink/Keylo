@@ -1,6 +1,7 @@
+use anyhow::Result;
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{StatusCode},
     response::{Json, Redirect},
     routing::{delete, get, post, put},
     Router,
@@ -11,7 +12,8 @@ use uuid::Uuid;
 use crate::{
     db::*,
     models::*,
-    utils::{ApiResponse, AppState},
+    state::AppState,
+    utils::{ApiResponse, require_db},
 };
 
 /// 创建OAuth路由
@@ -34,7 +36,9 @@ pub fn oauth_routes() -> Router<AppState> {
 
 /// 获取所有OAuth提供商
 async fn get_oauth_providers(State(state): State<AppState>) -> ApiResponse {
-    match get_all_oauth_providers(&state.db).await {
+    let db = require_db(&state)?;
+
+    match get_all_oauth_providers(db).await {
         Ok(providers) => Ok(Json(json!({
             "success": true,
             "data": providers
@@ -54,8 +58,10 @@ async fn create_oauth_provider_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateOAuthProviderRequest>,
 ) -> ApiResponse {
+    let db = require_db(&state)?;
+
     match create_oauth_provider(
-        &state.db,
+        db,
         &req.name,
         &req.client_id,
         &req.client_secret,
@@ -67,13 +73,10 @@ async fn create_oauth_provider_handler(
     )
     .await
     {
-        Ok(provider) => Ok((
-            StatusCode::CREATED,
-            Json(json!({
-                "success": true,
-                "data": provider
-            })),
-        )),
+        Ok(provider) => Ok(Json(json!({
+            "success": true,
+            "data": provider
+        }))),
         Err(e) => {
             if e.to_string().contains("duplicate key") {
                 Err((
@@ -101,7 +104,9 @@ async fn get_oauth_provider(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
 ) -> ApiResponse {
-    match get_oauth_provider_by_id(&state.db, &provider_id).await {
+    let db = require_db(&state)?;
+
+    match get_oauth_provider_by_id(db, &provider_id).await {
         Ok(Some(provider)) => Ok(Json(json!({
             "success": true,
             "data": provider
@@ -129,8 +134,10 @@ async fn update_oauth_provider_handler(
     Path(provider_id): Path<String>,
     Json(req): Json<UpdateOAuthProviderRequest>,
 ) -> ApiResponse {
+    let db = require_db(&state)?;
+
     match update_oauth_provider(
-        &state.db,
+        db,
         &provider_id,
         req.name.as_deref(),
         req.client_id.as_deref(),
@@ -182,7 +189,9 @@ async fn delete_oauth_provider_handler(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
 ) -> ApiResponse {
-    match delete_oauth_provider(&state.db, &provider_id).await {
+    let db = require_db(&state)?;
+
+    match delete_oauth_provider(db, &provider_id).await {
         Ok(true) => Ok(Json(json!({
             "success": true,
             "message": "OAuth provider deleted successfully"
@@ -210,8 +219,9 @@ async fn oauth_login(
     Path(provider_name): Path<String>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Redirect, (StatusCode, Json<serde_json::Value>)> {
+    let db = require_db(&state)?;
     // 获取OAuth提供商配置
-    let provider = match get_oauth_provider_by_name(&state.db, &provider_name).await {
+    let provider = match get_oauth_provider_by_name(db, &provider_name).await {
         Ok(Some(p)) => p,
         Ok(None) => {
             return Err((
@@ -261,8 +271,9 @@ async fn oauth_callback(
     Path(provider_name): Path<String>,
     Query(query): Query<OAuthAuthorizeQuery>,
 ) -> Result<Json<OAuthLoginResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let db = require_db(&state)?;
     // 获取OAuth提供商配置
-    let provider = match get_oauth_provider_by_name(&state.db, &provider_name).await {
+    let provider = match get_oauth_provider_by_name(db, &provider_name).await {
         Ok(Some(p)) => p,
         Ok(None) => {
             return Err((
@@ -314,7 +325,7 @@ async fn oauth_callback(
 
     // 检查是否已有关联账户
     let existing_account = find_oauth_account_by_provider_user_id(
-        &state.db,
+        db,
         &provider.id,
         &user_info.id,
     )
@@ -332,13 +343,13 @@ async fn oauth_callback(
     let user_id = if let Some(account) = existing_account {
         // 更新token信息
         update_oauth_account_tokens(
-            &state.db,
+            db,
             &account.id,
             Some(&token_response.access_token),
             token_response.refresh_token.as_deref(),
             token_response
                 .expires_in
-                .map(|expires| chrono::Utc::now() + chrono::Duration::seconds(expires)),
+                .map(|expires| chrono::Local::now().naive_utc() + chrono::Duration::seconds(expires)),
         )
         .await
         .map_err(|e| {
@@ -354,11 +365,12 @@ async fn oauth_callback(
         account.user_id
     } else {
         // 创建新用户
-        let username = user_info.login.unwrap_or_else(|| format!("user_{}", uuid::Uuid::new_v4().simple()));
-        let email = user_info.email.unwrap_or_else(|| format!("{}@oauth.local", username));
+        let new_user_id = Uuid::new_v4().to_string();
+        let username = user_info.login.clone().unwrap_or_else(|| format!("user_{}", Uuid::new_v4().simple()));
+        let email = user_info.email.clone().unwrap_or_else(|| format!("{}@oauth.local", username));
 
         // 创建用户记录
-        crate::db::create_user(&state.db, &new_user_id, &username, &email)
+        crate::db::create_user(db, &new_user_id, &username, Some(&email))
             .await
             .map_err(|e| {
                 (
@@ -372,7 +384,7 @@ async fn oauth_callback(
 
         // 关联OAuth账户
         link_oauth_account(
-            &state.db,
+            db,
             &new_user_id,
             &provider.id,
             &user_info.id,
@@ -382,7 +394,7 @@ async fn oauth_callback(
             token_response.refresh_token.as_deref(),
             token_response
                 .expires_in
-                .map(|expires| chrono::Utc::now() + chrono::Duration::seconds(expires)),
+                .map(|expires| chrono::Local::now().naive_utc() + chrono::Duration::seconds(expires)),
         )
         .await
         .map_err(|e| {
@@ -428,7 +440,7 @@ async fn oauth_callback(
     })?;
 
     // 获取用户的关联提供商列表
-    let oauth_accounts = get_user_oauth_accounts(&state.db, &user_id)
+    let oauth_accounts = get_user_oauth_accounts(db, &user_id)
         .await
         .unwrap_or_default();
     let linked_providers = oauth_accounts
@@ -457,9 +469,10 @@ async fn get_user_oauth_accounts_handler(
     claims: crate::models::Claims,
     State(state): State<AppState>,
 ) -> ApiResponse {
+    let db = require_db(&state)?;
     let user_id = claims.sub;
 
-    match get_user_oauth_accounts(&state.db, &user_id).await {
+    match get_user_oauth_accounts(db, &user_id).await {
         Ok(accounts) => Ok(Json(json!({
             "success": true,
             "data": accounts
@@ -483,7 +496,8 @@ async fn link_oauth_account_handler(
     let user_id = claims.sub;
 
     // 获取OAuth提供商
-    let provider = match get_oauth_provider_by_name(&state.db, &req.provider).await {
+    let db = require_db(&state)?;
+    let provider = match get_oauth_provider_by_name(db, &req.provider).await {
         Ok(Some(p)) => p,
         Ok(None) => {
             return Err((
@@ -506,6 +520,7 @@ async fn link_oauth_account_handler(
     };
 
     // 交换授权码获取访问令牌
+    let db = require_db(&state)?;
     let token_response = match exchange_code_for_token(&provider, &req.code).await {
         Ok(token) => token,
         Err(e) => {
@@ -535,7 +550,7 @@ async fn link_oauth_account_handler(
 
     // 检查是否已被其他用户关联
     if let Some(_) = find_oauth_account_by_provider_user_id(
-        &state.db,
+        db,
         &provider.id,
         &user_info.id,
     )
@@ -560,7 +575,7 @@ async fn link_oauth_account_handler(
 
     // 关联OAuth账户
     match link_oauth_account(
-        &state.db,
+        db,
         &user_id,
         &provider.id,
         &user_info.id,
@@ -570,7 +585,7 @@ async fn link_oauth_account_handler(
         token_response.refresh_token.as_deref(),
         token_response
             .expires_in
-            .map(|expires| chrono::Utc::now() + chrono::Duration::seconds(expires)),
+            .map(|expires| chrono::Local::now().naive_utc() + chrono::Duration::seconds(expires)),
     )
     .await
     {
@@ -597,7 +612,8 @@ async fn unlink_oauth_account_handler(
     let user_id = claims.sub;
 
     // 获取提供商ID
-    let provider = match get_oauth_provider_by_name(&state.db, &provider_name).await {
+    let db = require_db(&state)?;
+    let provider = match get_oauth_provider_by_name(db, &provider_name).await {
         Ok(Some(p)) => p,
         Ok(None) => {
             return Err((
@@ -619,7 +635,7 @@ async fn unlink_oauth_account_handler(
         }
     };
 
-    match unlink_oauth_account(&state.db, &user_id, &provider.id).await {
+    match unlink_oauth_account(db, &user_id, &provider.id).await {
         Ok(true) => Ok(Json(json!({
             "success": true,
             "message": "OAuth account unlinked successfully"
@@ -645,7 +661,7 @@ async fn unlink_oauth_account_handler(
 async fn exchange_code_for_token(
     provider: &OAuthProvider,
     code: &str,
-) -> Result<OAuthTokenResponse> {
+) -> Result<OAuthTokenResponse, anyhow::Error> {
     let client = reqwest::Client::new();
     let params = [
         ("client_id", &provider.client_id),
@@ -670,7 +686,7 @@ async fn exchange_code_for_token(
 }
 
 /// 获取OAuth用户信息
-async fn get_oauth_user_info(provider: &OAuthProvider, access_token: &str) -> Result<OAuthUserInfo> {
+async fn get_oauth_user_info(provider: &OAuthProvider, access_token: &str) -> Result<OAuthUserInfo, anyhow::Error> {
     let client = reqwest::Client::new();
     let response = client
         .get(&provider.user_info_url)

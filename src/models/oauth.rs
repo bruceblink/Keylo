@@ -14,8 +14,8 @@ pub struct OAuthProvider {
     pub scope: String,
     pub redirect_url: String,
     pub active: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
 }
 
 /// 创建OAuth提供商的请求
@@ -56,9 +56,9 @@ pub struct UserOAuthAccount {
     pub provider_email: Option<String>,
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
-    pub token_expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub linked_at: chrono::DateTime<chrono::Utc>,
-    pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub token_expires_at: Option<chrono::NaiveDateTime>,
+    pub linked_at: chrono::NaiveDateTime,
+    pub last_login_at: Option<chrono::NaiveDateTime>,
 }
 
 /// OAuth用户信息（从提供商获取）

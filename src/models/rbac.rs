@@ -7,8 +7,8 @@ pub struct Role {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
 }
 
 /// 创建角色的请求
@@ -31,8 +31,8 @@ pub struct Permission {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
 }
 
 /// 创建权限的请求
@@ -54,7 +54,7 @@ pub struct UpdatePermissionRequest {
 pub struct UserRole {
     pub user_id: String,
     pub role_id: String,
-    pub assigned_at: chrono::DateTime<chrono::Utc>,
+    pub assigned_at: chrono::NaiveDateTime,
 }
 
 /// 角色权限关系
@@ -62,7 +62,7 @@ pub struct UserRole {
 pub struct RolePermission {
     pub role_id: String,
     pub permission_id: String,
-    pub assigned_at: chrono::DateTime<chrono::Utc>,
+    pub assigned_at: chrono::NaiveDateTime,
 }
 
 /// 分配角色的请求

@@ -6,13 +6,12 @@ use axum::{
     Router,
 };
 use serde_json::json;
-use sqlx::PgPool;
 
 use crate::{
     db::*,
     models::*,
-    middleware::auth::AuthUser,
-    utils::{ApiResponse, AppState},
+    state::AppState,
+    utils::{ApiResponse, require_db},
 };
 
 /// 创建RBAC路由
@@ -48,7 +47,7 @@ pub fn rbac_routes() -> Router<AppState> {
 
 /// 获取所有角色
 async fn get_roles(State(state): State<AppState>) -> ApiResponse {
-    match get_all_roles(&state.db).await {
+    match get_all_roles(require_db(&state)?).await {
         Ok(roles) => Ok(Json(json!({
             "success": true,
             "data": roles
@@ -68,14 +67,11 @@ async fn create_role_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateRoleRequest>,
 ) -> ApiResponse {
-    match create_role(&state.db, &req.name, req.description.as_deref()).await {
-        Ok(role) => Ok((
-            StatusCode::CREATED,
-            Json(json!({
-                "success": true,
-                "data": role
-            })),
-        )),
+    match create_role(require_db(&state)?, &req.name, req.description.as_deref()).await {
+        Ok(role) => Ok(Json(json!({
+            "success": true,
+            "data": role
+        }))),
         Err(e) => {
             if e.to_string().contains("duplicate key") {
                 Err((
@@ -103,7 +99,7 @@ async fn get_role(
     State(state): State<AppState>,
     Path(role_id): Path<String>,
 ) -> ApiResponse {
-    match get_role_by_id(&state.db, &role_id).await {
+    match get_role_by_id(require_db(&state)?, &role_id).await {
         Ok(Some(role)) => Ok(Json(json!({
             "success": true,
             "data": role
@@ -132,7 +128,7 @@ async fn update_role_handler(
     Json(req): Json<UpdateRoleRequest>,
 ) -> ApiResponse {
     match update_role(
-        &state.db,
+        require_db(&state)?,
         &role_id,
         req.name.as_deref(),
         req.description.as_deref(),
@@ -177,7 +173,7 @@ async fn delete_role_handler(
     State(state): State<AppState>,
     Path(role_id): Path<String>,
 ) -> ApiResponse {
-    match delete_role(&state.db, &role_id).await {
+    match delete_role(require_db(&state)?, &role_id).await {
         Ok(true) => Ok(Json(json!({
             "success": true,
             "message": "Role deleted successfully"
@@ -201,7 +197,7 @@ async fn delete_role_handler(
 
 /// 获取所有权限
 async fn get_permissions(State(state): State<AppState>) -> ApiResponse {
-    match get_all_permissions(&state.db).await {
+    match get_all_permissions(require_db(&state)?).await {
         Ok(permissions) => Ok(Json(json!({
             "success": true,
             "data": permissions
@@ -221,14 +217,11 @@ async fn create_permission_handler(
     State(state): State<AppState>,
     Json(req): Json<CreatePermissionRequest>,
 ) -> ApiResponse {
-    match create_permission(&state.db, &req.name, req.description.as_deref()).await {
-        Ok(permission) => Ok((
-            StatusCode::CREATED,
-            Json(json!({
-                "success": true,
-                "data": permission
-            })),
-        )),
+    match create_permission(require_db(&state)?, &req.name, req.description.as_deref()).await {
+        Ok(permission) => Ok(Json(json!({
+            "success": true,
+            "data": permission
+        }))),
         Err(e) => {
             if e.to_string().contains("duplicate key") {
                 Err((
@@ -256,7 +249,7 @@ async fn get_permission(
     State(state): State<AppState>,
     Path(permission_id): Path<String>,
 ) -> ApiResponse {
-    match get_permission_by_id(&state.db, &permission_id).await {
+    match get_permission_by_id(require_db(&state)?, &permission_id).await {
         Ok(Some(permission)) => Ok(Json(json!({
             "success": true,
             "data": permission
@@ -285,7 +278,7 @@ async fn update_permission_handler(
     Json(req): Json<UpdatePermissionRequest>,
 ) -> ApiResponse {
     match update_permission(
-        &state.db,
+        require_db(&state)?,
         &permission_id,
         req.name.as_deref(),
         req.description.as_deref(),
@@ -330,7 +323,7 @@ async fn delete_permission_handler(
     State(state): State<AppState>,
     Path(permission_id): Path<String>,
 ) -> ApiResponse {
-    match delete_permission(&state.db, &permission_id).await {
+    match delete_permission(require_db(&state)?, &permission_id).await {
         Ok(true) => Ok(Json(json!({
             "success": true,
             "message": "Permission deleted successfully"
@@ -357,7 +350,7 @@ async fn get_user_roles_handler(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> ApiResponse {
-    match get_user_roles(&state.db, &user_id).await {
+    match get_user_roles(require_db(&state)?, &user_id).await {
         Ok(roles) => Ok(Json(json!({
             "success": true,
             "data": roles
@@ -378,7 +371,7 @@ async fn assign_role_to_user_handler(
     Path(user_id): Path<String>,
     Json(req): Json<AssignRoleRequest>,
 ) -> ApiResponse {
-    match assign_role_to_user(&state.db, &user_id, &req.role_id).await {
+    match assign_role_to_user(require_db(&state)?, &user_id, &req.role_id).await {
         Ok(_) => Ok(Json(json!({
             "success": true,
             "message": "Role assigned to user successfully"
@@ -399,7 +392,7 @@ async fn revoke_role_from_user_handler(
     Path(user_id): Path<String>,
     Path(role_id): Path<String>,
 ) -> ApiResponse {
-    match revoke_role_from_user(&state.db, &user_id, &role_id).await {
+    match revoke_role_from_user(require_db(&state)?, &user_id, &role_id).await {
         Ok(true) => Ok(Json(json!({
             "success": true,
             "message": "Role revoked from user successfully"
@@ -426,7 +419,7 @@ async fn get_role_permissions_handler(
     State(state): State<AppState>,
     Path(role_id): Path<String>,
 ) -> ApiResponse {
-    match get_role_permissions(&state.db, &role_id).await {
+    match get_role_permissions(require_db(&state)?, &role_id).await {
         Ok(permissions) => Ok(Json(json!({
             "success": true,
             "data": permissions
@@ -447,7 +440,7 @@ async fn assign_permission_to_role_handler(
     Path(role_id): Path<String>,
     Json(req): Json<AssignPermissionRequest>,
 ) -> ApiResponse {
-    match assign_permission_to_role(&state.db, &role_id, &req.permission_id).await {
+    match assign_permission_to_role(require_db(&state)?, &role_id, &req.permission_id).await {
         Ok(_) => Ok(Json(json!({
             "success": true,
             "message": "Permission assigned to role successfully"
@@ -468,7 +461,7 @@ async fn revoke_permission_from_role_handler(
     Path(role_id): Path<String>,
     Path(permission_id): Path<String>,
 ) -> ApiResponse {
-    match revoke_permission_from_role(&state.db, &role_id, &permission_id).await {
+    match revoke_permission_from_role(require_db(&state)?, &role_id, &permission_id).await {
         Ok(true) => Ok(Json(json!({
             "success": true,
             "message": "Permission revoked from role successfully"
@@ -495,7 +488,7 @@ async fn get_user_permissions_handler(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> ApiResponse {
-    match get_user_permissions(&state.db, &user_id).await {
+    match get_user_permissions(require_db(&state)?, &user_id).await {
         Ok(permissions) => Ok(Json(json!({
             "success": true,
             "data": permissions
@@ -515,7 +508,7 @@ async fn check_user_permission(
     State(state): State<AppState>,
     Path((user_id, permission_name)): Path<(String, String)>,
 ) -> ApiResponse {
-    match user_has_permission(&state.db, &user_id, &permission_name).await {
+    match user_has_permission(require_db(&state)?, &user_id, &permission_name).await {
         Ok(has_permission) => Ok(Json(json!({
             "success": true,
             "data": {

@@ -13,7 +13,7 @@ pub async fn create_role(
     description: Option<&str>,
 ) -> Result<Role> {
     let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now().naive_utc();
 
     let role = sqlx::query_as!(
         Role,
@@ -79,7 +79,7 @@ pub async fn update_role(
     name: Option<&str>,
     description: Option<&str>,
 ) -> Result<Option<Role>> {
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now().naive_utc();
 
     let role = sqlx::query_as!(
         Role,
@@ -104,7 +104,7 @@ pub async fn update_role(
 
 /// 删除角色
 pub async fn delete_role(pool: &PgPool, role_id: &str) -> Result<bool> {
-    let result = sqlx::query!("DELETE FROM roles WHERE id = $1", role_id)
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!("DELETE FROM roles WHERE id = $1", role_id)
         .execute(pool)
         .await?;
 
@@ -120,7 +120,7 @@ pub async fn create_permission(
     description: Option<&str>,
 ) -> Result<Permission> {
     let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now().naive_utc();
 
     let permission = sqlx::query_as!(
         Permission,
@@ -186,7 +186,7 @@ pub async fn update_permission(
     name: Option<&str>,
     description: Option<&str>,
 ) -> Result<Option<Permission>> {
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now().naive_utc();
 
     let permission = sqlx::query_as!(
         Permission,
@@ -211,7 +211,7 @@ pub async fn update_permission(
 
 /// 删除权限
 pub async fn delete_permission(pool: &PgPool, permission_id: &str) -> Result<bool> {
-    let result = sqlx::query!("DELETE FROM permissions WHERE id = $1", permission_id)
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!("DELETE FROM permissions WHERE id = $1", permission_id)
         .execute(pool)
         .await?;
 
@@ -235,7 +235,7 @@ pub async fn assign_role_to_user(pool: &PgPool, user_id: &str, role_id: &str) ->
 
 /// 撤销用户的角色
 pub async fn revoke_role_from_user(pool: &PgPool, user_id: &str, role_id: &str) -> Result<bool> {
-    let result = sqlx::query!(
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
         "DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2",
         user_id,
         role_id
@@ -267,7 +267,13 @@ pub async fn get_user_roles(pool: &PgPool, user_id: &str) -> Result<Vec<Role>> {
 
 /// 获取角色的所有用户
 pub async fn get_role_users(pool: &PgPool, role_id: &str) -> Result<Vec<String>> {
-    let user_ids = sqlx::query!("SELECT user_id FROM user_roles WHERE role_id = $1", role_id)
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        user_id: String,
+    }
+
+    let user_ids: Vec<String> = sqlx::query_as::<_, Row>("SELECT user_id FROM user_roles WHERE role_id = $1")
+        .bind(role_id)
         .fetch_all(pool)
         .await?
         .into_iter()
@@ -322,7 +328,7 @@ pub async fn revoke_permission_from_role(
     role_id: &str,
     permission_id: &str,
 ) -> Result<bool> {
-    let result = sqlx::query!(
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
         "DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2",
         role_id,
         permission_id
@@ -354,15 +360,18 @@ pub async fn get_role_permissions(pool: &PgPool, role_id: &str) -> Result<Vec<Pe
 
 /// 获取权限的所有角色
 pub async fn get_permission_roles(pool: &PgPool, permission_id: &str) -> Result<Vec<String>> {
-    let role_ids = sqlx::query!(
-        "SELECT role_id FROM role_permissions WHERE permission_id = $1",
-        permission_id
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|row| row.role_id)
-    .collect();
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        role_id: String,
+    }
+
+    let role_ids: Vec<String> = sqlx::query_as::<_, Row>("SELECT role_id FROM role_permissions WHERE permission_id = $1")
+        .bind(permission_id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| row.role_id)
+        .collect();
 
     Ok(role_ids)
 }

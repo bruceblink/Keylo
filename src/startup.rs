@@ -44,6 +44,7 @@ pub async fn init_app_router_with_db(
         .merge(routes::auth::router())
         .merge(routes::oauth::oauth_routes())
         .merge(routes::rbac::rbac_routes())
+        .merge(routes::user::user_routes())
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
