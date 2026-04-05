@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::{
     db::*,
-    models::*,
+    models::{*, Claims},
     state::AppState,
     utils::{require_db, ApiResponse},
 };
@@ -26,6 +26,7 @@ pub fn user_routes() -> Router<AppState> {
             "/v1/admin/users/:user_id/reset-password",
             post(reset_user_password_handler),
         )
+        .route("/v1/user/change-password", post(change_password_handler))
 }
 
 async fn list_users_handler(
@@ -207,6 +208,56 @@ async fn reset_user_password_handler(
             Json(json!({
                 "success": false,
                 "error": format!("Failed to reset password: {}", e),
+            })),
+        )),
+    }
+}
+
+async fn change_password_handler(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(req): Json<ChangePasswordRequest>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+
+    // 从JWT claims中提取用户ID
+    let user_id = &claims.sub;
+
+    // 验证新密码长度
+    if req.new_password.len() < 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "error": "New password must be at least 8 characters long",
+            })),
+        ));
+    }
+
+    match crate::db::user::change_user_password(
+        db,
+        user_id,
+        &req.current_password,
+        &req.new_password,
+    )
+    .await
+    {
+        Ok(true) => Ok(Json(json!({
+            "success": true,
+            "message": "Password changed successfully",
+        }))),
+        Ok(false) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "error": "Current password is incorrect or user not found",
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to change password: {}", e),
             })),
         )),
     }

@@ -36,3 +36,10 @@ pub struct UpdateUserRequest {
 pub struct ResetPasswordRequest {
     pub password: String,
 }
+
+/// 更改密码请求
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
