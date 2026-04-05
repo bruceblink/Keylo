@@ -6,6 +6,7 @@ use crate::state::AppState;
 use axum::middleware;
 use axum::routing::get;
 use axum::Router;
+use redis::AsyncCommands;
 use std::sync::Arc;
 
 pub fn init_app_router() -> Router {
@@ -39,6 +40,16 @@ pub async fn init_app_router_with_db(
         if !has_admin_id || !has_admin_secret {
             anyhow::bail!("ADMIN_CLIENT_ID and ADMIN_CLIENT_SECRET must be set in production");
         }
+        if config.redis_url.is_none() {
+            anyhow::bail!("REDIS_URL must be set in production");
+        }
+    }
+
+    if config.is_production() {
+        let redis_url = config.redis_url.as_deref().unwrap_or_default();
+        let redis_client = redis::Client::open(redis_url)?;
+        let mut conn = redis_client.get_multiplexed_tokio_connection().await?;
+        let _: String = conn.ping().await?;
     }
 
     let db = crate::db::init_db_pool(database_url).await?;

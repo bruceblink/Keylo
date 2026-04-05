@@ -49,6 +49,10 @@ pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
 });
 
 impl AppState {
+    fn redis_key(&self, suffix: &str) -> String {
+        format!("{}:{}", self.config.redis_key_prefix, suffix)
+    }
+
     pub fn new(config: Config, db: Option<Arc<PgPool>>) -> Self {
         // 默认客户端，可以替换成从配置文件或数据库加载
         let mut clients = HashMap::new();
@@ -110,7 +114,12 @@ impl AppState {
             let ttl = (expires_at - chrono::Utc::now().timestamp()).max(1) as u64;
             if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
                 let key = format!("oauth:state:{}", state);
-                if conn.set_ex::<_, _, ()>(&key, "1", ttl).await.is_ok() {
+                let namespaced_key = self.redis_key(&key);
+                if conn
+                    .set_ex::<_, _, ()>(&namespaced_key, "1", ttl)
+                    .await
+                    .is_ok()
+                {
                     return;
                 }
             }
@@ -124,9 +133,13 @@ impl AppState {
         if let Some(redis_client) = &self.redis_client {
             if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
                 let key = format!("oauth:state:{}", state);
-                let existed = conn.exists::<_, bool>(&key).await.unwrap_or(false);
+                let namespaced_key = self.redis_key(&key);
+                let existed = conn
+                    .exists::<_, bool>(&namespaced_key)
+                    .await
+                    .unwrap_or(false);
                 if existed {
-                    let _ = conn.del::<_, i32>(&key).await;
+                    let _ = conn.del::<_, i32>(&namespaced_key).await;
                     return true;
                 }
                 return false;
@@ -152,12 +165,13 @@ impl AppState {
         if let Some(redis_client) = &self.redis_client {
             if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
                 let key = format!("auth:lock:{}", principal);
-                if let Ok(Some(locked_until)) = conn.get::<_, Option<i64>>(&key).await {
+                let namespaced_key = self.redis_key(&key);
+                if let Ok(Some(locked_until)) = conn.get::<_, Option<i64>>(&namespaced_key).await {
                     let now = chrono::Utc::now().timestamp();
                     if locked_until > now {
                         return Some(locked_until - now);
                     }
-                    let _ = conn.del::<_, i32>(&key).await;
+                    let _ = conn.del::<_, i32>(&namespaced_key).await;
                     return None;
                 }
             }
@@ -188,8 +202,8 @@ impl AppState {
         if let Some(redis_client) = &self.redis_client {
             if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
                 let now = chrono::Utc::now().timestamp();
-                let lock_key = format!("auth:lock:{}", principal);
-                let fail_key = format!("auth:fail:{}", principal);
+                let lock_key = self.redis_key(&format!("auth:lock:{}", principal));
+                let fail_key = self.redis_key(&format!("auth:fail:{}", principal));
 
                 if conn.exists::<_, bool>(&lock_key).await.unwrap_or(false) {
                     return;
@@ -230,8 +244,8 @@ impl AppState {
             if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
                 let fail_key = format!("auth:fail:{}", principal);
                 let lock_key = format!("auth:lock:{}", principal);
-                let _ = conn.del::<_, i32>(&fail_key).await;
-                let _ = conn.del::<_, i32>(&lock_key).await;
+                let _ = conn.del::<_, i32>(&self.redis_key(&fail_key)).await;
+                let _ = conn.del::<_, i32>(&self.redis_key(&lock_key)).await;
                 return;
             }
         }
@@ -251,9 +265,15 @@ impl AppState {
                 let now = chrono::Utc::now().timestamp();
                 let bucket = now / window_seconds.max(1);
                 let key = format!("auth:rate:{}:{}", principal, bucket);
-                let count = conn.incr::<_, _, i64>(&key, 1).await.unwrap_or(1);
+                let namespaced_key = self.redis_key(&key);
+                let count = conn
+                    .incr::<_, _, i64>(&namespaced_key, 1)
+                    .await
+                    .unwrap_or(1);
                 if count == 1 {
-                    let _ = conn.expire::<_, bool>(&key, window_seconds).await;
+                    let _ = conn
+                        .expire::<_, bool>(&namespaced_key, window_seconds)
+                        .await;
                 }
                 return (count as u32) <= max_requests;
             }

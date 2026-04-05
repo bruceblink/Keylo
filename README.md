@@ -408,6 +408,7 @@ Cargo.toml          # 项目依赖配置
 | `ADMIN_CLIENT_ID` | `` | 管理员客户端 ID（建议生产配置） |
 | `ADMIN_CLIENT_SECRET` | `` | 管理员客户端密钥（建议生产配置） |
 | `REDIS_URL` | `` | Redis 地址（配置后启用分布式状态存储） |
+| `REDIS_KEY_PREFIX` | `keylo` | Redis key 前缀（多环境隔离） |
 | `AUDIT_LOG_RETENTION_DAYS` | `30` | 审计日志保留天数 |
 | `RUST_LOG` | `keylo=debug` | 日志级别 |
 
@@ -498,8 +499,8 @@ docker-compose logs -f keylo
 
 ## 🚦 下一步计划
 
-* [ ] 审计日志增加更多事件（RBAC 变更、OAuth 绑定/解绑）
-* [ ] 将限流、锁定、OAuth state 全量迁移到 Redis（生产建议）
+* [x] 审计日志增加更多事件（RBAC 变更、OAuth 绑定/解绑）
+* [x] 将限流、锁定、OAuth state 全量迁移到 Redis（生产建议）
 * [ ] 管理员凭证轮换策略与自动失效
 * [ ] 管理后台 API
 * [ ] GraphQL 支持
@@ -529,6 +530,7 @@ docker-compose logs -f keylo
    * 生成强大的 `JWT_SECRET` (至少 32 字符)
    * 使用 HTTPS 而不是 HTTP
    * 设置 `ENVIRONMENT=production`
+   * 配置可连通的 `REDIS_URL`（生产环境必需）
    * 启用日志审计
 
 2. **数据库**:

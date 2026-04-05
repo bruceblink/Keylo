@@ -29,6 +29,8 @@ pub struct Config {
     pub auth_global_rate_limit_max_requests: u32,
     /// Redis URL（可选，配置后用于分布式状态存储）
     pub redis_url: Option<String>,
+    /// Redis key 前缀（用于多环境隔离）
+    pub redis_key_prefix: String,
     /// 审计日志保留天数
     pub audit_log_retention_days: i64,
 }
@@ -92,6 +94,7 @@ impl Config {
             .unwrap_or(300);
 
         let redis_url = env::var("REDIS_URL").ok();
+        let redis_key_prefix = env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "keylo".into());
 
         let audit_log_retention_days = env::var("AUDIT_LOG_RETENTION_DAYS")
             .unwrap_or_else(|_| "30".to_string())
@@ -112,6 +115,7 @@ impl Config {
             auth_rate_limit_max_requests,
             auth_global_rate_limit_max_requests,
             redis_url,
+            redis_key_prefix,
             audit_log_retention_days,
         }
     }
