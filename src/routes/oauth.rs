@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     db::*,
-    models::*,
+    models::{Claims, *},
     state::AppState,
     utils::{require_db, ApiResponse},
 };
@@ -42,6 +42,14 @@ pub fn oauth_public_routes() -> Router<AppState> {
     Router::new()
         .route("/login/{provider}", get(oauth_login))
         .route("/callback/{provider}", get(oauth_callback))
+}
+
+async fn audit_event(state: &AppState, event_type: &str, actor: Option<&str>, detail: String) {
+    if let Some(db) = &state.db {
+        if let Err(err) = create_audit_log(db, event_type, actor, Some(&detail)).await {
+            tracing::warn!("Failed to write OAuth audit log: {}", err);
+        }
+    }
 }
 
 /// 获取所有OAuth提供商
@@ -528,10 +536,11 @@ async fn get_user_oauth_accounts_handler(
 
 /// 关联OAuth账户
 async fn link_oauth_account_handler(
-    claims: crate::models::Claims,
+    claims: Claims,
     State(state): State<AppState>,
     Json(req): Json<LinkOAuthAccountRequest>,
 ) -> ApiResponse {
+    let actor = claims.sub.clone();
     let user_id = claims.sub;
 
     // 获取OAuth提供商
@@ -626,10 +635,22 @@ async fn link_oauth_account_handler(
     )
     .await
     {
-        Ok(account) => Ok(Json(json!({
-            "success": true,
-            "data": account
-        }))),
+        Ok(account) => {
+            audit_event(
+                &state,
+                "oauth.account.linked",
+                Some(&actor),
+                format!(
+                    "user_id={}, provider_name={}, provider_id={}",
+                    user_id, req.provider, provider.id
+                ),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "data": account
+            })))
+        }
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
@@ -642,10 +663,11 @@ async fn link_oauth_account_handler(
 
 /// 取消关联OAuth账户
 async fn unlink_oauth_account_handler(
-    claims: crate::models::Claims,
+    claims: Claims,
     State(state): State<AppState>,
     Path(provider_name): Path<String>,
 ) -> ApiResponse {
+    let actor = claims.sub.clone();
     let user_id = claims.sub;
 
     // 获取提供商ID
@@ -673,10 +695,22 @@ async fn unlink_oauth_account_handler(
     };
 
     match unlink_oauth_account(db, &user_id, &provider.id).await {
-        Ok(true) => Ok(Json(json!({
-            "success": true,
-            "message": "OAuth account unlinked successfully"
-        }))),
+        Ok(true) => {
+            audit_event(
+                &state,
+                "oauth.account.unlinked",
+                Some(&actor),
+                format!(
+                    "user_id={}, provider_name={}, provider_id={}",
+                    user_id, provider_name, provider.id
+                ),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "OAuth account unlinked successfully"
+            })))
+        }
         Ok(false) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({

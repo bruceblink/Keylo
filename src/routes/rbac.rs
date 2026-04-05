@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::{
     db::*,
-    models::*,
+    models::{Claims, *},
     state::AppState,
     utils::{require_db, ApiResponse},
 };
@@ -66,6 +66,14 @@ pub fn rbac_routes() -> Router<AppState> {
         )
 }
 
+async fn audit_event(state: &AppState, event_type: &str, actor: Option<&str>, detail: String) {
+    if let Some(db) = &state.db {
+        if let Err(err) = create_audit_log(db, event_type, actor, Some(&detail)).await {
+            tracing::warn!("Failed to write RBAC audit log: {}", err);
+        }
+    }
+}
+
 /// 获取所有角色
 async fn get_roles(State(state): State<AppState>) -> ApiResponse {
     match get_all_roles(require_db(&state)?).await {
@@ -85,14 +93,24 @@ async fn get_roles(State(state): State<AppState>) -> ApiResponse {
 
 /// 创建角色
 async fn create_role_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Json(req): Json<CreateRoleRequest>,
 ) -> ApiResponse {
     match create_role(require_db(&state)?, &req.name, req.description.as_deref()).await {
-        Ok(role) => Ok(Json(json!({
-            "success": true,
-            "data": role
-        }))),
+        Ok(role) => {
+            audit_event(
+                &state,
+                "rbac.role.created",
+                Some(&claims.sub),
+                format!("role_id={}, role_name={}", role.id, role.name),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "data": role
+            })))
+        }
         Err(e) => {
             if e.to_string().contains("duplicate key") {
                 Err((
@@ -141,6 +159,7 @@ async fn get_role(State(state): State<AppState>, Path(role_id): Path<String>) ->
 
 /// 更新角色
 async fn update_role_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(role_id): Path<String>,
     Json(req): Json<UpdateRoleRequest>,
@@ -153,10 +172,19 @@ async fn update_role_handler(
     )
     .await
     {
-        Ok(Some(role)) => Ok(Json(json!({
-            "success": true,
-            "data": role
-        }))),
+        Ok(Some(role)) => {
+            audit_event(
+                &state,
+                "rbac.role.updated",
+                Some(&claims.sub),
+                format!("role_id={}, role_name={}", role.id, role.name),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "data": role
+            })))
+        }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -188,14 +216,24 @@ async fn update_role_handler(
 
 /// 删除角色
 async fn delete_role_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(role_id): Path<String>,
 ) -> ApiResponse {
     match delete_role(require_db(&state)?, &role_id).await {
-        Ok(true) => Ok(Json(json!({
-            "success": true,
-            "message": "Role deleted successfully"
-        }))),
+        Ok(true) => {
+            audit_event(
+                &state,
+                "rbac.role.deleted",
+                Some(&claims.sub),
+                format!("role_id={}", role_id),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "Role deleted successfully"
+            })))
+        }
         Ok(false) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -232,14 +270,27 @@ async fn get_permissions(State(state): State<AppState>) -> ApiResponse {
 
 /// 创建权限
 async fn create_permission_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Json(req): Json<CreatePermissionRequest>,
 ) -> ApiResponse {
     match create_permission(require_db(&state)?, &req.name, req.description.as_deref()).await {
-        Ok(permission) => Ok(Json(json!({
-            "success": true,
-            "data": permission
-        }))),
+        Ok(permission) => {
+            audit_event(
+                &state,
+                "rbac.permission.created",
+                Some(&claims.sub),
+                format!(
+                    "permission_id={}, permission_name={}",
+                    permission.id, permission.name
+                ),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "data": permission
+            })))
+        }
         Err(e) => {
             if e.to_string().contains("duplicate key") {
                 Err((
@@ -291,6 +342,7 @@ async fn get_permission(
 
 /// 更新权限
 async fn update_permission_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(permission_id): Path<String>,
     Json(req): Json<UpdatePermissionRequest>,
@@ -303,10 +355,22 @@ async fn update_permission_handler(
     )
     .await
     {
-        Ok(Some(permission)) => Ok(Json(json!({
-            "success": true,
-            "data": permission
-        }))),
+        Ok(Some(permission)) => {
+            audit_event(
+                &state,
+                "rbac.permission.updated",
+                Some(&claims.sub),
+                format!(
+                    "permission_id={}, permission_name={}",
+                    permission.id, permission.name
+                ),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "data": permission
+            })))
+        }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -338,14 +402,24 @@ async fn update_permission_handler(
 
 /// 删除权限
 async fn delete_permission_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(permission_id): Path<String>,
 ) -> ApiResponse {
     match delete_permission(require_db(&state)?, &permission_id).await {
-        Ok(true) => Ok(Json(json!({
-            "success": true,
-            "message": "Permission deleted successfully"
-        }))),
+        Ok(true) => {
+            audit_event(
+                &state,
+                "rbac.permission.deleted",
+                Some(&claims.sub),
+                format!("permission_id={}", permission_id),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "Permission deleted successfully"
+            })))
+        }
         Ok(false) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -385,15 +459,25 @@ async fn get_user_roles_handler(
 
 /// 为用户分配角色
 async fn assign_role_to_user_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(user_id): Path<String>,
     Json(req): Json<AssignRoleRequest>,
 ) -> ApiResponse {
     match assign_role_to_user(require_db(&state)?, &user_id, &req.role_id).await {
-        Ok(_) => Ok(Json(json!({
-            "success": true,
-            "message": "Role assigned to user successfully"
-        }))),
+        Ok(_) => {
+            audit_event(
+                &state,
+                "rbac.user.role_assigned",
+                Some(&claims.sub),
+                format!("target_user_id={}, role_id={}", user_id, req.role_id),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "Role assigned to user successfully"
+            })))
+        }
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
@@ -406,15 +490,25 @@ async fn assign_role_to_user_handler(
 
 /// 撤销用户的角色
 async fn revoke_role_from_user_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(user_id): Path<String>,
     Path(role_id): Path<String>,
 ) -> ApiResponse {
     match revoke_role_from_user(require_db(&state)?, &user_id, &role_id).await {
-        Ok(true) => Ok(Json(json!({
-            "success": true,
-            "message": "Role revoked from user successfully"
-        }))),
+        Ok(true) => {
+            audit_event(
+                &state,
+                "rbac.user.role_revoked",
+                Some(&claims.sub),
+                format!("target_user_id={}, role_id={}", user_id, role_id),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "Role revoked from user successfully"
+            })))
+        }
         Ok(false) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -454,15 +548,25 @@ async fn get_role_permissions_handler(
 
 /// 为角色分配权限
 async fn assign_permission_to_role_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(role_id): Path<String>,
     Json(req): Json<AssignPermissionRequest>,
 ) -> ApiResponse {
     match assign_permission_to_role(require_db(&state)?, &role_id, &req.permission_id).await {
-        Ok(_) => Ok(Json(json!({
-            "success": true,
-            "message": "Permission assigned to role successfully"
-        }))),
+        Ok(_) => {
+            audit_event(
+                &state,
+                "rbac.role.permission_assigned",
+                Some(&claims.sub),
+                format!("role_id={}, permission_id={}", role_id, req.permission_id),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "Permission assigned to role successfully"
+            })))
+        }
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
@@ -475,15 +579,25 @@ async fn assign_permission_to_role_handler(
 
 /// 撤销角色的权限
 async fn revoke_permission_from_role_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(role_id): Path<String>,
     Path(permission_id): Path<String>,
 ) -> ApiResponse {
     match revoke_permission_from_role(require_db(&state)?, &role_id, &permission_id).await {
-        Ok(true) => Ok(Json(json!({
-            "success": true,
-            "message": "Permission revoked from role successfully"
-        }))),
+        Ok(true) => {
+            audit_event(
+                &state,
+                "rbac.role.permission_revoked",
+                Some(&claims.sub),
+                format!("role_id={}, permission_id={}", role_id, permission_id),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "Permission revoked from role successfully"
+            })))
+        }
         Ok(false) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
