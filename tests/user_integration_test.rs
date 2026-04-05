@@ -4,15 +4,16 @@ mod tests {
     use serde_json::json;
     use keylo::startup::init_app_router_with_db;
     use keylo::config::Config;
-    use keylo::db;
 
     async fn setup_test_server() -> TestServer {
+        println!("Setting up test server...");
         let config = Config::default();
-        let db_url = "postgres://postgres:password@localhost:5432/keylo_test".to_string();
-
+        let db_url = "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string();
+        
         let router = init_app_router_with_db(config, &db_url)
             .await
             .expect("Failed to initialize test server");
+        println!("Test server initialized successfully");
         TestServer::new(router)
     }
 
@@ -20,34 +21,59 @@ mod tests {
     async fn test_change_password_success() {
         let server = setup_test_server().await;
 
+        // 使用时间戳生成唯一用户名
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("testuser_{}", timestamp);
+        let email = format!("test_{}@example.com", timestamp);
+
         // 首先创建用户
         let create_user_response = server
-            .post("/v1/admin/users")
+            .post("/v1/auth/register")
             .json(&json!({
-                "username": "testuser",
-                "email": "test@example.com",
+                "username": username,
+                "email": email,
                 "password": "oldpassword123"
             }))
             .await;
 
-        assert_eq!(create_user_response.status_code(), 200);
+        let create_status = create_user_response.status_code();
+        println!("Create user status: {}", create_status);
+        
+        if create_status != 200 {
+            let error_data: serde_json::Value = create_user_response.json::<serde_json::Value>();
+            println!("Create user error: {:?}", error_data);
+        }
+        
+        assert_eq!(create_status, 200);
 
-        let create_response: serde_json::Value = create_user_response.json().await;
-        let user_id = create_response["data"]["id"].as_str().unwrap();
+        let create_response: serde_json::Value = create_user_response.json::<serde_json::Value>();
+        let _user_id = create_response["data"]["id"].as_str().unwrap();
 
         // 登录获取token
         let login_response = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": "testuser",
+                "client_id": username.clone(),
                 "client_secret": "oldpassword123"
             }))
             .await;
 
-        assert_eq!(login_response.status_code(), 200);
+        let login_status = login_response.status_code();
+        println!("Login status: {}", login_status);
+        
+        if login_status != 200 {
+            let error_data: serde_json::Value = login_response.json::<serde_json::Value>();
+            println!("Login error: {:?}", error_data);
+        }
+        
+        assert_eq!(login_status, 200);
 
-        let login_data: serde_json::Value = login_response.json().await;
+        let login_data: serde_json::Value = login_response.json::<serde_json::Value>();
         let access_token = login_data["access_token"].as_str().unwrap();
+        println!("Access token: {}", access_token);
 
         // 更改密码
         let change_response = server
@@ -59,9 +85,13 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(change_response.status_code(), 200);
+        let status_code = change_response.status_code();
+        let error_body: serde_json::Value = change_response.json::<serde_json::Value>();
+        println!("Status code: {}, Error response: {:?}", status_code, error_body);
 
-        let change_data: serde_json::Value = change_response.json().await;
+        assert_eq!(status_code, 200);
+
+        let change_data: serde_json::Value = change_response.json::<serde_json::Value>();
         assert_eq!(change_data["success"], true);
         assert_eq!(change_data["message"], "Password changed successfully");
 
@@ -69,7 +99,7 @@ mod tests {
         let new_login_response = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": "testuser",
+                "client_id": username,
                 "client_secret": "newpassword123"
             }))
             .await;
@@ -80,7 +110,7 @@ mod tests {
         let old_login_response = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": "testuser",
+                "client_id": username,
                 "client_secret": "oldpassword123"
             }))
             .await;
@@ -92,12 +122,20 @@ mod tests {
     async fn test_change_password_wrong_current() {
         let server = setup_test_server().await;
 
+        // 使用时间戳生成唯一用户名
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("testuser2_{}", timestamp);
+        let email = format!("test2_{}@example.com", timestamp);
+
         // 首先创建用户
         let create_user_response = server
-            .post("/v1/admin/users")
+            .post("/v1/auth/register")
             .json(&json!({
-                "username": "testuser2",
-                "email": "test2@example.com",
+                "username": username,
+                "email": email,
                 "password": "correctpassword123"
             }))
             .await;
@@ -108,14 +146,14 @@ mod tests {
         let login_response = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": "testuser2",
+                "client_id": username.clone(),
                 "client_secret": "correctpassword123"
             }))
             .await;
 
         assert_eq!(login_response.status_code(), 200);
 
-        let login_data: serde_json::Value = login_response.json().await;
+        let login_data: serde_json::Value = login_response.json::<serde_json::Value>();
         let access_token = login_data["access_token"].as_str().unwrap();
 
         // 尝试用错误的当前密码更改密码
@@ -130,7 +168,7 @@ mod tests {
 
         assert_eq!(change_response.status_code(), 400);
 
-        let change_data: serde_json::Value = change_response.json().await;
+        let change_data: serde_json::Value = change_response.json::<serde_json::Value>();
         assert_eq!(change_data["success"], false);
         assert!(change_data["error"].as_str().unwrap().contains("Current password is incorrect"));
     }
@@ -139,12 +177,20 @@ mod tests {
     async fn test_change_password_too_short() {
         let server = setup_test_server().await;
 
+        // 使用时间戳生成唯一用户名
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("testuser3_{}", timestamp);
+        let email = format!("test3_{}@example.com", timestamp);
+
         // 首先创建用户
         let create_user_response = server
-            .post("/v1/admin/users")
+            .post("/v1/auth/register")
             .json(&json!({
-                "username": "testuser3",
-                "email": "test3@example.com",
+                "username": username.clone(),
+                "email": email,
                 "password": "oldpassword123"
             }))
             .await;
@@ -155,14 +201,14 @@ mod tests {
         let login_response = server
             .post("/v1/auth/token")
             .json(&json!({
-                "client_id": "testuser3",
+                "client_id": username,
                 "client_secret": "oldpassword123"
             }))
             .await;
 
         assert_eq!(login_response.status_code(), 200);
 
-        let login_data: serde_json::Value = login_response.json().await;
+        let login_data: serde_json::Value = login_response.json::<serde_json::Value>();
         let access_token = login_data["access_token"].as_str().unwrap();
 
         // 尝试更改为太短的密码
@@ -177,7 +223,7 @@ mod tests {
 
         assert_eq!(change_response.status_code(), 400);
 
-        let change_data: serde_json::Value = change_response.json().await;
+        let change_data: serde_json::Value = change_response.json::<serde_json::Value>();
         assert_eq!(change_data["success"], false);
         assert!(change_data["error"].as_str().unwrap().contains("must be at least 8 characters"));
     }

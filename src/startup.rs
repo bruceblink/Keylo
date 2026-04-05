@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub fn init_app_router() -> Router {
     let app_state = AppState::default();
     Router::new()
+        .merge(routes::auth::public_router())
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::router())
@@ -38,7 +39,9 @@ pub async fn init_app_router_with_db(
 
     let app_state = AppState::new(config, Some(Arc::new(db)));
 
-    Ok(Router::new()
+    let public_routes = routes::auth::public_router();
+
+    let protected_routes = Router::new()
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::router())
@@ -48,7 +51,11 @@ pub async fn init_app_router_with_db(
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
-        ))
+        ));
+
+    Ok(Router::new()
+        .merge(public_routes)
+        .merge(protected_routes)
         .with_state(app_state))
 }
 
