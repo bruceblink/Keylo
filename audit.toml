@@ -1,0 +1,5 @@
+[advisories]
+ignore = [
+    # Transitive via sqlx-macros-core -> sqlx-mysql; no patched release available upstream yet.
+    "RUSTSEC-2023-0071",
+]
