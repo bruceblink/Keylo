@@ -1,7 +1,7 @@
 use anyhow::Result;
 use axum::{
     extract::{Path, Query, State},
-    http::{StatusCode},
+    http::StatusCode,
     response::{Json, Redirect},
     routing::{delete, get, post, put},
     Router,
@@ -13,25 +13,35 @@ use crate::{
     db::*,
     models::*,
     state::AppState,
-    utils::{ApiResponse, require_db},
+    utils::{require_db, ApiResponse},
 };
 
 /// 创建OAuth路由
-pub fn oauth_routes() -> Router<AppState> {
+pub fn oauth_admin_routes() -> Router<AppState> {
     Router::new()
         // OAuth提供商管理路由 (管理员)
         .route("/providers", get(get_oauth_providers))
         .route("/providers", post(create_oauth_provider_handler))
         .route("/providers/{provider_id}", get(get_oauth_provider))
-        .route("/providers/{provider_id}", put(update_oauth_provider_handler))
-        .route("/providers/{provider_id}", delete(delete_oauth_provider_handler))
-        // OAuth登录路由
-        .route("/login/{provider}", get(oauth_login))
-        .route("/callback/{provider}", get(oauth_callback))
+        .route(
+            "/providers/{provider_id}",
+            put(update_oauth_provider_handler),
+        )
+        .route(
+            "/providers/{provider_id}",
+            delete(delete_oauth_provider_handler),
+        )
         // 用户OAuth账户管理路由
         .route("/accounts", get(get_user_oauth_accounts_handler))
         .route("/link", post(link_oauth_account_handler))
         .route("/unlink/{provider}", delete(unlink_oauth_account_handler))
+}
+
+/// OAuth公开路由（无需鉴权）
+pub fn oauth_public_routes() -> Router<AppState> {
+    Router::new()
+        .route("/login/{provider}", get(oauth_login))
+        .route("/callback/{provider}", get(oauth_callback))
 }
 
 /// 获取所有OAuth提供商
@@ -324,21 +334,17 @@ async fn oauth_callback(
     };
 
     // 检查是否已有关联账户
-    let existing_account = find_oauth_account_by_provider_user_id(
-        db,
-        &provider.id,
-        &user_info.id,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Database error: {}", e)
-            })),
-        )
-    })?;
+    let existing_account = find_oauth_account_by_provider_user_id(db, &provider.id, &user_info.id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Database error: {}", e)
+                })),
+            )
+        })?;
 
     let user_id = if let Some(account) = existing_account {
         // 更新token信息
@@ -347,9 +353,9 @@ async fn oauth_callback(
             &account.id,
             Some(&token_response.access_token),
             token_response.refresh_token.as_deref(),
-            token_response
-                .expires_in
-                .map(|expires| chrono::Local::now().naive_utc() + chrono::Duration::seconds(expires)),
+            token_response.expires_in.map(|expires| {
+                chrono::Local::now().naive_utc() + chrono::Duration::seconds(expires)
+            }),
         )
         .await
         .map_err(|e| {
@@ -366,8 +372,14 @@ async fn oauth_callback(
     } else {
         // 创建新用户
         let new_user_id = Uuid::new_v4().to_string();
-        let username = user_info.login.clone().unwrap_or_else(|| format!("user_{}", Uuid::new_v4().simple()));
-        let email = user_info.email.clone().unwrap_or_else(|| format!("{}@oauth.local", username));
+        let username = user_info
+            .login
+            .clone()
+            .unwrap_or_else(|| format!("user_{}", Uuid::new_v4().simple()));
+        let email = user_info
+            .email
+            .clone()
+            .unwrap_or_else(|| format!("{}@oauth.local", username));
 
         // 创建用户记录
         crate::db::create_user(db, &new_user_id, &username, Some(&email))
@@ -392,9 +404,9 @@ async fn oauth_callback(
             user_info.email.as_deref(),
             Some(&token_response.access_token),
             token_response.refresh_token.as_deref(),
-            token_response
-                .expires_in
-                .map(|expires| chrono::Local::now().naive_utc() + chrono::Duration::seconds(expires)),
+            token_response.expires_in.map(|expires| {
+                chrono::Local::now().naive_utc() + chrono::Duration::seconds(expires)
+            }),
         )
         .await
         .map_err(|e| {
@@ -451,7 +463,7 @@ async fn oauth_callback(
     let response = OAuthLoginResponse {
         access_token: token,
         token_type: "Bearer".to_string(),
-        expires_in: token_expires_in as i64,
+        expires_in: token_expires_in,
         refresh_token: token_response.refresh_token,
         user: OAuthUserResponse {
             id: user_id,
@@ -549,21 +561,19 @@ async fn link_oauth_account_handler(
     };
 
     // 检查是否已被其他用户关联
-    if let Some(_) = find_oauth_account_by_provider_user_id(
-        db,
-        &provider.id,
-        &user_info.id,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Database error: {}", e)
-            })),
-        )
-    })? {
+    if (find_oauth_account_by_provider_user_id(db, &provider.id, &user_info.id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Database error: {}", e)
+                })),
+            )
+        })?)
+    .is_some()
+    {
         return Err((
             StatusCode::CONFLICT,
             Json(json!({
@@ -678,7 +688,10 @@ async fn exchange_code_for_token(
         .await?;
 
     if !response.status().is_success() {
-        return Err(anyhow::anyhow!("Token exchange failed: {}", response.status()));
+        return Err(anyhow::anyhow!(
+            "Token exchange failed: {}",
+            response.status()
+        ));
     }
 
     let token_response: OAuthTokenResponse = response.json().await?;
@@ -686,7 +699,10 @@ async fn exchange_code_for_token(
 }
 
 /// 获取OAuth用户信息
-async fn get_oauth_user_info(provider: &OAuthProvider, access_token: &str) -> Result<OAuthUserInfo, anyhow::Error> {
+async fn get_oauth_user_info(
+    provider: &OAuthProvider,
+    access_token: &str,
+) -> Result<OAuthUserInfo, anyhow::Error> {
     let client = reqwest::Client::new();
     let response = client
         .get(&provider.user_info_url)
@@ -696,7 +712,10 @@ async fn get_oauth_user_info(provider: &OAuthProvider, access_token: &str) -> Re
         .await?;
 
     if !response.status().is_success() {
-        return Err(anyhow::anyhow!("Failed to get user info: {}", response.status()));
+        return Err(anyhow::anyhow!(
+            "Failed to get user info: {}",
+            response.status()
+        ));
     }
 
     let user_info: OAuthUserInfo = response.json().await?;

@@ -21,6 +21,8 @@ pub fn init_app_router() -> Router {
 pub fn init_app_router_with_config(config: Config) -> Router {
     let app_state = AppState::new(config, None);
     Router::new()
+        .merge(routes::auth::public_router())
+        .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes())
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::router())
@@ -39,14 +41,16 @@ pub async fn init_app_router_with_db(
 
     let app_state = AppState::new(config, Some(Arc::new(db)));
 
-    let public_routes = routes::auth::public_router();
+    let public_routes = Router::new()
+        .merge(routes::auth::public_router())
+        .route("/", get(index))
+        .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
 
     let protected_routes = Router::new()
-        .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::router())
-        .merge(routes::oauth::oauth_routes())
-        .merge(routes::rbac::rbac_routes())
+        .nest("/api/oauth", routes::oauth::oauth_admin_routes())
+        .nest("/api/rbac", routes::rbac::rbac_routes())
         .merge(routes::user::user_routes())
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
