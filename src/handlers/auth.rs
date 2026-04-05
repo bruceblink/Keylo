@@ -26,7 +26,11 @@ pub async fn auth_token(
 
     let db = match &state.db {
         Some(db) => db,
-        None => return Err(AuthError::DatabaseError("Database not available".to_string())),
+        None => {
+            return Err(AuthError::DatabaseError(
+                "Database not available".to_string(),
+            ))
+        }
     };
 
     // First try to authenticate as a user

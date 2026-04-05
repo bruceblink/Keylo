@@ -1,8 +1,8 @@
+use crate::handlers::user::register_user;
 use crate::handlers::{
     auth_blacklist_token, auth_get_blacklisted_tokens, auth_logout, auth_me, auth_refresh,
     auth_token,
 };
-use crate::handlers::user::register_user;
 use crate::state::AppState;
 use axum::routing::{get, post};
 use axum::Router;

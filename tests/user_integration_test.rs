@@ -1,15 +1,17 @@
 #[cfg(test)]
 mod tests {
     use axum_test::TestServer;
-    use serde_json::json;
-    use keylo::startup::init_app_router_with_db;
     use keylo::config::Config;
+    use keylo::startup::init_app_router_with_db;
+    use serde_json::json;
 
     async fn setup_test_server() -> TestServer {
         println!("Setting up test server...");
         let config = Config::default();
-        let db_url = "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string();
-        
+        let db_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
+        });
+
         let router = init_app_router_with_db(config, &db_url)
             .await
             .expect("Failed to initialize test server");
@@ -41,12 +43,12 @@ mod tests {
 
         let create_status = create_user_response.status_code();
         println!("Create user status: {}", create_status);
-        
+
         if create_status != 200 {
             let error_data: serde_json::Value = create_user_response.json::<serde_json::Value>();
             println!("Create user error: {:?}", error_data);
         }
-        
+
         assert_eq!(create_status, 200);
 
         let create_response: serde_json::Value = create_user_response.json::<serde_json::Value>();
@@ -63,12 +65,12 @@ mod tests {
 
         let login_status = login_response.status_code();
         println!("Login status: {}", login_status);
-        
+
         if login_status != 200 {
             let error_data: serde_json::Value = login_response.json::<serde_json::Value>();
             println!("Login error: {:?}", error_data);
         }
-        
+
         assert_eq!(login_status, 200);
 
         let login_data: serde_json::Value = login_response.json::<serde_json::Value>();
@@ -87,7 +89,10 @@ mod tests {
 
         let status_code = change_response.status_code();
         let error_body: serde_json::Value = change_response.json::<serde_json::Value>();
-        println!("Status code: {}, Error response: {:?}", status_code, error_body);
+        println!(
+            "Status code: {}, Error response: {:?}",
+            status_code, error_body
+        );
 
         assert_eq!(status_code, 200);
 
@@ -170,7 +175,10 @@ mod tests {
 
         let change_data: serde_json::Value = change_response.json::<serde_json::Value>();
         assert_eq!(change_data["success"], false);
-        assert!(change_data["error"].as_str().unwrap().contains("Current password is incorrect"));
+        assert!(change_data["error"]
+            .as_str()
+            .unwrap()
+            .contains("Current password is incorrect"));
     }
 
     #[tokio::test]
@@ -225,7 +233,10 @@ mod tests {
 
         let change_data: serde_json::Value = change_response.json::<serde_json::Value>();
         assert_eq!(change_data["success"], false);
-        assert!(change_data["error"].as_str().unwrap().contains("must be at least 8 characters"));
+        assert!(change_data["error"]
+            .as_str()
+            .unwrap()
+            .contains("must be at least 8 characters"));
     }
 
     #[tokio::test]

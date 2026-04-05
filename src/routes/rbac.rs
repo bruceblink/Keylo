@@ -11,7 +11,7 @@ use crate::{
     db::*,
     models::*,
     state::AppState,
-    utils::{ApiResponse, require_db},
+    utils::{require_db, ApiResponse},
 };
 
 /// 创建RBAC路由
@@ -27,22 +27,43 @@ pub fn rbac_routes() -> Router<AppState> {
         .route("/permissions", get(get_permissions))
         .route("/permissions", post(create_permission_handler))
         .route("/permissions/{permission_id}", get(get_permission))
-        .route("/permissions/{permission_id}", put(update_permission_handler))
-        .route("/permissions/{permission_id}", delete(delete_permission_handler))
+        .route(
+            "/permissions/{permission_id}",
+            put(update_permission_handler),
+        )
+        .route(
+            "/permissions/{permission_id}",
+            delete(delete_permission_handler),
+        )
         // 用户角色管理路由
         .route("/users/{user_id}/roles", get(get_user_roles_handler))
         .route("/users/{user_id}/roles", post(assign_role_to_user_handler))
-        .route("/users/{user_id}/roles/{role_id}", delete(revoke_role_from_user_handler))
+        .route(
+            "/users/{user_id}/roles/{role_id}",
+            delete(revoke_role_from_user_handler),
+        )
         // 角色权限管理路由
-        .route("/roles/{role_id}/permissions", get(get_role_permissions_handler))
-        .route("/roles/{role_id}/permissions", post(assign_permission_to_role_handler))
+        .route(
+            "/roles/{role_id}/permissions",
+            get(get_role_permissions_handler),
+        )
+        .route(
+            "/roles/{role_id}/permissions",
+            post(assign_permission_to_role_handler),
+        )
         .route(
             "/roles/{role_id}/permissions/{permission_id}",
             delete(revoke_permission_from_role_handler),
         )
         // 用户权限查询路由
-        .route("/users/{user_id}/permissions", get(get_user_permissions_handler))
-        .route("/users/{user_id}/check-permission/{permission_name}", get(check_user_permission))
+        .route(
+            "/users/{user_id}/permissions",
+            get(get_user_permissions_handler),
+        )
+        .route(
+            "/users/{user_id}/check-permission/{permission_name}",
+            get(check_user_permission),
+        )
 }
 
 /// 获取所有角色
@@ -95,10 +116,7 @@ async fn create_role_handler(
 }
 
 /// 获取单个角色
-async fn get_role(
-    State(state): State<AppState>,
-    Path(role_id): Path<String>,
-) -> ApiResponse {
+async fn get_role(State(state): State<AppState>, Path(role_id): Path<String>) -> ApiResponse {
     match get_role_by_id(require_db(&state)?, &role_id).await {
         Ok(Some(role)) => Ok(Json(json!({
             "success": true,

@@ -133,9 +133,10 @@ pub async fn update_user(
 
 /// 删除用户
 pub async fn delete_user(pool: &PgPool, user_id: &str) -> Result<bool> {
-    let result: sqlx::postgres::PgQueryResult = sqlx::query!("DELETE FROM users WHERE id = $1", user_id)
-        .execute(pool)
-        .await?;
+    let result: sqlx::postgres::PgQueryResult =
+        sqlx::query!("DELETE FROM users WHERE id = $1", user_id)
+            .execute(pool)
+            .await?;
 
     Ok(result.rows_affected() > 0)
 }

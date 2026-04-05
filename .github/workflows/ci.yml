@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   DATABASE_URL: postgres://postgres:password@localhost:5432/keylo_test
+  TEST_DATABASE_URL: postgres://postgres:password@localhost:5432/keylo_test
 
 jobs:
   test:
@@ -58,6 +59,15 @@ jobs:
 
     - name: Run integration tests
       run: cargo test --test integration_test
+
+    - name: Run user integration tests
+      run: cargo test --test user_integration_test
+
+    - name: Run RBAC integration tests
+      run: cargo test --test rbac_integration_test
+
+    - name: Run OAuth integration tests
+      run: cargo test --test oauth_integration_test
 
     - name: Run database integration tests
       run: cargo test --test database_integration_test

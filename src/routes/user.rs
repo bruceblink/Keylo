@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::{
     db::*,
-    models::{*, Claims},
+    models::{Claims, *},
     state::AppState,
     utils::{require_db, ApiResponse},
 };
@@ -93,7 +93,10 @@ async fn create_user_handler(
     }
 }
 
-async fn get_user_handler(State(state): State<AppState>, Path(user_id): Path<String>) -> ApiResponse {
+async fn get_user_handler(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> ApiResponse {
     let db = require_db(&state)?;
 
     match crate::db::user::get_user_by_id(db, &user_id).await {

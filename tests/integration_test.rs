@@ -12,7 +12,7 @@ mod tests {
     /// 设置测试服务器（带数据库）
     async fn setup_test_server() -> TestServer {
         let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://postgres:password@localhost:5432/keylo_test".to_string()
+            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
         });
 
         let config = Config::default();

@@ -2,12 +2,12 @@ use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
-pub mod rbac;
 pub mod oauth;
+pub mod rbac;
 pub mod user;
 
-pub use rbac::*;
 pub use oauth::*;
+pub use rbac::*;
 pub use user::*;
 
 /// 初始化数据库连接池
