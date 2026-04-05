@@ -471,13 +471,12 @@ docker-compose logs -f keylo
 
 ## 🚦 下一步计划
 
-* [ ] Refresh Token 支持
-* [ ] OAuth 2.0 集成 (Google, GitHub)
-* [ ] Token 黑名单 / 吊销机制
-* [ ] 角色与权限管理 (RBAC)
-* [ ] 审计日志系统
+* [ ] 补充 RBAC / OAuth 管理接口的 `admin` 级权限校验
+* [ ] 完善 OAuth `state` 参数校验与重放防护
+* [ ] 将默认客户端从内存迁移为数据库 seed 机制
+* [ ] 增加审计日志（登录、登出、角色变更、OAuth 绑定）
+* [ ] 增加接口级限流与暴力破解防护
 * [ ] 管理后台 API
-* [ ] 集成测试覆盖
 * [ ] GraphQL 支持
 * [ ] 第三方集成文档
 
@@ -552,4 +551,4 @@ MIT License - 查看 [LICENSE](LICENSE) 文件
 
 ---
 
-**Last Updated**: 2024年12月
+**Last Updated**: 2026年04月05日
