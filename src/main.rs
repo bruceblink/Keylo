@@ -29,6 +29,36 @@
 //! curl -s -X POST -H 'Authorization: Bearer TOKEN' \
 //!   http://localhost:2345/v1/auth/logout
 //! ```
+//!
+//! ## Service-to-Service Authentication
+//!
+//! - Register a service (admin token required):
+//!
+//! ```bash
+//! curl -s -X POST -H 'Content-Type: application/json' \
+//!   -H 'Authorization: Bearer ADMIN_TOKEN' \
+//!   -d '{"service_id":"order-svc","service_secret":"strong-secret","name":"Order Service",
+//!        "allowed_scopes":["read","write"],"allowed_audiences":["inventory-svc","payment-svc"]}' \
+//!   http://localhost:2345/v1/admin/services
+//! ```
+//!
+//! - Obtain a service-to-service token:
+//!
+//! ```bash
+//! curl -s -X POST -H 'Content-Type: application/json' \
+//!   -d '{"service_id":"order-svc","service_secret":"strong-secret",
+//!        "audience":"inventory-svc","scope":"read"}' \
+//!   http://localhost:2345/v1/service/token
+//! ```
+//!
+//! - Introspect a service token (requires a valid service token itself):
+//!
+//! ```bash
+//! curl -s -X POST -H 'Content-Type: application/json' \
+//!   -H 'Authorization: Bearer SERVICE_TOKEN' \
+//!   -d '{"token":"TARGET_TOKEN"}' \
+//!   http://localhost:2345/v1/service/introspect
+//! ```
 
 use keylo::config::Config;
 use keylo::startup;
