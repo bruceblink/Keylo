@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::models::*;
@@ -21,8 +21,7 @@ pub async fn create_oauth_provider(
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().naive_utc();
 
-    let provider = sqlx::query_as!(
-        OAuthProvider,
+    let provider = sqlx::query_as::<_, OAuthProvider>(
         r#"
         INSERT INTO oauth_providers (
             id, name, client_id, client_secret, authorization_url,
@@ -32,19 +31,19 @@ pub async fn create_oauth_provider(
         RETURNING id, name, client_id, client_secret, authorization_url,
                   token_url, user_info_url, scope, redirect_url, active, created_at, updated_at
         "#,
-        id,
-        name,
-        client_id,
-        client_secret,
-        authorization_url,
-        token_url,
-        user_info_url,
-        scope,
-        redirect_url,
-        true,
-        now,
-        now
     )
+    .bind(id)
+    .bind(name)
+    .bind(client_id)
+    .bind(client_secret)
+    .bind(authorization_url)
+    .bind(token_url)
+    .bind(user_info_url)
+    .bind(scope)
+    .bind(redirect_url)
+    .bind(true)
+    .bind(now)
+    .bind(now)
     .fetch_one(pool)
     .await?;
 
@@ -53,11 +52,10 @@ pub async fn create_oauth_provider(
 
 /// 获取所有OAuth提供商
 pub async fn get_all_oauth_providers(pool: &PgPool) -> Result<Vec<OAuthProvider>> {
-    let providers = sqlx::query_as!(
-        OAuthProvider,
+    let providers = sqlx::query_as::<_, OAuthProvider>(
         "SELECT id, name, client_id, client_secret, authorization_url,
                 token_url, user_info_url, scope, redirect_url, active, created_at, updated_at
-         FROM oauth_providers WHERE active = TRUE ORDER BY name"
+         FROM oauth_providers WHERE active = TRUE ORDER BY name",
     )
     .fetch_all(pool)
     .await?;
@@ -70,13 +68,12 @@ pub async fn get_oauth_provider_by_id(
     pool: &PgPool,
     provider_id: &str,
 ) -> Result<Option<OAuthProvider>> {
-    let provider = sqlx::query_as!(
-        OAuthProvider,
+    let provider = sqlx::query_as::<_, OAuthProvider>(
         "SELECT id, name, client_id, client_secret, authorization_url,
                 token_url, user_info_url, scope, redirect_url, active, created_at, updated_at
          FROM oauth_providers WHERE id = $1 AND active = TRUE",
-        provider_id
     )
+    .bind(provider_id)
     .fetch_optional(pool)
     .await?;
 
@@ -88,13 +85,12 @@ pub async fn get_oauth_provider_by_name(
     pool: &PgPool,
     name: &str,
 ) -> Result<Option<OAuthProvider>> {
-    let provider = sqlx::query_as!(
-        OAuthProvider,
+    let provider = sqlx::query_as::<_, OAuthProvider>(
         "SELECT id, name, client_id, client_secret, authorization_url,
                 token_url, user_info_url, scope, redirect_url, active, created_at, updated_at
          FROM oauth_providers WHERE name = $1 AND active = TRUE",
-        name
     )
+    .bind(name)
     .fetch_optional(pool)
     .await?;
 
@@ -118,8 +114,7 @@ pub async fn update_oauth_provider(
 ) -> Result<Option<OAuthProvider>> {
     let now = chrono::Local::now().naive_utc();
 
-    let provider = sqlx::query_as!(
-        OAuthProvider,
+    let provider = sqlx::query_as::<_, OAuthProvider>(
         r#"
         UPDATE oauth_providers
         SET name = COALESCE($2, name),
@@ -136,18 +131,18 @@ pub async fn update_oauth_provider(
         RETURNING id, name, client_id, client_secret, authorization_url,
                   token_url, user_info_url, scope, redirect_url, active, created_at, updated_at
         "#,
-        provider_id,
-        name,
-        client_id,
-        client_secret,
-        authorization_url,
-        token_url,
-        user_info_url,
-        scope,
-        redirect_url,
-        active,
-        now
     )
+    .bind(provider_id)
+    .bind(name)
+    .bind(client_id)
+    .bind(client_secret)
+    .bind(authorization_url)
+    .bind(token_url)
+    .bind(user_info_url)
+    .bind(scope)
+    .bind(redirect_url)
+    .bind(active)
+    .bind(now)
     .fetch_optional(pool)
     .await?;
 
@@ -156,10 +151,10 @@ pub async fn update_oauth_provider(
 
 /// 删除OAuth提供商
 pub async fn delete_oauth_provider(pool: &PgPool, provider_id: &str) -> Result<bool> {
-    let result: sqlx::postgres::PgQueryResult =
-        sqlx::query!("DELETE FROM oauth_providers WHERE id = $1", provider_id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query("DELETE FROM oauth_providers WHERE id = $1")
+        .bind(provider_id)
+        .execute(pool)
+        .await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -181,8 +176,7 @@ pub async fn link_oauth_account(
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().naive_utc();
 
-    let account = sqlx::query_as!(
-        UserOAuthAccount,
+    let account = sqlx::query_as::<_, UserOAuthAccount>(
         r#"
         INSERT INTO user_oauth_accounts (
             id, user_id, provider_id, provider_user_id, provider_username,
@@ -194,18 +188,18 @@ pub async fn link_oauth_account(
                   provider_email, access_token, refresh_token, token_expires_at,
                   linked_at, last_login_at
         "#,
-        id,
-        user_id,
-        provider_id,
-        provider_user_id,
-        provider_username,
-        provider_email,
-        access_token,
-        refresh_token,
-        token_expires_at,
-        now,
-        now
     )
+    .bind(id)
+    .bind(user_id)
+    .bind(provider_id)
+    .bind(provider_user_id)
+    .bind(provider_username)
+    .bind(provider_email)
+    .bind(access_token)
+    .bind(refresh_token)
+    .bind(token_expires_at)
+    .bind(now)
+    .bind(now)
     .fetch_one(pool)
     .await?;
 
@@ -222,8 +216,7 @@ pub async fn update_oauth_account_tokens(
 ) -> Result<Option<UserOAuthAccount>> {
     let now = chrono::Local::now().naive_utc();
 
-    let account = sqlx::query_as!(
-        UserOAuthAccount,
+    let account = sqlx::query_as::<_, UserOAuthAccount>(
         r#"
         UPDATE user_oauth_accounts
         SET access_token = COALESCE($2, access_token),
@@ -235,12 +228,12 @@ pub async fn update_oauth_account_tokens(
                   provider_email, access_token, refresh_token, token_expires_at,
                   linked_at, last_login_at
         "#,
-        account_id,
-        access_token,
-        refresh_token,
-        token_expires_at,
-        now
     )
+    .bind(account_id)
+    .bind(access_token)
+    .bind(refresh_token)
+    .bind(token_expires_at)
+    .bind(now)
     .fetch_optional(pool)
     .await?;
 
@@ -253,16 +246,15 @@ pub async fn find_oauth_account_by_provider_user_id(
     provider_id: &str,
     provider_user_id: &str,
 ) -> Result<Option<UserOAuthAccount>> {
-    let account = sqlx::query_as!(
-        UserOAuthAccount,
+    let account = sqlx::query_as::<_, UserOAuthAccount>(
         "SELECT id, user_id, provider_id, provider_user_id, provider_username,
                 provider_email, access_token, refresh_token, token_expires_at,
                 linked_at, last_login_at
          FROM user_oauth_accounts
          WHERE provider_id = $1 AND provider_user_id = $2",
-        provider_id,
-        provider_user_id
     )
+    .bind(provider_id)
+    .bind(provider_user_id)
     .fetch_optional(pool)
     .await?;
 
@@ -274,16 +266,15 @@ pub async fn get_user_oauth_accounts(
     pool: &PgPool,
     user_id: &str,
 ) -> Result<Vec<UserOAuthAccount>> {
-    let accounts = sqlx::query_as!(
-        UserOAuthAccount,
+    let accounts = sqlx::query_as::<_, UserOAuthAccount>(
         "SELECT id, user_id, provider_id, provider_user_id, provider_username,
                 provider_email, access_token, refresh_token, token_expires_at,
                 linked_at, last_login_at
          FROM user_oauth_accounts
          WHERE user_id = $1
          ORDER BY linked_at DESC",
-        user_id
     )
+    .bind(user_id)
     .fetch_all(pool)
     .await?;
 
@@ -292,11 +283,11 @@ pub async fn get_user_oauth_accounts(
 
 /// 取消关联OAuth账户
 pub async fn unlink_oauth_account(pool: &PgPool, user_id: &str, provider_id: &str) -> Result<bool> {
-    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
+    let result = sqlx::query(
         "DELETE FROM user_oauth_accounts WHERE user_id = $1 AND provider_id = $2",
-        user_id,
-        provider_id
     )
+    .bind(user_id)
+    .bind(provider_id)
     .execute(pool)
     .await?;
 
@@ -308,7 +299,7 @@ pub async fn get_oauth_account_with_provider(
     pool: &PgPool,
     account_id: &str,
 ) -> Result<Option<(UserOAuthAccount, OAuthProvider)>> {
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         SELECT
             uoa.id, uoa.user_id, uoa.provider_id, uoa.provider_user_id, uoa.provider_username,
@@ -321,41 +312,41 @@ pub async fn get_oauth_account_with_provider(
         INNER JOIN oauth_providers op ON uoa.provider_id = op.id
         WHERE uoa.id = $1 AND op.active = TRUE
         "#,
-        account_id
     )
+    .bind(account_id)
     .fetch_optional(pool)
     .await?;
 
     match result {
         Some(row) => {
-            let provider_id = row.provider_id;
+            let provider_id: String = row.get("provider_id");
             let account = UserOAuthAccount {
-                id: row.id,
-                user_id: row.user_id,
+                id: row.get("id"),
+                user_id: row.get("user_id"),
                 provider_id: provider_id.clone(),
-                provider_user_id: row.provider_user_id,
-                provider_username: row.provider_username,
-                provider_email: row.provider_email,
-                access_token: row.access_token,
-                refresh_token: row.refresh_token,
-                token_expires_at: row.token_expires_at,
-                linked_at: row.linked_at,
-                last_login_at: row.last_login_at,
+                provider_user_id: row.get("provider_user_id"),
+                provider_username: row.get("provider_username"),
+                provider_email: row.get("provider_email"),
+                access_token: row.get("access_token"),
+                refresh_token: row.get("refresh_token"),
+                token_expires_at: row.get("token_expires_at"),
+                linked_at: row.get("linked_at"),
+                last_login_at: row.get("last_login_at"),
             };
 
             let provider = OAuthProvider {
                 id: provider_id,
-                name: row.provider_name,
-                client_id: row.client_id,
-                client_secret: row.client_secret,
-                authorization_url: row.authorization_url,
-                token_url: row.token_url,
-                user_info_url: row.user_info_url,
-                scope: row.scope,
-                redirect_url: row.redirect_url,
-                active: row.active,
-                created_at: row.provider_created_at,
-                updated_at: row.provider_updated_at,
+                name: row.get("provider_name"),
+                client_id: row.get("client_id"),
+                client_secret: row.get("client_secret"),
+                authorization_url: row.get("authorization_url"),
+                token_url: row.get("token_url"),
+                user_info_url: row.get("user_info_url"),
+                scope: row.get("scope"),
+                redirect_url: row.get("redirect_url"),
+                active: row.get("active"),
+                created_at: row.get("provider_created_at"),
+                updated_at: row.get("provider_updated_at"),
             };
 
             Ok(Some((account, provider)))

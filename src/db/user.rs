@@ -17,11 +17,10 @@ fn verify_password_hash(password: &str, password_hash: &str) -> Result<bool> {
 
 /// 获取用户
 pub async fn get_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<User>> {
-    let user = sqlx::query_as!(
-        User,
+    let user = sqlx::query_as::<_, User>(
         "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE id = $1",
-        user_id
     )
+    .bind(user_id)
     .fetch_optional(pool)
     .await?;
 
@@ -30,11 +29,10 @@ pub async fn get_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<User>
 
 /// 根据用户名获取用户
 pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Option<User>> {
-    let user = sqlx::query_as!(
-        User,
+    let user = sqlx::query_as::<_, User>(
         "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE username = $1",
-        username
     )
+    .bind(username)
     .fetch_optional(pool)
     .await?;
 
@@ -43,12 +41,11 @@ pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Optio
 
 /// 列出用户，支持分页
 pub async fn list_users(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<User>> {
-    let users = sqlx::query_as!(
-        User,
+    let users = sqlx::query_as::<_, User>(
         "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-        limit,
-        offset
     )
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
     .await?;
 
@@ -70,20 +67,19 @@ pub async fn create_user(
     };
     let now = chrono::Local::now().naive_utc();
 
-    let user = sqlx::query_as!(
-        User,
+    let user = sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (id, username, email, password_hash, active, created_at, updated_at)
         VALUES ($1, $2, $3, $4, TRUE, $5, $6)
         RETURNING id, username, email, password_hash, active, created_at, updated_at
         "#,
-        id,
-        username,
-        email,
-        password_hash,
-        now,
-        now
     )
+    .bind(id)
+    .bind(username)
+    .bind(email)
+    .bind(password_hash)
+    .bind(now)
+    .bind(now)
     .fetch_one(pool)
     .await?;
 
@@ -106,8 +102,7 @@ pub async fn update_user(
     };
     let now = chrono::Local::now().naive_utc();
 
-    let user = sqlx::query_as!(
-        User,
+    let user = sqlx::query_as::<_, User>(
         r#"
         UPDATE users
         SET username = COALESCE($2, username),
@@ -118,13 +113,13 @@ pub async fn update_user(
         WHERE id = $1
         RETURNING id, username, email, password_hash, active, created_at, updated_at
         "#,
-        user_id,
-        username,
-        email,
-        password_hash,
-        active,
-        now
     )
+    .bind(user_id)
+    .bind(username)
+    .bind(email)
+    .bind(password_hash)
+    .bind(active)
+    .bind(now)
     .fetch_optional(pool)
     .await?;
 
@@ -133,10 +128,10 @@ pub async fn update_user(
 
 /// 删除用户
 pub async fn delete_user(pool: &PgPool, user_id: &str) -> Result<bool> {
-    let result: sqlx::postgres::PgQueryResult =
-        sqlx::query!("DELETE FROM users WHERE id = $1", user_id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -166,12 +161,12 @@ pub async fn validate_user_credentials(
 pub async fn reset_user_password(pool: &PgPool, user_id: &str, password: &str) -> Result<bool> {
     let password_hash = hash_password(password)?;
 
-    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
+    let result = sqlx::query(
         "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1",
-        user_id,
-        password_hash,
-        chrono::Local::now().naive_utc()
     )
+    .bind(user_id)
+    .bind(password_hash)
+    .bind(chrono::Local::now().naive_utc())
     .execute(pool)
     .await?;
 
@@ -205,12 +200,12 @@ pub async fn change_user_password(
     // 验证通过，更新密码
     let new_password_hash = hash_password(new_password)?;
 
-    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
+    let result = sqlx::query(
         "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1",
-        user_id,
-        new_password_hash,
-        chrono::Local::now().naive_utc()
     )
+    .bind(user_id)
+    .bind(new_password_hash)
+    .bind(chrono::Local::now().naive_utc())
     .execute(pool)
     .await?;
 
