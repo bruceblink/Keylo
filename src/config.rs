@@ -33,6 +33,8 @@ pub struct Config {
     pub redis_key_prefix: String,
     /// 审计日志保留天数
     pub audit_log_retention_days: i64,
+    /// 服务间鉴权 Token 过期时间（秒），默认 3600（1 小时）
+    pub service_token_expiry_seconds: i64,
 }
 
 impl Default for Config {
@@ -101,6 +103,11 @@ impl Config {
             .parse::<i64>()
             .unwrap_or(30);
 
+        let service_token_expiry_seconds = env::var("SERVICE_TOKEN_EXPIRY_SECONDS")
+            .unwrap_or_else(|_| "3600".to_string()) // 1 hour
+            .parse::<i64>()
+            .unwrap_or(3600);
+
         Self {
             jwt_secret,
             database_url,
@@ -117,6 +124,7 @@ impl Config {
             redis_url,
             redis_key_prefix,
             audit_log_retention_days,
+            service_token_expiry_seconds,
         }
     }
 
