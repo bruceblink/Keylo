@@ -72,8 +72,16 @@ pub async fn init_app_router_with_db(
 
     let public_routes = Router::new()
         .merge(routes::auth::public_router())
+        .merge(routes::service::service_public_routes())
         .route("/", get(index))
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
+
+    let service_protected_routes = Router::new()
+        .merge(routes::service::service_introspect_routes())
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::service_auth_middleware,
+        ));
 
     let protected_routes = Router::new()
         .route("/protected", get(protected))
@@ -88,6 +96,10 @@ pub async fn init_app_router_with_db(
             routes::rbac::rbac_routes()
                 .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
         )
+        .merge(
+            routes::service::service_admin_routes()
+                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+        )
         .merge(routes::user::user_routes())
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
@@ -96,6 +108,7 @@ pub async fn init_app_router_with_db(
 
     Ok(Router::new()
         .merge(public_routes)
+        .merge(service_protected_routes)
         .merge(protected_routes)
         .with_state(app_state))
 }
