@@ -110,4 +110,20 @@ impl Keys {
                 _ => AuthError::InvalidToken,
             })
     }
+
+    /// 解码服务间鉴权 Token（跳过 audience 校验，仅验证签名和过期时间）
+    pub fn decode_service_token(
+        &self,
+        token: &str,
+    ) -> Result<crate::models::service::ServiceClaims, AuthError> {
+        let mut validation = Validation::default();
+        validation.validate_aud = false;
+
+        decode::<crate::models::service::ServiceClaims>(token, &self.decoding, &validation)
+            .map(|data| data.claims)
+            .map_err(|err| match err.kind() {
+                ErrorKind::ExpiredSignature => AuthError::ExpiredToken,
+                _ => AuthError::InvalidToken,
+            })
+    }
 }
