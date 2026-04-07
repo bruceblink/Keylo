@@ -5,10 +5,12 @@ use uuid::Uuid;
 
 pub mod oauth;
 pub mod rbac;
+pub mod service;
 pub mod user;
 
 pub use oauth::*;
 pub use rbac::*;
+pub use service::*;
 pub use user::*;
 
 /// 初始化数据库连接池
