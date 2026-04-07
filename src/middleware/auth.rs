@@ -1,5 +1,6 @@
 use crate::errors::AuthError;
 use crate::models::Claims;
+use crate::models::service::ServiceClaims;
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::State;
@@ -71,5 +72,42 @@ pub async fn admin_scope_middleware(
         return Ok(AuthError::Forbidden.into_response());
     }
 
+    Ok(next.run(request).await)
+}
+
+/// 服务间鉴权中间件
+/// 验证 Bearer Token 为有效的 service_access JWT，并将 ServiceClaims 注入请求扩展
+pub async fn service_auth_middleware(
+    State(state): State<AppState>,
+    TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let token = auth.token();
+
+    let claims = match crate::handlers::service::decode_service_token(&state, token) {
+        Ok(c) => c,
+        Err(err) => return Ok(err.into_response()),
+    };
+
+    if claims.token_type != "service_access" {
+        return Ok(AuthError::InvalidToken.into_response());
+    }
+
+    // 检查 Token 黑名单
+    if let Some(db) = &state.db {
+        match crate::db::is_token_blacklisted(db, token).await {
+            Ok(true) => return Ok(AuthError::InvalidToken.into_response()),
+            Err(_) => {
+                return Ok(
+                    AuthError::DatabaseError("Token validation failed".to_string())
+                        .into_response(),
+                )
+            }
+            Ok(false) => {}
+        }
+    }
+
+    request.extensions_mut().insert(claims);
     Ok(next.run(request).await)
 }
