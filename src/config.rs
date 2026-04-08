@@ -1,4 +1,13 @@
 use std::env;
+use std::sync::Once;
+
+static DOTENV_INIT: Once = Once::new();
+
+pub fn load_dotenv() {
+    DOTENV_INIT.call_once(|| {
+        let _ = dotenvy::dotenv();
+    });
+}
 
 /// 应用配置
 #[derive(Clone, Debug)]
@@ -45,6 +54,8 @@ impl Default for Config {
 
 impl Config {
     pub fn from_env() -> Self {
+        load_dotenv();
+
         let jwt_secret = env::var("JWT_SECRET")
             .unwrap_or_else(|_| "my-jwt-secret-change-in-production".to_string());
 

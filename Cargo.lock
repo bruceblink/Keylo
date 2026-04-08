@@ -1172,6 +1172,7 @@ dependencies = [
  "axum-test",
  "bcrypt",
  "chrono",
+ "dotenvy",
  "http",
  "http-body-util",
  "hyper-util",

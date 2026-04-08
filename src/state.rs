@@ -43,6 +43,8 @@ impl Default for AppState {
 }
 
 pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
+    crate::config::load_dotenv();
+
     // 从环境变量读取 JWT secret
     let secret = std::env::var("JWT_SECRET").unwrap_or("my-jwt-secret".to_string());
     Keys::new(secret.as_bytes())

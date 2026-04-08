@@ -67,6 +67,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
+    keylo::config::load_dotenv();
+
     // Initialize logging
     tracing_subscriber::registry()
         .with(
