@@ -16,6 +16,10 @@ use crate::{
 };
 
 pub fn user_routes() -> Router<AppState> {
+    admin_user_routes().merge(self_user_routes())
+}
+
+pub fn admin_user_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/admin/users", get(list_users_handler))
         .route("/v1/admin/users", post(create_user_handler))
@@ -26,7 +30,10 @@ pub fn user_routes() -> Router<AppState> {
             "/v1/admin/users/{user_id}/reset-password",
             post(reset_user_password_handler),
         )
-        .route("/v1/user/change-password", post(change_password_handler))
+}
+
+pub fn self_user_routes() -> Router<AppState> {
+    Router::new().route("/v1/user/change-password", post(change_password_handler))
 }
 
 async fn list_users_handler(

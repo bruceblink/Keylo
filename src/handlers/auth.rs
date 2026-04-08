@@ -2,8 +2,8 @@ use crate::db::user::get_user_by_username;
 use crate::errors::AuthError;
 use crate::models::{
     AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest,
-    CreateClientRequest, MeResponse, RefreshTokenRequest, RotateClientSecretRequest,
-    UpdateClientRequest,
+    CreateClientRequest, IntrospectTokenRequest, MeResponse, RefreshTokenRequest,
+    RotateClientSecretRequest, TokenIntrospectResponse, UpdateClientRequest,
 };
 use crate::state::AppState;
 use crate::utils;
@@ -593,6 +593,31 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
         iss: claims.iss,
         jti: claims.jti,
     }))
+}
+
+pub async fn auth_introspect(
+    State(state): State<AppState>,
+    Json(payload): Json<IntrospectTokenRequest>,
+) -> Json<TokenIntrospectResponse> {
+    if payload.token.is_empty() {
+        return Json(TokenIntrospectResponse::inactive());
+    }
+
+    match state.jwt_keys.decode_token(&payload.token) {
+        Ok(claims) => {
+            if let Some(db) = &state.db {
+                if crate::db::is_token_blacklisted(db, &payload.token)
+                    .await
+                    .unwrap_or(false)
+                {
+                    return Json(TokenIntrospectResponse::inactive());
+                }
+            }
+
+            Json(TokenIntrospectResponse::from_claims(&claims))
+        }
+        Err(_) => Json(TokenIntrospectResponse::inactive()),
+    }
 }
 
 pub async fn auth_refresh(

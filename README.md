@@ -99,6 +99,10 @@ cargo tarpaulin --out Html
 * 完整测试套件
 * 覆盖率报告
 
+### 第三方集成
+
+第三方系统对接 Keylo 的登录流程、Token 内省和服务接入方式见 [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)。
+
 ---
 
 ## 🔧 开发
@@ -200,6 +204,17 @@ curl -H "Authorization: Bearer <access_token>" \
   "iss": "keylo",
   "jti": "550e8400-e29b-41d4-a716-446655440000"
 }
+
+### 第三方系统内省用户 Token
+
+第三方后端服务应先申请自己的 `service_access` Token，再调用用户 Token 内省接口：
+
+```bash
+curl -X POST http://127.0.0.1:2345/v1/auth/introspect \
+  -H "Authorization: Bearer <service_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"token":"<user_access_token>"}'
+```
 ```
 
 ### 登出

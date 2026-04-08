@@ -15,7 +15,7 @@ pub fn init_app_router() -> Router {
         .merge(routes::auth::public_router())
         .route("/", get(index))
         .route("/protected", get(protected))
-        .merge(routes::auth::router())
+        .merge(routes::auth::protected_router())
         .with_state(app_state)
 }
 
@@ -26,7 +26,7 @@ pub fn init_app_router_with_config(config: Config) -> Router {
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes())
         .route("/", get(index))
         .route("/protected", get(protected))
-        .merge(routes::auth::router())
+        .merge(routes::auth::protected_router())
         .with_state(app_state)
 }
 
@@ -77,6 +77,7 @@ pub async fn init_app_router_with_db(
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
 
     let service_protected_routes = Router::new()
+        .merge(routes::auth::service_integration_routes())
         .merge(routes::service::service_introspect_routes())
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
@@ -85,7 +86,12 @@ pub async fn init_app_router_with_db(
 
     let protected_routes = Router::new()
         .route("/protected", get(protected))
-        .merge(routes::auth::router())
+        .merge(routes::auth::protected_router())
+        .merge(routes::user::self_user_routes())
+        .merge(
+            routes::auth::admin_router()
+                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+        )
         .nest(
             "/api/oauth",
             routes::oauth::oauth_admin_routes()
@@ -100,7 +106,10 @@ pub async fn init_app_router_with_db(
             routes::service::service_admin_routes()
                 .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
         )
-        .merge(routes::user::user_routes())
+        .merge(
+            routes::user::admin_user_routes()
+                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+        )
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,

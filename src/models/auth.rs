@@ -21,6 +21,62 @@ pub struct RefreshTokenRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct IntrospectTokenRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TokenIntrospectResponse {
+    pub active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aud: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iss: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iat: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jti: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_type: Option<String>,
+}
+
+impl TokenIntrospectResponse {
+    pub fn inactive() -> Self {
+        Self {
+            active: false,
+            sub: None,
+            scope: None,
+            aud: None,
+            iss: None,
+            exp: None,
+            iat: None,
+            jti: None,
+            token_type: None,
+        }
+    }
+
+    pub fn from_claims(claims: &crate::models::Claims) -> Self {
+        Self {
+            active: true,
+            sub: Some(claims.sub.clone()),
+            scope: Some(claims.scope.join(" ")),
+            aud: Some(claims.aud.clone()),
+            iss: Some(claims.iss.clone()),
+            exp: Some(claims.exp),
+            iat: Some(claims.iat),
+            jti: Some(claims.jti.clone()),
+            token_type: Some(claims.token_type.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct BlacklistTokenRequest {
     pub token: String,
     pub reason: Option<String>,

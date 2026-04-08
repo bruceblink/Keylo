@@ -364,4 +364,146 @@ mod tests {
             .await;
         assert_eq!(disabled_login.status_code(), StatusCode::UNAUTHORIZED);
     }
+
+    #[tokio::test]
+    async fn test_non_admin_cannot_access_admin_user_routes() {
+        let server = setup_test_server().await;
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("plain-user-{}", ts);
+        let email = format!("{}@example.com", username);
+
+        let register_resp = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "password123"
+            }))
+            .await;
+
+        if register_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        register_resp.assert_status_ok();
+
+        let login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "password123"
+            }))
+            .await;
+        login_resp.assert_status_ok();
+        let login_body: serde_json::Value = login_resp.json();
+        let access_token = login_body["access_token"].as_str().unwrap();
+
+        let list_users_resp = server
+            .get("/v1/admin/users")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        assert_eq!(list_users_resp.status_code(), StatusCode::FORBIDDEN);
+
+        let list_clients_resp = server
+            .get("/v1/admin/clients")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        assert_eq!(list_clients_resp.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_service_can_introspect_user_access_token() {
+        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
+        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
+
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": "cli-admin-root",
+                "client_secret": "cli-admin-root-secret"
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let service_id = format!("agileboot-admin-{}", ts);
+        let username = format!("introspect-user-{}", ts);
+        let email = format!("{}@example.com", username);
+
+        let create_service_resp = server
+            .post("/v1/admin/services")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "service-secret",
+                "name": "AgileBoot Admin",
+                "description": "integration test service",
+                "allowed_scopes": ["read"],
+                "allowed_audiences": ["admin-backend"]
+            }))
+            .await;
+        create_service_resp.assert_status_ok();
+
+        let service_login_resp = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "service-secret",
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        service_login_resp.assert_status_ok();
+        let service_login_body: serde_json::Value = service_login_resp.json();
+        let service_access_token = service_login_body["access_token"].as_str().unwrap();
+
+        let register_resp = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "password123"
+            }))
+            .await;
+        register_resp.assert_status_ok();
+
+        let user_login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "password123"
+            }))
+            .await;
+        user_login_resp.assert_status_ok();
+        let user_login_body: serde_json::Value = user_login_resp.json();
+        let user_access_token = user_login_body["access_token"].as_str().unwrap();
+
+        let introspect_resp = server
+            .post("/v1/auth/introspect")
+            .add_header("Authorization", format!("Bearer {}", service_access_token))
+            .json(&json!({
+                "token": user_access_token
+            }))
+            .await;
+        introspect_resp.assert_status_ok();
+        let introspect_body: serde_json::Value = introspect_resp.json();
+
+        assert_eq!(introspect_body["active"], true);
+        assert_eq!(introspect_body["sub"], format!("user:{}", username));
+        assert_eq!(introspect_body["aud"], "admin-backend");
+        assert_eq!(introspect_body["token_type"], "access");
+    }
 }
