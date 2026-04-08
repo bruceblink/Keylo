@@ -1,6 +1,5 @@
 use crate::errors::AuthError;
 use crate::models::Claims;
-use crate::models::service::ServiceClaims;
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::State;
