@@ -64,7 +64,7 @@ jobs:
       env:
         PGPASSWORD: password
       run: |
-        for f in $(find migrations -name up.sql | sort); do
+        for f in $(find migrations -maxdepth 1 -name '*.sql' | sort); do
           echo "Applying migration: $f"
           psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -f "$f"
         done
@@ -155,7 +155,7 @@ jobs:
       env:
         PGPASSWORD: password
       run: |
-        for f in $(find migrations -name up.sql | sort); do
+        for f in $(find migrations -maxdepth 1 -name '*.sql' | sort); do
           echo "Applying migration: $f"
           psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -f "$f"
         done
