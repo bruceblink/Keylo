@@ -210,25 +210,22 @@ pub async fn delete_permission(pool: &PgPool, permission_id: &str) -> Result<boo
 /// 用户角色关系操作
 /// 为用户分配角色
 pub async fn assign_role_to_user(pool: &PgPool, user_id: &str, role_id: &str) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(user_id)
-    .bind(role_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        .bind(user_id)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }
 
 /// 撤销用户的角色
 pub async fn revoke_role_from_user(pool: &PgPool, user_id: &str, role_id: &str) -> Result<bool> {
-    let result =
-        sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2")
-            .bind(user_id)
-            .bind(role_id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2")
+        .bind(user_id)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -334,11 +331,10 @@ pub async fn get_role_permissions(pool: &PgPool, role_id: &str) -> Result<Vec<Pe
 
 /// 获取权限的所有角色
 pub async fn get_permission_roles(pool: &PgPool, permission_id: &str) -> Result<Vec<String>> {
-    let rows =
-        sqlx::query("SELECT role_id FROM role_permissions WHERE permission_id = $1")
-            .bind(permission_id)
-            .fetch_all(pool)
-            .await?;
+    let rows = sqlx::query("SELECT role_id FROM role_permissions WHERE permission_id = $1")
+        .bind(permission_id)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows.into_iter().map(|r| r.get("role_id")).collect())
 }
@@ -385,4 +381,3 @@ pub async fn get_user_permissions(pool: &PgPool, user_id: &str) -> Result<Vec<Pe
 
     Ok(permissions)
 }
-

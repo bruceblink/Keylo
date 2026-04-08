@@ -161,14 +161,12 @@ pub async fn validate_user_credentials(
 pub async fn reset_user_password(pool: &PgPool, user_id: &str, password: &str) -> Result<bool> {
     let password_hash = hash_password(password)?;
 
-    let result = sqlx::query(
-        "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1",
-    )
-    .bind(user_id)
-    .bind(password_hash)
-    .bind(chrono::Local::now().naive_utc())
-    .execute(pool)
-    .await?;
+    let result = sqlx::query("UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1")
+        .bind(user_id)
+        .bind(password_hash)
+        .bind(chrono::Local::now().naive_utc())
+        .execute(pool)
+        .await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -200,14 +198,12 @@ pub async fn change_user_password(
     // 验证通过，更新密码
     let new_password_hash = hash_password(new_password)?;
 
-    let result = sqlx::query(
-        "UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1",
-    )
-    .bind(user_id)
-    .bind(new_password_hash)
-    .bind(chrono::Local::now().naive_utc())
-    .execute(pool)
-    .await?;
+    let result = sqlx::query("UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1")
+        .bind(user_id)
+        .bind(new_password_hash)
+        .bind(chrono::Local::now().naive_utc())
+        .execute(pool)
+        .await?;
 
     Ok(result.rows_affected() > 0)
 }

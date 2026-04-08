@@ -44,18 +44,18 @@ pub async fn service_token(
                 let granted_scopes = resolve_scopes(&payload.scope, &allowed_scopes)?;
                 let audience = resolve_audience(&payload.audience, &allowed_audiences)?;
 
-                let token = mint_service_token(
-                    &state,
-                    &payload.service_id,
-                    &granted_scopes,
-                    &audience,
-                )?;
+                let token =
+                    mint_service_token(&state, &payload.service_id, &granted_scopes, &audience)?;
 
                 audit_service_event(
                     &state,
                     "service.token.issued",
                     Some(&payload.service_id),
-                    Some(&format!("scope={}, aud={}", granted_scopes.join(" "), audience)),
+                    Some(&format!(
+                        "scope={}, aud={}",
+                        granted_scopes.join(" "),
+                        audience
+                    )),
                 )
                 .await;
 
@@ -106,9 +106,7 @@ pub async fn service_introspect(
 // ─── 管理接口 ────────────────────────────────────────────────────────────────
 
 /// GET /v1/admin/services
-pub async fn list_services(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, AuthError> {
+pub async fn list_services(State(state): State<AppState>) -> Result<Json<Value>, AuthError> {
     let db = state
         .db
         .as_ref()
@@ -197,13 +195,7 @@ pub async fn update_service(
         return Err(AuthError::NotFound);
     }
 
-    audit_service_event(
-        &state,
-        "service.updated",
-        Some(&service_id),
-        None,
-    )
-    .await;
+    audit_service_event(&state, "service.updated", Some(&service_id), None).await;
 
     Ok(Json(json!({ "message": "Service updated successfully" })))
 }
@@ -231,13 +223,7 @@ pub async fn rotate_service_secret(
         return Err(AuthError::NotFound);
     }
 
-    audit_service_event(
-        &state,
-        "service.secret.rotated",
-        Some(&service_id),
-        None,
-    )
-    .await;
+    audit_service_event(&state, "service.secret.rotated", Some(&service_id), None).await;
 
     Ok(Json(json!({
         "service_id": service_id,
@@ -292,10 +278,7 @@ pub fn mint_service_token(
 }
 
 /// 解码并验证服务 Token（不检查 aud，允许任意 audience）
-pub fn decode_service_token(
-    state: &AppState,
-    token: &str,
-) -> Result<ServiceClaims, AuthError> {
+pub fn decode_service_token(state: &AppState, token: &str) -> Result<ServiceClaims, AuthError> {
     state.jwt_keys.decode_service_token(token)
 }
 
@@ -320,10 +303,7 @@ fn resolve_scopes(
 }
 
 /// 解析请求的 audience：必须在 allowed_audiences 范围内（或为通配 "*"）
-fn resolve_audience(
-    requested: &Option<String>,
-    allowed: &[String],
-) -> Result<String, AuthError> {
+fn resolve_audience(requested: &Option<String>, allowed: &[String]) -> Result<String, AuthError> {
     let wildcard = "*".to_string();
 
     match requested {

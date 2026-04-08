@@ -99,8 +99,7 @@ pub async fn service_auth_middleware(
             Ok(true) => return Ok(AuthError::InvalidToken.into_response()),
             Err(_) => {
                 return Ok(
-                    AuthError::DatabaseError("Token validation failed".to_string())
-                        .into_response(),
+                    AuthError::DatabaseError("Token validation failed".to_string()).into_response(),
                 )
             }
             Ok(false) => {}

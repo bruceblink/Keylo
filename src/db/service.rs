@@ -128,8 +128,7 @@ pub async fn update_service_client(
     allowed_audiences: Option<&[String]>,
     active: Option<bool>,
 ) -> Result<bool> {
-    let scopes: Option<Vec<&str>> =
-        allowed_scopes.map(|s| s.iter().map(|x| x.as_str()).collect());
+    let scopes: Option<Vec<&str>> = allowed_scopes.map(|s| s.iter().map(|x| x.as_str()).collect());
     let audiences: Option<Vec<&str>> =
         allowed_audiences.map(|a| a.iter().map(|x| x.as_str()).collect());
 
@@ -180,4 +179,3 @@ pub async fn rotate_service_secret(
 pub fn generate_service_secret() -> String {
     Uuid::new_v4().to_string().replace('-', "")
 }
-

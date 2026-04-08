@@ -283,13 +283,12 @@ pub async fn get_user_oauth_accounts(
 
 /// 取消关联OAuth账户
 pub async fn unlink_oauth_account(pool: &PgPool, user_id: &str, provider_id: &str) -> Result<bool> {
-    let result = sqlx::query(
-        "DELETE FROM user_oauth_accounts WHERE user_id = $1 AND provider_id = $2",
-    )
-    .bind(user_id)
-    .bind(provider_id)
-    .execute(pool)
-    .await?;
+    let result =
+        sqlx::query("DELETE FROM user_oauth_accounts WHERE user_id = $1 AND provider_id = $2")
+            .bind(user_id)
+            .bind(provider_id)
+            .execute(pool)
+            .await?;
 
     Ok(result.rows_affected() > 0)
 }
