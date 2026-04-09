@@ -91,6 +91,12 @@ RUST_LOG=keylo=trace,axum=trace cargo run
 
 使用 [jwt.io](https://jwt.io) 解析 JWT Token，查看其中的声明。
 
+开发环境可通过以下命令查看 JWKS：
+
+```bash
+curl http://127.0.0.1:2345/.well-known/jwks.json
+```
+
 ### 查看数据库
 
 ```bash
@@ -134,6 +140,17 @@ clients.insert("mobile".into(), "mobile-secret-123".into());
 
 ```env
 TOKEN_EXPIRY_SECONDS=3600  # 1小时
+```
+
+### 配置 RSA 密钥
+
+开发环境默认使用内置 RSA 密钥对；如果你想模拟生产环境，建议显式提供：
+
+```env
+JWT_ISSUER=keylo
+JWT_KEY_ID=keylo-rs256-1
+JWT_PRIVATE_KEY_PATH=./keys/private.pem
+JWT_PUBLIC_KEY_PATH=./keys/public.pem
 ```
 
 ### 修改 JWT Claims
@@ -211,7 +228,9 @@ docker build -t keylo:dev .
 
 ```bash
 docker run -p 2345:2345 \
-  -e JWT_SECRET="dev-secret" \
+  -e JWT_ISSUER="keylo" \
+  -e JWT_PRIVATE_KEY_PATH="/app/keys/private.pem" \
+  -e JWT_PUBLIC_KEY_PATH="/app/keys/public.pem" \
   -e ENVIRONMENT="development" \
   keylo:dev
 ```

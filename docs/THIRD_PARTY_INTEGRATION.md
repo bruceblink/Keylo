@@ -20,6 +20,8 @@ Keylo 负责：
 
 推荐模式是：第三方系统信任 Keylo 的身份认证结果，但保留自己的授权模型。
 
+Keylo 1.0 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 发布公开密钥集合。
+
 ## Token 类型
 
 Keylo 当前提供两类 Token：
@@ -193,6 +195,31 @@ Content-Type: application/json
 {
   "active": false
 }
+
+### 4.1 获取 JWKS
+
+请求：
+
+```http
+GET /.well-known/jwks.json
+```
+
+响应：
+
+```json
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "use": "sig",
+      "alg": "RS256",
+      "kid": "keylo-rs256-1",
+      "n": "...",
+      "e": "AQAB"
+    }
+  ]
+}
+```
 ```
 
 ### 5. 内省服务 Token
@@ -219,6 +246,11 @@ Content-Type: application/json
 - `exp` 必须晚于当前时间
 - `active` 必须为 `true`
 
+推荐校验顺序：
+
+1. 优先通过 JWKS 做本地签名验证
+2. 对高敏感接口或需要实时吊销判断的场景，调用内省接口补充校验
+
 若系统自身保留本地授权模型，还应执行：
 
 - 通过 `sub` 找到本地用户映射
@@ -241,8 +273,9 @@ Content-Type: application/json
 
 ## 安全建议
 
-- 不要让第三方系统直接共享 Keylo 的 JWT 签名密钥。
-- 第三方系统优先通过服务 Token 调用 Keylo 内省接口。
+- 不要让第三方系统直接共享 Keylo 的 JWT 私钥。
+- 第三方系统优先通过 JWKS 获取公钥，本地验签。
+- 需要实时吊销判断时，通过服务 Token 调用 Keylo 内省接口。
 - 后台系统只把 UI 和本地授权留在自己侧，不要复制 Keylo 的认证逻辑。
 - 所有服务账号都应限制 `allowed_scopes` 与 `allowed_audiences`。
 - 管理接口只允许带有 `admin` scope 的用户 Token 访问。

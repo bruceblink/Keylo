@@ -125,12 +125,18 @@ cp .env.example .env
 编辑 `.env` 设置你的配置：
 
 ```bash
-JWT_SECRET=your-secure-secret-key
+JWT_ISSUER=keylo
+JWT_KEY_ID=keylo-rs256-1
+# 生产环境建议使用路径方式加载 RSA 密钥
+JWT_PRIVATE_KEY_PATH=./keys/private.pem
+JWT_PUBLIC_KEY_PATH=./keys/public.pem
 DATABASE_URL=postgres://keylo_user:keylo_password@localhost:5432/keylo
 SERVER_ADDR=127.0.0.1
 SERVER_PORT=2345
 ENVIRONMENT=development
 ```
+
+开发环境下如果未提供 RSA 密钥，Keylo 会使用内置开发密钥对；生产环境必须显式配置私钥和公钥。
 
 ### 3. 启动 PostgreSQL (使用 Docker Compose)
 
@@ -181,9 +187,17 @@ curl -X POST http://127.0.0.1:2345/v1/auth/token \
 
 ```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImtleWxvLXJzMjU2LTEiLCJ0eXAiOiJKV1QifQ...",
   "token_type": "Bearer"
 }
+```
+
+### 获取 JWKS 公钥集合
+
+第三方系统可通过公开端点获取 Keylo 的当前验签公钥：
+
+```bash
+curl http://127.0.0.1:2345/.well-known/jwks.json
 ```
 
 ### 获取当前用户信息
@@ -204,6 +218,7 @@ curl -H "Authorization: Bearer <access_token>" \
   "iss": "keylo",
   "jti": "550e8400-e29b-41d4-a716-446655440000"
 }
+```
 
 ### 第三方系统内省用户 Token
 
@@ -214,7 +229,6 @@ curl -X POST http://127.0.0.1:2345/v1/auth/introspect \
   -H "Authorization: Bearer <service_access_token>" \
   -H "Content-Type: application/json" \
   -d '{"token":"<user_access_token>"}'
-```
 ```
 
 ### 登出
@@ -408,7 +422,12 @@ Cargo.toml          # 项目依赖配置
 
 | 变量 | 默认值 | 说明 |
 | ------ | -------- | ------ |
-| `JWT_SECRET` | `my-jwt-secret-change-in-production` | JWT 签名密钥 |
+| `JWT_ISSUER` | `keylo` | JWT 签发方 |
+| `JWT_KEY_ID` | `keylo-dev-rs256-1` | JWKS 中公开的当前密钥 ID |
+| `JWT_PRIVATE_KEY_PATH` | `` | RSA 私钥文件路径，生产推荐 |
+| `JWT_PUBLIC_KEY_PATH` | `` | RSA 公钥文件路径，生产推荐 |
+| `JWT_PRIVATE_KEY_PEM` | `` | RSA 私钥 PEM 内容，可替代路径 |
+| `JWT_PUBLIC_KEY_PEM` | `` | RSA 公钥 PEM 内容，可替代路径 |
 | `DATABASE_URL` | `postgres://user:password@localhost/keylo` | 数据库连接字符串 |
 | `SERVER_ADDR` | `127.0.0.1` | 服务器监听地址 |
 | `SERVER_PORT` | `2345` | 服务器监听端口 |
@@ -426,6 +445,14 @@ Cargo.toml          # 项目依赖配置
 | `REDIS_KEY_PREFIX` | `keylo` | Redis key 前缀（多环境隔离） |
 | `AUDIT_LOG_RETENTION_DAYS` | `30` | 审计日志保留天数 |
 | `RUST_LOG` | `keylo=debug` | 日志级别 |
+
+## 🔐 JWKS
+
+Keylo 1.0 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 暴露公开验签密钥集合。
+
+- 生产环境不要使用内置开发密钥
+- 下游系统推荐优先使用 JWKS 做本地验签
+- 需要统一吊销控制时，继续结合 `/v1/auth/introspect` 和 `/v1/service/introspect`
 
 ---
 
