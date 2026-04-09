@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing git tag to publish, for example v1.0.0
+        required: true
+      publish_latest:
+        description: Also publish the latest image tag
+        required: false
+        default: 'true'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish GitHub Release And GHCR Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+      - name: Resolve release tag
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          PUBLISH_LATEST: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_latest || 'true' }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          major_minor="$(echo "$version" | awk -F. 'NF >= 2 { print $1 "." $2 }')"
+          publish_latest="false"
+
+          if [[ "$PUBLISH_LATEST" == "true" && "$RELEASE_TAG" != *-* ]]; then
+            publish_latest="true"
+          fi
+
+          echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "major_minor=${major_minor}" >> "$GITHUB_OUTPUT"
+          echo "publish_latest=${publish_latest}" >> "$GITHUB_OUTPUT"
+
+      - name: Derive image coordinates
+        id: image
+        shell: bash
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          repo="$(echo "${GITHUB_REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=ghcr.io/${owner}/${repo}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.image }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.tag }}
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.major_minor }},enable=${{ steps.version.outputs.major_minor != '' }}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ steps.version.outputs.publish_latest == 'true' }}
+          labels: |
+            org.opencontainers.image.title=Keylo
+            org.opencontainers.image.description=Unified authentication and authorization service built with Rust and Axum
+            org.opencontainers.image.vendor=bruceblink
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            ## Container Image
+
+            Pull the release image from GitHub Container Registry:
+
+            - `${{ steps.image.outputs.image }}:${{ steps.version.outputs.tag }}`
+            - `${{ steps.image.outputs.image }}:latest`
+
+            ## Quick Start
+
+            ```bash
+            docker pull ${{ steps.image.outputs.image }}:${{ steps.version.outputs.tag }}
+            ```
