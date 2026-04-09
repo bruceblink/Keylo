@@ -35,6 +35,11 @@ pub async fn init_app_router_with_db(
     database_url: &str,
 ) -> Result<Router, anyhow::Error> {
     if config.is_production() {
+        if config.jwt_using_default_dev_keys {
+            anyhow::bail!(
+                "JWT_PRIVATE_KEY_PEM/JWT_PUBLIC_KEY_PEM or corresponding *_PATH values must be set in production"
+            );
+        }
         let has_admin_id = std::env::var("ADMIN_CLIENT_ID").ok().is_some();
         let has_admin_secret = std::env::var("ADMIN_CLIENT_SECRET").ok().is_some();
         if !has_admin_id || !has_admin_secret {

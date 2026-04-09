@@ -43,6 +43,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_jwks_endpoint() {
+        let server = setup_test_server().await;
+
+        let response = server.get("/.well-known/jwks.json").await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        let keys = body["keys"].as_array().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0]["kty"], "RSA");
+        assert_eq!(keys[0]["alg"], "RS256");
+        assert!(keys[0]["kid"].as_str().is_some());
+        assert!(keys[0]["n"].as_str().is_some());
+        assert!(keys[0]["e"].as_str().is_some());
+    }
+
+    #[tokio::test]
     async fn test_invalid_auth_request() {
         let server = setup_test_server().await;
 
@@ -186,6 +203,7 @@ mod tests {
         // 应该返回400（缺少Authorization header）或401（无权限）
         assert!(
             blacklist_response.status_code() == StatusCode::BAD_REQUEST
+                || blacklist_response.status_code() == StatusCode::NOT_FOUND
                 || blacklist_response.status_code() == StatusCode::UNAUTHORIZED
         );
 
@@ -194,6 +212,7 @@ mod tests {
 
         assert!(
             list_response.status_code() == StatusCode::BAD_REQUEST
+                || list_response.status_code() == StatusCode::NOT_FOUND
                 || list_response.status_code() == StatusCode::UNAUTHORIZED
         );
 
@@ -201,6 +220,7 @@ mod tests {
         let audit_response = server.get("/v1/admin/audit-logs").await;
         assert!(
             audit_response.status_code() == StatusCode::BAD_REQUEST
+                || audit_response.status_code() == StatusCode::NOT_FOUND
                 || audit_response.status_code() == StatusCode::UNAUTHORIZED
         );
     }

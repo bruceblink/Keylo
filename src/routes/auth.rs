@@ -1,8 +1,8 @@
 use crate::handlers::user::register_user;
 use crate::handlers::{
     auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client, auth_get_audit_logs,
-    auth_get_blacklisted_tokens, auth_introspect, auth_list_clients, auth_logout, auth_me,
-    auth_refresh, auth_rotate_client_secret, auth_token, auth_update_client,
+    auth_get_blacklisted_tokens, auth_introspect, auth_jwks, auth_list_clients, auth_logout,
+    auth_me, auth_refresh, auth_rotate_client_secret, auth_token, auth_update_client,
 };
 use crate::state::AppState;
 use axum::routing::{get, post, put};
@@ -41,6 +41,7 @@ pub fn service_integration_routes() -> Router<AppState> {
 
 pub fn public_router() -> Router<AppState> {
     Router::new()
+        .route("/.well-known/jwks.json", get(auth_jwks))
         .route("/v1/auth/register", post(register_user))
         .route("/v1/auth/token", post(auth_token))
         .route("/v1/auth/refresh", post(auth_refresh))

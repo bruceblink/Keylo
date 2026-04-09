@@ -2,7 +2,7 @@
 //!
 //! Run with:
 //! ```not_rust
-//! JWT_SECRET=your-secret-key cargo run
+//! JWT_PRIVATE_KEY_PATH=./keys/private.pem JWT_PUBLIC_KEY_PATH=./keys/public.pem cargo run
 //! DATABASE_URL=postgres://user:password@localhost/keylo cargo run
 //! ```
 //!
@@ -84,13 +84,18 @@ async fn main() {
     tracing::info!("Environment: {}", config.environment);
     tracing::info!("Server: {}", config.server_url());
 
-    // Try to initialize the app with database, fallback to in-memory if DB is not available
+    // Try to initialize the app with database. In development we can fall back to in-memory mode,
+    // but production must fail fast if startup requirements are not satisfied.
     let app = match startup::init_app_router_with_db(config.clone(), &config.database_url).await {
         Ok(app) => {
             tracing::info!("Database initialized successfully");
             app
         }
         Err(e) => {
+            if config.is_production() {
+                panic!("Failed to initialize Keylo in production: {}", e);
+            }
+
             tracing::warn!(
                 "Failed to initialize database: {}. Using in-memory mode.",
                 e
