@@ -1,4 +1,4 @@
-# Keylo
+# Keylo v1.0.0
 
 **Keylo** 是一个轻量、可扩展的 **统一认证与授权服务**（Auth Service），为你的多服务系统提供统一的 JWT 签发、Session 管理和 OAuth 支持。
 
@@ -102,6 +102,14 @@ cargo tarpaulin --out Html
 ### 第三方集成
 
 第三方系统对接 Keylo 的登录流程、Token 内省和服务接入方式见 [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)。
+
+### 生产部署与发布说明
+
+Keylo 1.0 的生产部署要求、发布能力边界和密钥轮换建议见以下文档：
+
+- [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
+- [docs/RELEASE_1_0.md](docs/RELEASE_1_0.md)
+- [docs/KEY_ROTATION.md](docs/KEY_ROTATION.md)
 
 ---
 
