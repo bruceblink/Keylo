@@ -6,17 +6,15 @@
 
 ## 🚀 特性
 
-* ✅ JWT 签发与验证（Access Token + 可扩展 Refresh Token）
-* ✅ `/v1/auth/token`、`/v1/auth/logout`、`/v1/auth/me` 核心 API
-* ✅ 支持 GitHub OAuth 登录（可扩展其他 OAuth 提供商）
-* ✅ **RBAC 角色-based访问控制系统**
-* ✅ 高可维护模块化架构（routes / handlers / db / models / utils）
-* ✅ 可与现有数据库表兼容，实现登录互通
-* ✅ 使用 **Axum 0.8 + Tokio** 异步高性能框架
-* ✅ 可轻松扩展多客户端、多角色、多服务权限控制
-* ✅ PostgreSQL 数据库集成，支持自动迁移
-* ✅ 完整的错误处理和日志系统
-* ✅ Docker 容器化支持
+* ✅ 基于 RS256 的 JWT 签发与验证，内置 JWKS 公钥发布
+* ✅ `/v1/auth/token`、`/v1/auth/refresh`、`/v1/auth/logout`、`/v1/auth/me` 核心 API
+* ✅ 用户 Token 内省与服务 Token 内省
+* ✅ 服务凭证模式与 `service_access` Token
+* ✅ GitHub OAuth 登录，可扩展其他 OAuth 提供商
+* ✅ RBAC、管理员客户端、审计日志与黑名单机制
+* ✅ PostgreSQL 自动迁移，Redis 可选增强限流、锁定和 OAuth state
+* ✅ 使用 Axum 0.8 + Tokio 的模块化 Rust 服务架构
+* ✅ Docker / GHCR 镜像发布支持
 
 ---
 
@@ -183,7 +181,7 @@ RUST_LOG=keylo=debug cargo run
 
 ### 获取 Token
 
-使用客户端凭证获取 token（请使用你在数据库或环境中配置的客户端）:
+使用用户名密码或客户端凭证获取 Access Token。下面示例展示管理员客户端登录：
 
 ```bash
 curl -X POST http://127.0.0.1:2345/v1/auth/token \
@@ -196,8 +194,18 @@ curl -X POST http://127.0.0.1:2345/v1/auth/token \
 ```json
 {
   "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImtleWxvLXJzMjU2LTEiLCJ0eXAiOiJKV1QifQ...",
-  "token_type": "Bearer"
+  "refresh_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImtleWxvLXJzMjU2LTEiLCJ0eXAiOiJKV1QifQ...",
+  "token_type": "Bearer",
+  "expires_in": 900
 }
+```
+
+### 用户注册
+
+```bash
+curl -X POST http://127.0.0.1:2345/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","email":"alice@example.com","password":"change-me-123"}'
 ```
 
 ### 获取 JWKS 公钥集合
@@ -264,10 +272,12 @@ curl -H "Authorization: Bearer <access_token>" \
 
 ### RBAC 角色和权限管理
 
+以下接口属于管理员接口，调用时应使用带 `admin` scope 的 `admin_token`。
+
 #### 创建角色
 
 ```bash
-curl -X POST -H "Authorization: Bearer <access_token>" \
+curl -X POST -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:2345/api/rbac/roles \
   -d '{"name": "admin", "description": "Administrator role"}'
@@ -276,7 +286,7 @@ curl -X POST -H "Authorization: Bearer <access_token>" \
 #### 创建权限
 
 ```bash
-curl -X POST -H "Authorization: Bearer <access_token>" \
+curl -X POST -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:2345/api/rbac/permissions \
   -d '{"name": "user.manage", "description": "Manage users permission"}'
@@ -285,7 +295,7 @@ curl -X POST -H "Authorization: Bearer <access_token>" \
 #### 为用户分配角色
 
 ```bash
-curl -X POST -H "Authorization: Bearer <access_token>" \
+curl -X POST -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:2345/api/rbac/users/{user_id}/roles \
   -d '{"role_id": "role-uuid"}'
@@ -294,7 +304,7 @@ curl -X POST -H "Authorization: Bearer <access_token>" \
 #### 检查用户权限
 
 ```bash
-curl -H "Authorization: Bearer <access_token>" \
+curl -H "Authorization: Bearer <admin_token>" \
   http://127.0.0.1:2345/api/rbac/users/{user_id}/check-permission/user.manage
 ```
 
@@ -342,7 +352,7 @@ curl -L http://127.0.0.1:2345/v1/auth/oauth/login/github
 #### 关联OAuth账户
 
 ```bash
-curl -X POST -H "Authorization: Bearer <access_token>" \
+curl -X POST -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:2345/api/oauth/link \
   -d '{
@@ -355,7 +365,7 @@ curl -X POST -H "Authorization: Bearer <access_token>" \
 #### 获取用户的OAuth账户
 
 ```bash
-curl -H "Authorization: Bearer <access_token>" \
+curl -H "Authorization: Bearer <admin_token>" \
   http://127.0.0.1:2345/api/oauth/accounts
 ```
 
@@ -466,11 +476,7 @@ Keylo 1.0 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 暴
 
 ## 🗄️ 数据库迁移
 
-服务启动时会自动创建必要的表：
-
-* `clients` - 客户端信息存储
-* `users` - 用户信息存储
-* `sessions` - 会话管理
+服务启动时会自动执行 `migrations/` 下的 SQLx 迁移，并初始化默认客户端。1.0 版本的迁移覆盖用户、客户端、刷新 Token、OAuth、RBAC、审计日志和服务客户端等核心表结构。
 
 ---
 
@@ -488,73 +494,85 @@ cargo test -- --nocapture --test-threads=1
 ```
 
 ---
-
 ## 🐳 使用 Docker 部署
 
-### 构建镜像
+### 使用 GitHub Container Registry 镜像
 
 ```bash
-docker build -t keylo:latest .
+docker pull ghcr.io/bruceblink/keylo:v1.0.1
 ```
 
 ### 运行容器
 
 ```bash
-docker run -p 2345:2345 \
-  -e JWT_SECRET="your-secret" \
-  -e DATABASE_URL="postgres://user:password@db:5432/keylo" \
-  keylo:latest
+docker run --rm -p 2345:2345 \
+  -v $(pwd)/keys:/app/keys:ro \
+  -e ENVIRONMENT=production \
+  -e JWT_ISSUER=keylo \
+  -e JWT_KEY_ID=keylo-rs256-1 \
+  -e JWT_PRIVATE_KEY_PATH=/app/keys/private.pem \
+  -e JWT_PUBLIC_KEY_PATH=/app/keys/public.pem \
+  -e DATABASE_URL="postgres://keylo_user:keylo_password@db:5432/keylo" \
+  -e ADMIN_CLIENT_ID="cli-admin-root" \
+  -e ADMIN_CLIENT_SECRET="replace-with-strong-admin-secret" \
+  -e REDIS_URL="redis://redis:6379" \
+  ghcr.io/bruceblink/keylo:v1.0.1
 ```
 
-### Docker Compose 完整部署
+### 本地构建镜像
+
+```bash
+docker build -t keylo:latest .
+```
+
+### Docker Compose 开发依赖
 
 ```bash
 docker-compose up -d
-# 检查状态
 docker-compose ps
-# 查看日志
-docker-compose logs -f keylo
+docker-compose logs -f postgres
 ```
 
----
-
-## ✨ 核心功能
-
-### 1. JWT 认证
-
-* 使用 HS256 对称加密
-* 支持自定义 Claim 字段
-* 支持 Token 过期时间设置
-* 支持 JTI（JWT ID）用于 Token 吊销
-
-### 2. 客户端管理
-
-* 支持多客户端凭证
-* 支持从数据库动态加载客户端
-* 支持客户端激活/停用
-
-### 3. Session 管理
-
-* 自动创建 Session 记录
-* 支持 Session 撤销
-* 支持 Session 过期检查
-
-### 4. 错误处理
-
-* 统一的错误响应格式
-* 详细的错误代码和信息
-* 适当的 HTTP 状态码
+如果你希望在容器中直接运行 Keylo，请确保同时提供 PostgreSQL、Redis 和 RSA 密钥文件；生产环境不再支持 `JWT_SECRET` 这种共享密钥模式。
 
 ---
 
-## 🚦 下一步计划
+## ✨ 1.0 核心能力
 
-* [x] 审计日志增加更多事件（RBAC 变更、OAuth 绑定/解绑）
-* [x] 将限流、锁定、OAuth state 全量迁移到 Redis（生产建议）
-* [x] 管理员凭证轮换策略与自动失效
-* [x] 管理后台 API
-* [ ] GraphQL 支持
-* [ ] 第三方集成文档
+### 1. 统一认证
+
+* 支持用户登录、客户端登录和用户注册
+* 支持 Access Token / Refresh Token
+* 支持 `me`、登出和黑名单
+
+### 2. 服务间鉴权
+
+* 支持服务客户端注册与密钥轮换
+* 支持 `service_access` Token 签发
+* 支持服务 Token 内省与用户 Token 内省
+
+### 3. 第三方集成
+
+* 默认使用 RS256 与 JWKS
+* 下游系统可本地验签
+* 高敏接口可叠加内省做实时吊销校验
+
+### 4. 运维与安全基线
+
+* 启动时自动执行 SQLx 迁移
+* 生产环境强制要求显式 RSA 密钥、管理员客户端和 Redis
+* 支持审计日志、限流、登录锁定和 OAuth state 管理
+
+---
+
+## 🚦 1.x 后续方向
+
+以下内容属于 1.x 后续增强，不影响 1.0 正式使用：
+
+* 多把 RSA 密钥并行发布
+* 自动密钥轮换流程
+* 更细粒度的健康检查与 readiness 探针
+* 更完善的网关接入样例
 
 ---
 
@@ -562,56 +580,42 @@ docker-compose logs -f keylo
 
 ### 添加新的认证 Provider
 
-在 `src/handlers/` 中创建新的 handler，然后在 `src/routes/auth.rs` 中注册路由。
+在 `src/routes/oauth.rs` 和对应 handler 中注册新的 OAuth 提供商逻辑。
 
 ### 自定义 Claims
 
-编辑 `src/models/jwt.rs` 中的 `Claims` 结构体，添加所需的字段。
+编辑 `src/models/jwt.rs` 中的 Claims 结构与签发逻辑，并同步评估内省与下游验签兼容性。
 
 ### 数据库操作
 
-在 `src/db/mod.rs` 中添加新的数据库查询函数。
+新增表结构时，优先在 `migrations/` 中追加 SQLx 迁移，再更新 `src/db/` 下的数据访问层。
 
 ---
 
 ## ⚠️ 安全建议
 
 1. **生产环境**:
-   * 生成强大的 `JWT_SECRET` (至少 32 字符)
-   * 使用 HTTPS 而不是 HTTP
-   * 设置 `ENVIRONMENT=production`
-   * 配置可连通的 `REDIS_URL`（生产环境必需）
-   * 启用日志审计
+  * 使用 RSA 2048 位或更高密钥
+  * 私钥只保留在 Keylo 服务端
+  * 设置 `ENVIRONMENT=production`
+  * 显式配置 `ADMIN_CLIENT_ID`、`ADMIN_CLIENT_SECRET` 和 `REDIS_URL`
+  * 为外部访问启用 HTTPS 和反向代理
 
-2. **数据库**:
-   * 使用强数据库密码
-   * 定期备份
-   * 启用 SSL 连接
+2. **下游系统**:
+  * 优先通过 JWKS 获取公钥并做本地验签
+  * 在 `kid` 不匹配或验签失败时刷新 JWKS 缓存
+  * 对强实时吊销场景补充调用内省接口
 
-3. **Token**:
-   * 合理设置过期时间
-   * 实现 Token 黑名单机制
-   * 定期轮换密钥
+3. **数据库与运行环境**:
+  * 使用强数据库密码并限制网络暴露
+  * 定期备份 PostgreSQL 数据
+  * 不要在生产环境启用开发密钥或数据库失败回退模式
 
 ---
 
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request！
-
-```bash
-# Fork 项目
-# 创建特性分支
-git checkout -b feature/your-feature
-
-# 提交更改
-git commit -m "Add your feature"
-
-# 推送分支
-git push origin feature/your-feature
-
-# 创建 Pull Request
-```
+欢迎提交 Issue 和 Pull Request，详细开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ---
 
@@ -628,4 +632,4 @@ MIT License - 查看 [LICENSE](LICENSE) 文件
 
 ---
 
-**Last Updated**: 2026年04月05日
+**Last Updated**: 2026年04月09日
