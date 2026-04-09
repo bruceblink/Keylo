@@ -3,8 +3,22 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ main, develop ]
+    paths-ignore:
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'DEVELOPMENT.md'
+      - 'IMPROVEMENTS.md'
+      - 'docs/**'
+      - '**/*.md'
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'DEVELOPMENT.md'
+      - 'IMPROVEMENTS.md'
+      - 'docs/**'
+      - '**/*.md'
 
 env:
   CARGO_TERM_COLOR: always
