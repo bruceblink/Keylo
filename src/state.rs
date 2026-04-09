@@ -3,7 +3,7 @@ use crate::models::Keys;
 use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
@@ -42,14 +42,6 @@ impl Default for AppState {
     }
 }
 
-pub static KEYS: LazyLock<Keys> = LazyLock::new(|| {
-    crate::config::load_dotenv();
-
-    // 从环境变量读取 JWT secret
-    let secret = std::env::var("JWT_SECRET").unwrap_or("my-jwt-secret".to_string());
-    Keys::new(secret.as_bytes())
-});
-
 impl AppState {
     fn redis_key(&self, suffix: &str) -> String {
         format!("{}:{}", self.config.redis_key_prefix, suffix)
@@ -66,9 +58,11 @@ impl AppState {
             .redis_url
             .as_deref()
             .and_then(|url| redis::Client::open(url).ok());
+        let jwt_keys = Keys::from_config(&config)
+            .unwrap_or_else(|err| panic!("Failed to initialize JWT keys: {}", err));
 
         Self {
-            jwt_keys: KEYS.clone(),
+            jwt_keys,
             clients: Arc::new(clients),
             audiences: Arc::new(audiences),
             db,

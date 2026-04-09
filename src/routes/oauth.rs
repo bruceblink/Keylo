@@ -462,7 +462,7 @@ async fn oauth_callback(
     let now = chrono::Utc::now().timestamp();
     let access_claims = crate::models::Claims {
         sub: user_id.clone(),
-        iss: "keylo".to_string(),
+        iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["read".into(), "write".into()],
         iat: now,
@@ -471,12 +471,7 @@ async fn oauth_callback(
         token_type: "access".to_string(),
     };
 
-    let token = jsonwebtoken::encode(
-        &jsonwebtoken::Header::default(),
-        &access_claims,
-        &state.jwt_keys.encoding,
-    )
-    .map_err(|e| {
+    let token = state.jwt_keys.sign_token(&access_claims).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({

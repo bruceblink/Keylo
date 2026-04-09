@@ -8,7 +8,6 @@ use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
-use jsonwebtoken::{encode, Header};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -264,7 +263,7 @@ pub fn mint_service_token(
 
     let claims = ServiceClaims {
         sub: format!("service:{}", service_id),
-        iss: "keylo".to_string(),
+        iss: state.config.jwt_issuer.clone(),
         aud: audience.to_string(),
         scope: scopes.to_vec(),
         token_type: "service_access".to_string(),
@@ -273,8 +272,7 @@ pub fn mint_service_token(
         jti: Uuid::new_v4().to_string(),
     };
 
-    encode(&Header::default(), &claims, &state.jwt_keys.encoding)
-        .map_err(|_| AuthError::TokenCreation)
+    state.jwt_keys.sign_token(&claims)
 }
 
 /// 解码并验证服务 Token（不检查 aud，允许任意 audience）

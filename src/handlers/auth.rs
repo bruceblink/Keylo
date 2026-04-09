@@ -15,7 +15,6 @@ use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
 use bcrypt::verify;
 use chrono::Utc;
-use jsonwebtoken::{encode, Header};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -202,7 +201,7 @@ pub async fn auth_token(
     // Create access token claims
     let access_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
-        iss: "keylo".to_string(),
+        iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, is_admin_client),
         iat: now,
@@ -211,15 +210,12 @@ pub async fn auth_token(
         token_type: "access".to_string(),
     };
 
-    // Create refresh token claims
-    // Create the authorization token
-    let access_token = encode(&Header::default(), &access_claims, &state.jwt_keys.encoding)
-        .map_err(|_| AuthError::TokenCreation)?;
+    let access_token = state.jwt_keys.sign_token(&access_claims)?;
 
     let refresh_token = if !is_user_valid {
         let refresh_claims = Claims {
             sub: format!("{}:{}", subject_prefix, payload.client_id),
-            iss: "keylo".to_string(),
+            iss: state.config.jwt_issuer.clone(),
             aud: "admin-backend".to_string(),
             scope: vec!["refresh".into()],
             iat: now,
@@ -228,12 +224,7 @@ pub async fn auth_token(
             token_type: "refresh".to_string(),
         };
 
-        let token = encode(
-            &Header::default(),
-            &refresh_claims,
-            &state.jwt_keys.encoding,
-        )
-        .map_err(|_| AuthError::TokenCreation)?;
+        let token = state.jwt_keys.sign_token(&refresh_claims)?;
 
         crate::db::create_refresh_token(
             db,
@@ -620,6 +611,10 @@ pub async fn auth_introspect(
     }
 }
 
+pub async fn auth_jwks(State(state): State<AppState>) -> Json<crate::models::JwksDocument> {
+    Json(state.jwt_keys.jwks())
+}
+
 pub async fn auth_refresh(
     State(state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
@@ -650,7 +645,7 @@ pub async fn auth_refresh(
     // Create new access token claims
     let access_claims = Claims {
         sub: format!("client:{}", client_id),
-        iss: "keylo".to_string(),
+        iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope("client", is_admin_client),
         iat: now,
@@ -662,7 +657,7 @@ pub async fn auth_refresh(
     // Create new refresh token claims
     let new_refresh_claims = Claims {
         sub: format!("client:{}", client_id),
-        iss: "keylo".to_string(),
+        iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
         iat: now,
@@ -672,15 +667,9 @@ pub async fn auth_refresh(
     };
 
     // Create new tokens
-    let access_token = encode(&Header::default(), &access_claims, &state.jwt_keys.encoding)
-        .map_err(|_| AuthError::TokenCreation)?;
+    let access_token = state.jwt_keys.sign_token(&access_claims)?;
 
-    let new_refresh_token = encode(
-        &Header::default(),
-        &new_refresh_claims,
-        &state.jwt_keys.encoding,
-    )
-    .map_err(|_| AuthError::TokenCreation)?;
+    let new_refresh_token = state.jwt_keys.sign_token(&new_refresh_claims)?;
 
     // Revoke old refresh token
     if let Some(db) = &state.db {
