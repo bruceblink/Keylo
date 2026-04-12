@@ -43,6 +43,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_liveness_endpoint() {
+        let server = setup_test_server().await;
+
+        let response = server.get("/healthz").await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["service"], "keylo");
+    }
+
+    #[tokio::test]
+    async fn test_readiness_endpoint() {
+        let server = setup_test_server().await;
+
+        let response = server.get("/readyz").await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["service"], "keylo");
+        assert!(body["checks"]["database"].is_string());
+        assert!(body["checks"]["redis"].is_string());
+    }
+
+    #[tokio::test]
     async fn test_jwks_endpoint() {
         let server = setup_test_server().await;
 

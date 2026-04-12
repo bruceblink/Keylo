@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::handlers::{index, protected};
+use crate::handlers::{healthz, index, protected, readyz};
 use crate::middleware::auth;
 use crate::routes;
 use crate::state::AppState;
@@ -13,6 +13,8 @@ pub fn init_app_router() -> Router {
     let app_state = AppState::default();
     Router::new()
         .merge(routes::auth::public_router())
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
@@ -23,6 +25,8 @@ pub fn init_app_router_with_config(config: Config) -> Router {
     let app_state = AppState::new(config, None);
     Router::new()
         .merge(routes::auth::public_router())
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes())
         .route("/", get(index))
         .route("/protected", get(protected))
@@ -78,6 +82,8 @@ pub async fn init_app_router_with_db(
     let public_routes = Router::new()
         .merge(routes::auth::public_router())
         .merge(routes::service::service_public_routes())
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/", get(index))
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
 
