@@ -220,7 +220,6 @@ GET /.well-known/jwks.json
   ]
 }
 ```
-```
 
 ### 5. 内省服务 Token
 

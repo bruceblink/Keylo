@@ -105,9 +105,9 @@ cargo tarpaulin --out Html
 
 Keylo 1.0 的生产部署要求、发布能力边界和密钥轮换建议见以下文档：
 
-- [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
-- [docs/RELEASE_1_0.md](docs/RELEASE_1_0.md)
-- [docs/KEY_ROTATION.md](docs/KEY_ROTATION.md)
+* [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
+* [docs/RELEASE_1_0.md](docs/RELEASE_1_0.md)
+* [docs/KEY_ROTATION.md](docs/KEY_ROTATION.md)
 
 ---
 
@@ -468,9 +468,23 @@ Cargo.toml          # 项目依赖配置
 
 Keylo 1.0 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 暴露公开验签密钥集合。
 
-- 生产环境不要使用内置开发密钥
-- 下游系统推荐优先使用 JWKS 做本地验签
-- 需要统一吊销控制时，继续结合 `/v1/auth/introspect` 和 `/v1/service/introspect`
+* 生产环境不要使用内置开发密钥
+* 下游系统推荐优先使用 JWKS 做本地验签
+* 需要统一吊销控制时，继续结合 `/v1/auth/introspect` 和 `/v1/service/introspect`
+
+## 🩺 健康检查
+
+Keylo 提供标准探针端点，便于容器编排和网关探活：
+
+* `GET /healthz`：进程存活检查（liveness）
+* `GET /readyz`：依赖就绪检查（readiness），会返回数据库/Redis 的检查状态
+
+示例：
+
+```bash
+curl http://127.0.0.1:2345/healthz
+curl http://127.0.0.1:2345/readyz
+```
 
 ---
 
@@ -494,6 +508,7 @@ cargo test -- --nocapture --test-threads=1
 ```
 
 ---
+
 ## 🐳 使用 Docker 部署
 
 ### 使用 GitHub Container Registry 镜像
@@ -595,21 +610,24 @@ docker-compose logs -f postgres
 ## ⚠️ 安全建议
 
 1. **生产环境**:
-  * 使用 RSA 2048 位或更高密钥
-  * 私钥只保留在 Keylo 服务端
-  * 设置 `ENVIRONMENT=production`
-  * 显式配置 `ADMIN_CLIENT_ID`、`ADMIN_CLIENT_SECRET` 和 `REDIS_URL`
-  * 为外部访问启用 HTTPS 和反向代理
 
-2. **下游系统**:
-  * 优先通过 JWKS 获取公钥并做本地验签
-  * 在 `kid` 不匹配或验签失败时刷新 JWKS 缓存
-  * 对强实时吊销场景补充调用内省接口
+* 使用 RSA 2048 位或更高密钥
+* 私钥只保留在 Keylo 服务端
+* 设置 `ENVIRONMENT=production`
+* 显式配置 `ADMIN_CLIENT_ID`、`ADMIN_CLIENT_SECRET` 和 `REDIS_URL`
+* 为外部访问启用 HTTPS 和反向代理
 
-3. **数据库与运行环境**:
-  * 使用强数据库密码并限制网络暴露
-  * 定期备份 PostgreSQL 数据
-  * 不要在生产环境启用开发密钥或数据库失败回退模式
+1. **下游系统**:
+
+* 优先通过 JWKS 获取公钥并做本地验签
+* 在 `kid` 不匹配或验签失败时刷新 JWKS 缓存
+* 对强实时吊销场景补充调用内省接口
+
+1. **数据库与运行环境**:
+
+* 使用强数据库密码并限制网络暴露
+* 定期备份 PostgreSQL 数据
+* 不要在生产环境启用开发密钥或数据库失败回退模式
 
 ---
 
