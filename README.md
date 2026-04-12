@@ -101,6 +101,8 @@ cargo tarpaulin --out Html
 
 第三方系统对接 Keylo 的登录流程、Token 内省和服务接入方式见 [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)。
 
+如果你是以 AgileBoot 这类 Spring Boot 管理后台接入 Keylo，可进一步参考 [docs/AGILEBOOT_INTEGRATION.md](docs/AGILEBOOT_INTEGRATION.md)。
+
 ### 生产部署与发布说明
 
 Keylo 1.0 的生产部署要求、发布能力边界和密钥轮换建议见以下文档：
@@ -246,6 +248,46 @@ curl -X POST http://127.0.0.1:2345/v1/auth/introspect \
   -H "Content-Type: application/json" \
   -d '{"token":"<user_access_token>"}'
 ```
+
+### 服务间调用白名单配置
+
+Keylo 当前采用“服务账号 + scope 白名单 + audience 白名单”的模式控制服务间调用，而不是单独维护一张调用拓扑表。
+
+你需要配置两类约束：
+
+* `allowed_scopes`：该服务最多能申请哪些调用权限
+* `allowed_audiences`：该服务最多能面向哪些目标服务申请 Token
+
+示例：为 `agileboot-admin` 注册一个只能访问 `admin-backend` 的服务账号：
+
+```bash
+curl -X POST http://127.0.0.1:2345/v1/admin/services \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service_id": "agileboot-admin",
+    "service_secret": "replace-with-strong-secret",
+    "name": "AgileBoot Admin",
+    "description": "AgileBoot 管理平台服务账号",
+    "allowed_scopes": ["user.read", "user.write"],
+    "allowed_audiences": ["admin-backend"]
+  }'
+```
+
+随后该服务只能申请被允许的 scope/audience 子集：
+
+```bash
+curl -X POST http://127.0.0.1:2345/v1/service/token \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service_id": "agileboot-admin",
+    "service_secret": "replace-with-strong-secret",
+    "audience": "admin-backend",
+    "scope": "user.read"
+  }'
+```
+
+如果请求超出白名单范围，Keylo 会拒绝签发服务 Token。
 
 ### 登出
 
