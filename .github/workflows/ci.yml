@@ -10,6 +10,8 @@ on:
       - 'IMPROVEMENTS.md'
       - 'docs/**'
       - '**/*.md'
+      - '.dockerignore'
+      - '.gitignore'
   pull_request:
     branches: [ main, develop ]
     paths-ignore:
@@ -19,6 +21,8 @@ on:
       - 'IMPROVEMENTS.md'
       - 'docs/**'
       - '**/*.md'
+      - '.dockerignore'
+      - '.gitignore'
 
 env:
   CARGO_TERM_COLOR: always
