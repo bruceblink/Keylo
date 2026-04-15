@@ -4,7 +4,7 @@ services:
   # PostgreSQL database
   postgres:
     image: postgres:17-alpine
-    container_name: keylo_postgres
+    container_name: keylo-postgres
     environment:
       POSTGRES_USER: keylo_user
       POSTGRES_PASSWORD: keylo_password
@@ -61,7 +61,7 @@ services:
     networks:
       - keylo_network
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
