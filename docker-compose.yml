@@ -37,6 +37,35 @@ services:
     networks:
       - keylo_network
 
+  # keylo
+  # ─────────────────────────────────────────
+  keylo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: keylo:latest
+    container_name: keylo-service
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+      ENVIRONMENT: production
+      DATABASE_URL: postgres://keylo_user:keylo_password@postgres:5432/keylo
+      SERVER_ADDR: 127.0.0.1
+      SERVER_PORT: ${SERVER_PORT:-2345}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-keylo}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-12345}
+      RUST_LOG: keylo=debug,axum=info
+    ports:
+      - "${SERVER_PORT:-2345}:2345"
+    networks:
+      - keylo_network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
