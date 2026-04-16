@@ -58,10 +58,13 @@ async fn audit_event(
 }
 
 fn extract_client_ip(headers: &HeaderMap) -> String {
+    // Only trust X-Forwarded-For / X-Real-IP in front of a reverse proxy.
+    // Validate that the extracted value is a syntactically valid IP address
+    // to prevent header-injection attacks on rate-limiting and audit logs.
     if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         if let Some(first) = value.split(',').next() {
             let ip = first.trim();
-            if !ip.is_empty() {
+            if !ip.is_empty() && ip.parse::<std::net::IpAddr>().is_ok() {
                 return ip.to_string();
             }
         }
@@ -69,7 +72,7 @@ fn extract_client_ip(headers: &HeaderMap) -> String {
 
     if let Some(value) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
         let ip = value.trim();
-        if !ip.is_empty() {
+        if !ip.is_empty() && ip.parse::<std::net::IpAddr>().is_ok() {
             return ip.to_string();
         }
     }
