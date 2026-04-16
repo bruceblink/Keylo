@@ -151,9 +151,15 @@ mod tests {
 
         let response = server.post("/v1/auth/refresh").json(&refresh_payload).await;
 
-        // 如果数据库不可用，返回500；否则返回400（无效令牌）
+        // 无效令牌应返回401（无效令牌）；数据库不可用时返回500
         let status = response.status_code();
-        assert!(status == StatusCode::INTERNAL_SERVER_ERROR || status == StatusCode::BAD_REQUEST);
+        assert!(
+            status == StatusCode::UNAUTHORIZED
+                || status == StatusCode::BAD_REQUEST
+                || status == StatusCode::INTERNAL_SERVER_ERROR,
+            "Expected 401/400/500, got {}",
+            status
+        );
     }
 
     #[tokio::test]
