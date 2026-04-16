@@ -132,12 +132,38 @@ async fn run_third_party_import(
     dry_run: bool,
     actor: Option<&str>,
 ) -> ThirdPartyUserImportOutput {
+    const MAX_IMPORT_BATCH_SIZE: usize = 10_000;
+
     let total = users.len();
     let mut results: Vec<ThirdPartyUserImportResultItem> = Vec::with_capacity(users.len());
     let mut created = 0usize;
     let mut updated = 0usize;
     let mut linked = 0usize;
     let mut failed = 0usize;
+
+    if total > MAX_IMPORT_BATCH_SIZE {
+        return ThirdPartyUserImportOutput {
+            provider: provider.to_string(),
+            dry_run,
+            summary: ThirdPartyUserImportSummary {
+                total,
+                created: 0,
+                updated: 0,
+                linked: 0,
+                failed: total,
+            },
+            results: vec![ThirdPartyUserImportResultItem {
+                external_user_id: String::new(),
+                user_id: None,
+                status: "failed".to_string(),
+                error_code: Some(MigrationErrorCode::InvalidInput),
+                message: Some(format!(
+                    "Batch too large: {} items exceed maximum of {}",
+                    total, MAX_IMPORT_BATCH_SIZE
+                )),
+            }],
+        };
+    }
 
     for item in users {
         let external_user_id = item.external_user_id.trim().to_string();
@@ -237,7 +263,13 @@ async fn run_third_party_import(
                     match create_user(db, &username, &email, item.password.as_deref()).await {
                         Ok(new_user) => {
                             if !active {
-                                let _ = set_user_active(db, &new_user.id, false).await;
+                                if let Err(e) = set_user_active(db, &new_user.id, false).await {
+                                    tracing::warn!(
+                                        "import: failed to deactivate newly created user {}: {}",
+                                        new_user.id,
+                                        e
+                                    );
+                                }
                             }
                             created += 1;
                             (
@@ -276,7 +308,7 @@ async fn run_third_party_import(
             match get_user_by_email(db, &email).await {
                 Ok(Some(user)) => {
                     linked += 1;
-                    let _ = update_user(
+                    if let Err(e) = update_user(
                         db,
                         &user.id,
                         Some(&username),
@@ -284,13 +316,16 @@ async fn run_third_party_import(
                         item.password.as_deref(),
                         Some(active),
                     )
-                    .await;
+                    .await
+                    {
+                        tracing::warn!("import: failed to update linked user {}: {}", user.id, e);
+                    }
                     (user.clone(), "linked".to_string(), Some(user.id.clone()))
                 }
                 Ok(None) => match get_user_by_username(db, &username).await {
                     Ok(Some(user)) => {
                         linked += 1;
-                        let _ = update_user(
+                        if let Err(e) = update_user(
                             db,
                             &user.id,
                             Some(&username),
@@ -298,14 +333,23 @@ async fn run_third_party_import(
                             item.password.as_deref(),
                             Some(active),
                         )
-                        .await;
+                        .await
+                        {
+                            tracing::warn!(
+                                "import: failed to update linked user {}: {}",
+                                user.id,
+                                e
+                            );
+                        }
                         (user.clone(), "linked".to_string(), Some(user.id.clone()))
                     }
                     Ok(None) => {
                         match create_user(db, &username, &email, item.password.as_deref()).await {
                             Ok(user) => {
                                 if !active {
-                                    let _ = set_user_active(db, &user.id, false).await;
+                                    if let Err(e) = set_user_active(db, &user.id, false).await {
+                                        tracing::warn!("import: failed to deactivate newly created user {}: {}", user.id, e);
+                                    }
                                 }
                                 created += 1;
                                 (user.clone(), "created".to_string(), Some(user.id.clone()))
