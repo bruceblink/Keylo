@@ -463,7 +463,7 @@ pub async fn blacklist_token(
          VALUES ($1, $2, $3, to_timestamp($4))
          ON CONFLICT (token) DO NOTHING",
     )
-    .bind(format!("bl_{}", token.get(..16).unwrap_or("unknown")))
+    .bind(Uuid::new_v4().to_string())
     .bind(token)
     .bind(reason)
     .bind(expires_at)
