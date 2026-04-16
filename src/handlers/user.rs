@@ -132,6 +132,7 @@ async fn run_third_party_import(
     dry_run: bool,
     actor: Option<&str>,
 ) -> ThirdPartyUserImportOutput {
+    let total = users.len();
     let mut results: Vec<ThirdPartyUserImportResultItem> = Vec::with_capacity(users.len());
     let mut created = 0usize;
     let mut updated = 0usize;
@@ -369,8 +370,34 @@ async fn run_third_party_import(
         let mut role_assignment_failed = false;
         if let Some(roles) = item.roles {
             for role_name in roles {
-                if let Ok(Some(role)) = get_role_by_name(db, role_name.trim()).await {
-                    if let Err(e) = assign_role_to_user(db, &resolved_user.id, &role.id).await {
+                match get_role_by_name(db, role_name.trim()).await {
+                    Ok(Some(role)) => {
+                        if let Err(e) = assign_role_to_user(db, &resolved_user.id, &role.id).await {
+                            failed += 1;
+                            role_assignment_failed = true;
+                            push_failed_result(
+                                &mut results,
+                                external_user_id.clone(),
+                                Some(resolved_user.id.clone()),
+                                MigrationErrorCode::RoleAssignmentFailed,
+                                format!("failed to assign role: {e}"),
+                            );
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        failed += 1;
+                        role_assignment_failed = true;
+                        push_failed_result(
+                            &mut results,
+                            external_user_id.clone(),
+                            Some(resolved_user.id.clone()),
+                            MigrationErrorCode::InvalidInput,
+                            format!("role not found: {}", role_name.trim()),
+                        );
+                        break;
+                    }
+                    Err(e) => {
                         failed += 1;
                         role_assignment_failed = true;
                         push_failed_result(
@@ -378,8 +405,9 @@ async fn run_third_party_import(
                             external_user_id.clone(),
                             Some(resolved_user.id.clone()),
                             MigrationErrorCode::RoleAssignmentFailed,
-                            format!("failed to assign role: {e}"),
+                            format!("failed to query role: {e}"),
                         );
+                        break;
                     }
                 }
             }
@@ -399,7 +427,7 @@ async fn run_third_party_import(
     }
 
     let summary = ThirdPartyUserImportSummary {
-        total: results.len(),
+        total,
         created,
         updated,
         linked,
@@ -435,12 +463,10 @@ pub async fn import_third_party_users(
     let db = match &state.db {
         Some(db) => db,
         None => {
-            return Err((
+            return Err(migration_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "success": false,
-                    "error": "Database not available",
-                })),
+                MigrationErrorCode::InternalError,
+                "Database not available",
             ));
         }
     };
@@ -724,7 +750,7 @@ pub async fn get_third_party_import_job_status(
             StatusCode::NOT_FOUND,
             Json(json!({
                 "success": false,
-                "error_code": "not_found",
+                "error_code": MigrationErrorCode::NotFound,
                 "error": "job not found"
             })),
         )

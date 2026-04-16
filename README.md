@@ -304,6 +304,65 @@ curl -X POST http://127.0.0.1:2345/v1/admin/users/migrations/import \
       }'
 ```
 
+### 单用户 JIT 迁移注册（登录时迁移）
+
+当第三方系统首次登录用户尚未在 Keylo 建档时，可调用 JIT 接口完成“迁移 + 发 token”：
+
+```bash
+curl -X POST http://127.0.0.1:2345/v1/auth/migrations/jit-register \
+  -H "Content-Type: application/json" \
+  -d '{
+        "provider": "agileboot",
+        "external_user_id": "ab-1001",
+        "username": "tom",
+        "email": "tom@example.com",
+        "password": "StrongPass#123",
+        "active": true,
+        "roles": ["super_admin"]
+      }'
+```
+
+### 异步批次导入任务
+
+提交批次任务（管理员）：
+
+```bash
+curl -X POST http://127.0.0.1:2345/v1/admin/users/migrations/jobs \
+  -H "Authorization: Bearer <admin_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "provider": "agileboot",
+        "dry_run": false,
+        "users": [
+          {
+            "external_user_id": "ab-1002",
+            "username": "jerry",
+            "email": "jerry@example.com",
+            "password": "StrongPass#123"
+          }
+        ]
+      }'
+```
+
+查询任务状态：
+
+```bash
+curl -X GET http://127.0.0.1:2345/v1/admin/users/migrations/jobs/<job_id> \
+  -H "Authorization: Bearer <admin_access_token>"
+```
+
+### 迁移统一错误码
+
+迁移相关接口返回稳定的 `error_code`，例如：
+
+* `migration_invalid_input`
+* `migration_conflict`
+* `migration_mapping_error`
+* `migration_role_assignment_failed`
+* `migration_provider_invalid`
+* `migration_internal_error`
+* `migration_not_found`
+
 ### 第三方系统内省用户 Token
 
 第三方后端服务应先申请自己的 `service_access` Token，再调用用户 Token 内省接口：
@@ -758,4 +817,4 @@ MIT License - 查看 [LICENSE](LICENSE) 文件
 
 ---
 
-**Last Updated**: 2026年04月09日
+**Last Updated**: 2026年04月16日

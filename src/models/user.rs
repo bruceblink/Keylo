@@ -80,14 +80,21 @@ pub struct ThirdPartyUserImportResultItem {
 
 /// 迁移失败原因统一错误码
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum MigrationErrorCode {
+    #[serde(rename = "migration_invalid_input")]
     InvalidInput,
+    #[serde(rename = "migration_conflict")]
     Conflict,
+    #[serde(rename = "migration_mapping_error")]
     MappingError,
+    #[serde(rename = "migration_role_assignment_failed")]
     RoleAssignmentFailed,
+    #[serde(rename = "migration_internal_error")]
     InternalError,
+    #[serde(rename = "migration_provider_invalid")]
     ProviderInvalid,
+    #[serde(rename = "migration_not_found")]
+    NotFound,
 }
 
 #[derive(Debug, Clone, Serialize)]

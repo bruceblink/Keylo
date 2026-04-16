@@ -295,6 +295,9 @@ Content-Type: application/json
 | `POST /v1/auth/introspect` | 服务客户端 | `token_type=service_access`、`role=service`、`scope` 包含 `read`、`aud=admin-backend` |
 | `GET/POST/PUT /v1/admin/users` | 管理客户端 | `token_type=access`、`role=admin`、`scope` 包含 `admin`、`aud=admin-backend` |
 | `POST /v1/admin/users/migrations/import` | 管理客户端 | `token_type=access`、`role=admin`、`scope` 包含 `admin`、`aud=admin-backend` |
+| `POST /v1/admin/users/migrations/jobs` | 管理客户端 | `token_type=access`、`role=admin`、`scope` 包含 `admin`、`aud=admin-backend` |
+| `GET /v1/admin/users/migrations/jobs/{job_id}` | 管理客户端 | `token_type=access`、`role=admin`、`scope` 包含 `admin`、`aud=admin-backend` |
+| `POST /v1/auth/migrations/jit-register` | 第三方系统 | 仅输入校验（无需 Bearer），用于登录时迁移 |
 
 如果调用方没有完成受信任服务客户端注册或未满足所需 claims，Keylo 会直接返回 `403`，并携带可机读的 `error` 字段，例如 `service_client_not_authorized`、`insufficient_role`、`insufficient_scope`。
 
@@ -350,6 +353,57 @@ SUPER_ADMIN_USERNAME=root_bootstrap
 SUPER_ADMIN_EMAIL=root_bootstrap@example.com
 SUPER_ADMIN_PASSWORD=RootBootstrap#123
 ```
+
+#### B-7 单用户 JIT 迁移注册（登录时迁移）
+
+```http
+POST /v1/auth/migrations/jit-register
+Content-Type: application/json
+
+{
+  "provider": "agileboot",
+  "external_user_id": "ab-1001",
+  "username": "tom",
+  "email": "tom@example.com",
+  "password": "StrongPass#123",
+  "active": true,
+  "roles": ["super_admin"]
+}
+```
+
+该接口会在导入成功后直接返回用户 `access_token`，用于首次登录场景。
+
+#### B-8 异步批次迁移任务
+
+提交任务：
+
+```http
+POST /v1/admin/users/migrations/jobs
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+
+{
+  "provider": "agileboot",
+  "dry_run": false,
+  "users": [
+    {
+      "external_user_id": "ab-1002",
+      "username": "jerry",
+      "email": "jerry@example.com",
+      "password": "StrongPass#123"
+    }
+  ]
+}
+```
+
+查询任务：
+
+```http
+GET /v1/admin/users/migrations/jobs/{job_id}
+Authorization: Bearer <admin_access_token>
+```
+
+状态枚举：`pending` / `running` / `completed` / `failed`。
 
 ### 阶段 C：会话与审计（可选）
 
@@ -421,6 +475,18 @@ SUPER_ADMIN_PASSWORD=RootBootstrap#123
 ### 8.3 `429 Too Many Requests`
 
 常见于登录接口频繁失败触发限流或锁定，建议客户端退避重试并记录审计。
+
+### 8.4 迁移接口 `error_code`
+
+迁移相关接口会返回稳定机读错误码：
+
+- `migration_invalid_input`
+- `migration_conflict`
+- `migration_mapping_error`
+- `migration_role_assignment_failed`
+- `migration_provider_invalid`
+- `migration_internal_error`
+- `migration_not_found`
 
 ---
 
