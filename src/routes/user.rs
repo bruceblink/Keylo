@@ -1,3 +1,4 @@
+use crate::utils::validate_password_complexity;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -313,13 +314,13 @@ async fn change_password_handler(
         claims.sub.clone()
     };
 
-    // 验证新密码长度
-    if req.new_password.len() < 8 {
+    // 验证新密码复杂度
+    if let Err(msg) = validate_password_complexity(&req.new_password) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "success": false,
-                "error": "New password must be at least 8 characters long",
+                "error": msg,
             })),
         ));
     }

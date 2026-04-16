@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::utils::validate_password_complexity;
 use anyhow::Result;
 use bcrypt::{hash, DEFAULT_COST};
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -140,8 +141,8 @@ pub async fn seed_super_admin_user(pool: &PgPool, config: &Config) -> Result<()>
             anyhow::anyhow!("SUPER_ADMIN_PASSWORD is required when bootstrap is enabled")
         })?;
 
-    if password.len() < 8 {
-        anyhow::bail!("SUPER_ADMIN_PASSWORD must be at least 8 characters");
+    if let Err(msg) = validate_password_complexity(password) {
+        anyhow::bail!("SUPER_ADMIN_PASSWORD is insecure: {}", msg);
     }
 
     let super_role = match get_role_by_name(pool, "super_admin").await? {

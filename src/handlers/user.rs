@@ -17,7 +17,7 @@ use crate::models::{
     ThirdPartyUserImportRequest, ThirdPartyUserImportResultItem, ThirdPartyUserImportSummary,
 };
 use crate::state::AppState;
-use crate::utils::ApiResponse;
+use crate::utils::{validate_password_complexity, ApiResponse};
 
 /// 用户注册处理器
 pub async fn register_user(
@@ -37,14 +37,14 @@ pub async fn register_user(
         }
     };
 
-    // 验证密码长度
+    // 验证密码复杂度
     if let Some(ref password) = req.password {
-        if password.len() < 8 {
+        if let Err(msg) = validate_password_complexity(password) {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(json!({
                     "success": false,
-                    "error": "Password must be at least 8 characters long",
+                    "error": msg,
                 })),
             ));
         }
@@ -184,14 +184,14 @@ async fn run_third_party_import(
 
         let active = item.active.unwrap_or(true);
         if let Some(password) = item.password.as_deref() {
-            if password.len() < 8 {
+            if let Err(msg) = validate_password_complexity(password) {
                 failed += 1;
                 push_failed_result(
                     &mut results,
                     external_user_id,
                     None,
                     MigrationErrorCode::InvalidInput,
-                    "password must be at least 8 characters".to_string(),
+                    msg.to_string(),
                 );
                 continue;
             }

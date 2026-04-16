@@ -32,6 +32,29 @@ pub fn is_token_expired(exp: i64) -> bool {
 
 pub type ApiResponse = Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)>;
 
+/// 密码复杂度验证：至少8位，含大写、小写、数字、特殊字符各一
+pub fn validate_password_complexity(password: &str) -> Result<(), &'static str> {
+    if password.len() < 8 {
+        return Err("Password must be at least 8 characters long");
+    }
+    if !password.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err("Password must contain at least one uppercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_lowercase()) {
+        return Err("Password must contain at least one lowercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        return Err("Password must contain at least one digit");
+    }
+    if !password
+        .chars()
+        .any(|c| "!@#$%^&*()_+-=[]{}|;':\",./<>?".contains(c))
+    {
+        return Err("Password must contain at least one special character");
+    }
+    Ok(())
+}
+
 pub fn require_db(
     state: &crate::state::AppState,
 ) -> Result<&PgPool, (StatusCode, Json<serde_json::Value>)> {
