@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+# Keylo pre-commit hook (可提交版本，供 install-hooks.sh 复制到 .git/hooks/)
+# 顺序：cargo test → cargo fmt (check) → cargo clippy → cargo audit
+set -e
+
+echo "==> [pre-commit] Running cargo test..."
+cargo test --quiet
+echo "==> [pre-commit] cargo test passed."
+
+echo "==> [pre-commit] Running cargo fmt --check..."
+cargo fmt -- --check
+echo "==> [pre-commit] cargo fmt passed."
+
+echo "==> [pre-commit] Running cargo clippy..."
+cargo clippy -- -D warnings
+echo "==> [pre-commit] cargo clippy passed."
+
+echo "==> [pre-commit] Running cargo audit..."
+cargo audit --ignore RUSTSEC-2023-0071 --no-fetch
+echo "==> [pre-commit] cargo audit passed."
+
+echo "==> [pre-commit] All checks passed. Proceeding with commit."
