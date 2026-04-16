@@ -717,8 +717,18 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
 
 pub async fn auth_introspect(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<IntrospectTokenRequest>,
 ) -> Json<TokenIntrospectResponse> {
+    // Rate-limit per IP: 60 introspect calls per 60 seconds
+    let client_ip = extract_client_ip(&headers);
+    if !state
+        .allow_auth_request(&format!("introspect:{}", client_ip), 60, 60)
+        .await
+    {
+        return Json(TokenIntrospectResponse::inactive());
+    }
+
     if payload.token.is_empty() {
         return Json(TokenIntrospectResponse::inactive());
     }
