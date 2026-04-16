@@ -11,7 +11,8 @@ use std::sync::Arc;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 
 pub fn init_app_router() -> Router {
-    let app_state = AppState::default();
+    let app_state = AppState::new(Config::default(), None)
+        .expect("Default Config must always produce valid JWT keys");
     Router::new()
         .merge(routes::auth::public_router())
         .route("/healthz", get(healthz))
@@ -23,7 +24,8 @@ pub fn init_app_router() -> Router {
 }
 
 pub fn init_app_router_with_config(config: Config) -> Router {
-    let app_state = AppState::new(config, None);
+    let app_state = AppState::new(config, None)
+        .expect("Failed to initialize AppState: invalid JWT key configuration");
     Router::new()
         .merge(routes::auth::public_router())
         .route("/healthz", get(healthz))
@@ -86,7 +88,7 @@ pub async fn init_app_router_with_db(
         Err(e) => tracing::warn!("Audit logs cleanup failed: {}", e),
     }
 
-    let app_state = AppState::new(config, Some(Arc::new(db)));
+    let app_state = AppState::new(config, Some(Arc::new(db)))?;
 
     let public_routes = Router::new()
         .merge(routes::auth::public_router())

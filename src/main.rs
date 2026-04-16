@@ -74,7 +74,7 @@ use std::net::SocketAddr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), anyhow::Error> {
     keylo::config::load_dotenv();
 
     // Initialize logging
@@ -101,7 +101,11 @@ async fn main() {
         }
         Err(e) => {
             if config.is_production() {
-                panic!("Failed to initialize Keylo in production: {}", e);
+                tracing::error!("Failed to initialize Keylo in production: {}", e);
+                return Err(anyhow::anyhow!(
+                    "Failed to initialize Keylo in production: {}",
+                    e
+                ));
             }
 
             tracing::warn!(
@@ -123,9 +127,11 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .unwrap_or_else(|_| panic!("Failed to bind to {}", addr));
+        .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", addr, e))?;
 
     tracing::info!("🚀 Server listening on {}", addr);
 
-    axum::serve(listener, app).await.expect("Server error");
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| anyhow::anyhow!("Server error: {}", e))
 }

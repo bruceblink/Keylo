@@ -44,6 +44,7 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self::new(Config::default(), None)
+            .expect("Default Config must always produce valid JWT keys")
     }
 }
 
@@ -52,7 +53,7 @@ impl AppState {
         format!("{}:{}", self.config.redis_key_prefix, suffix)
     }
 
-    pub fn new(config: Config, db: Option<Arc<PgPool>>) -> Self {
+    pub fn new(config: Config, db: Option<Arc<PgPool>>) -> Result<Self, anyhow::Error> {
         // 默认客户端，可以替换成从配置文件或数据库加载
         let mut clients = HashMap::new();
         clients.insert("web".into(), "web-secret".into());
@@ -64,9 +65,9 @@ impl AppState {
             .as_deref()
             .and_then(|url| redis::Client::open(url).ok());
         let jwt_keys = Keys::from_config(&config)
-            .unwrap_or_else(|err| panic!("Failed to initialize JWT keys: {}", err));
+            .map_err(|err| anyhow::anyhow!("Failed to initialize JWT keys: {}", err))?;
 
-        Self {
+        Ok(Self {
             jwt_keys,
             clients: Arc::new(clients),
             audiences: Arc::new(audiences),
@@ -77,7 +78,7 @@ impl AppState {
             auth_rate_limits: Arc::new(RwLock::new(HashMap::new())),
             redis_client,
             migration_jobs: Arc::new(RwLock::new(HashMap::new())),
-        }
+        })
     }
 
     /// 校验 client_id + secret 是否存在
