@@ -221,12 +221,11 @@ pub async fn get_client_auth_info(
     pool: &PgPool,
     client_id: &str,
 ) -> Result<Option<(String, bool)>> {
-    let row = sqlx::query(
-        "SELECT secret, is_admin_client FROM clients WHERE id = $1 AND active = TRUE",
-    )
-    .bind(client_id)
-    .fetch_optional(pool)
-    .await?;
+    let row =
+        sqlx::query("SELECT secret, is_admin_client FROM clients WHERE id = $1 AND active = TRUE")
+            .bind(client_id)
+            .fetch_optional(pool)
+            .await?;
 
     Ok(row.map(|r| {
         let is_admin: bool = r.get("is_admin_client");

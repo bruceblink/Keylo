@@ -297,7 +297,10 @@ mod tests {
         let admin_refresh_token = admin_login_body["refresh_token"].as_str().unwrap();
 
         let rotate_resp = server
-            .post(&format!("/v1/admin/clients/{}/rotate-secret", rotate_client_id))
+            .post(&format!(
+                "/v1/admin/clients/{}/rotate-secret",
+                rotate_client_id
+            ))
             .add_header("Authorization", format!("Bearer {}", admin_access_token))
             .json(&json!({}))
             .await;
