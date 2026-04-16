@@ -15,6 +15,10 @@ pub enum AuthError {
     NotFound,
     Unauthorized,
     Forbidden,
+    InsufficientScope,
+    InsufficientAudience,
+    InsufficientRole,
+    ServiceClientNotAuthorized,
     TooManyRequests,
     InternalServerError(String),
 }
@@ -31,6 +35,12 @@ impl fmt::Display for AuthError {
             AuthError::NotFound => write!(f, "Resource not found"),
             AuthError::Unauthorized => write!(f, "Unauthorized"),
             AuthError::Forbidden => write!(f, "Forbidden"),
+            AuthError::InsufficientScope => write!(f, "Insufficient scope"),
+            AuthError::InsufficientAudience => write!(f, "Insufficient audience"),
+            AuthError::InsufficientRole => write!(f, "Insufficient role"),
+            AuthError::ServiceClientNotAuthorized => {
+                write!(f, "Service client not authorized")
+            }
             AuthError::TooManyRequests => write!(f, "Too many requests"),
             AuthError::InternalServerError(msg) => write!(f, "Internal server error: {}", msg),
         }
@@ -40,39 +50,103 @@ impl fmt::Display for AuthError {
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     code: u16,
+    error: &'static str,
     message: String,
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
-        let (status, code, message) = match self {
-            AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, 1001, "Wrong credentials"),
-            AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, 1002, "Missing credentials"),
+        let (status, code, error, message) = match self {
+            AuthError::WrongCredentials => (
+                StatusCode::UNAUTHORIZED,
+                1001,
+                "wrong_credentials",
+                "Wrong credentials",
+            ),
+            AuthError::MissingCredentials => (
+                StatusCode::BAD_REQUEST,
+                1002,
+                "missing_credentials",
+                "Missing credentials",
+            ),
             AuthError::TokenCreation => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 1003,
+                "token_creation_error",
                 "Token creation error",
             ),
-            AuthError::InvalidToken => (StatusCode::BAD_REQUEST, 1004, "Invalid token"),
-            AuthError::ExpiredToken => (StatusCode::UNAUTHORIZED, 1005, "Token expired"),
-            AuthError::DatabaseError(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, 1006, "Database error")
-            }
-            AuthError::NotFound => (StatusCode::NOT_FOUND, 1007, "Resource not found"),
-            AuthError::Unauthorized => (StatusCode::UNAUTHORIZED, 1008, "Unauthorized"),
-            AuthError::Forbidden => (StatusCode::FORBIDDEN, 1009, "Forbidden"),
-            AuthError::TooManyRequests => {
-                (StatusCode::TOO_MANY_REQUESTS, 1011, "Too many requests")
-            }
+            AuthError::InvalidToken => (
+                StatusCode::UNAUTHORIZED,
+                1004,
+                "invalid_token",
+                "Invalid token",
+            ),
+            AuthError::ExpiredToken => (
+                StatusCode::UNAUTHORIZED,
+                1005,
+                "expired_token",
+                "Token expired",
+            ),
+            AuthError::DatabaseError(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                1006,
+                "database_error",
+                "Database error",
+            ),
+            AuthError::NotFound => (
+                StatusCode::NOT_FOUND,
+                1007,
+                "not_found",
+                "Resource not found",
+            ),
+            AuthError::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                1008,
+                "unauthorized",
+                "Unauthorized",
+            ),
+            AuthError::Forbidden => (StatusCode::FORBIDDEN, 1009, "forbidden", "Forbidden"),
+            AuthError::InsufficientScope => (
+                StatusCode::FORBIDDEN,
+                1012,
+                "insufficient_scope",
+                "Insufficient scope",
+            ),
+            AuthError::InsufficientAudience => (
+                StatusCode::FORBIDDEN,
+                1013,
+                "insufficient_audience",
+                "Insufficient audience",
+            ),
+            AuthError::InsufficientRole => (
+                StatusCode::FORBIDDEN,
+                1014,
+                "insufficient_role",
+                "Insufficient role",
+            ),
+            AuthError::ServiceClientNotAuthorized => (
+                StatusCode::FORBIDDEN,
+                1015,
+                "service_client_not_authorized",
+                "Service client not authorized",
+            ),
+            AuthError::TooManyRequests => (
+                StatusCode::TOO_MANY_REQUESTS,
+                1011,
+                "too_many_requests",
+                "Too many requests",
+            ),
             AuthError::InternalServerError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 1010,
+                "internal_server_error",
                 "Internal server error",
             ),
         };
 
         let body = Json(ErrorResponse {
             code,
+            error,
             message: message.to_string(),
         });
         (status, body).into_response()

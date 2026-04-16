@@ -34,6 +34,10 @@ pub struct Claims {
     /// Scope：权限集合（核心）
     pub scope: Vec<String>,
 
+    /// Role：授权角色
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+
     /// Token 类型：access_token 或 refresh_token
     pub token_type: String,
 
@@ -49,7 +53,21 @@ pub struct Claims {
 
 impl Display for Claims {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Sub: {}\nScop: {:?}", self.sub, self.scope)
+        write!(f, "Sub: {}\nScop: {:?}\nRole: {:?}", self.sub, self.scope, self.role)
+    }
+}
+
+impl Claims {
+    pub fn has_scope(&self, scope: &str) -> bool {
+        self.scope.iter().any(|value| value == scope)
+    }
+
+    pub fn has_audience(&self, audience: &str) -> bool {
+        self.aud == audience || self.aud == "*"
+    }
+
+    pub fn has_role(&self, role: &str) -> bool {
+        self.role.as_deref() == Some(role)
     }
 }
 

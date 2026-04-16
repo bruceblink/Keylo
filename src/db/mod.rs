@@ -1,4 +1,5 @@
 use anyhow::Result;
+use crate::config::Config;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use uuid::Uuid;
@@ -100,6 +101,73 @@ pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
         )
         .await?;
     }
+
+    Ok(())
+}
+
+/// 初始化超级管理员用户（可选）
+pub async fn seed_super_admin_user(pool: &PgPool, config: &Config) -> Result<()> {
+    if !config.enable_super_admin_bootstrap {
+        return Ok(());
+    }
+
+    let username = config
+        .super_admin_username
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("SUPER_ADMIN_USERNAME is required when bootstrap is enabled"))?;
+    let email = config
+        .super_admin_email
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("SUPER_ADMIN_EMAIL is required when bootstrap is enabled"))?;
+    let password = config
+        .super_admin_password
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("SUPER_ADMIN_PASSWORD is required when bootstrap is enabled"))?;
+
+    if password.len() < 8 {
+        anyhow::bail!("SUPER_ADMIN_PASSWORD must be at least 8 characters");
+    }
+
+    let super_role = match get_role_by_name(pool, "super_admin").await? {
+        Some(role) => role,
+        None => create_role(pool, "super_admin", Some("System super administrator")).await?,
+    };
+
+    let user = if let Some(existing) = get_user_by_username(pool, username).await? {
+        update_user(pool, &existing.id, Some(username), Some(email), Some(password), Some(true))
+            .await?
+            .unwrap_or(existing)
+    } else if let Some(existing_email) = get_user_by_email(pool, email).await? {
+        update_user(
+            pool,
+            &existing_email.id,
+            Some(username),
+            Some(email),
+            Some(password),
+            Some(true),
+        )
+        .await?
+        .unwrap_or(existing_email)
+    } else {
+        create_user(pool, username, email, Some(password)).await?
+    };
+
+    assign_role_to_user(pool, &user.id, &super_role.id).await?;
+    if get_permission_by_name(pool, "admin.full").await?.is_none() {
+        let permission = create_permission(pool, "admin.full", Some("Full admin permission")).await?;
+        let _ = assign_permission_to_role(pool, &super_role.id, &permission.id).await;
+    }
+
+    create_audit_log(
+        pool,
+        "bootstrap.super_admin",
+        Some("system"),
+        Some(&format!("username={}, user_id={}", username, user.id)),
+    )
+    .await?;
 
     Ok(())
 }

@@ -7,7 +7,7 @@
 ## 🚀 特性
 
 * ✅ 基于 RS256 的 JWT 签发与验证，内置 JWKS 公钥发布
-* ✅ `/v1/auth/token`、`/v1/auth/refresh`、`/v1/auth/logout`、`/v1/auth/me` 核心 API
+* ✅ `/v1/auth/token`（用户认证）、`/v1/admin/token`（管理令牌）、`/v1/auth/refresh`、`/v1/auth/logout`、`/v1/auth/me` 核心 API
 * ✅ 用户 Token 内省与服务 Token 内省
 * ✅ 服务凭证模式与 `service_access` Token
 * ✅ GitHub OAuth 登录，可扩展其他 OAuth 提供商
@@ -181,14 +181,14 @@ RUST_LOG=keylo=debug cargo run
 
 ## 🔑 API 示例
 
-### 获取 Token
+### 获取用户 Token
 
-使用用户名密码或客户端凭证获取 Access Token。下面示例展示管理员客户端登录：
+`/v1/auth/token` 仅用于用户认证语义，不再接受未注册或未授权的客户端凭证。
 
 ```bash
 curl -X POST http://127.0.0.1:2345/v1/auth/token \
   -H "Content-Type: application/json" \
-  -d '{"client_id":"web","client_secret":"<your-client-secret>"}'
+  -d '{"client_id":"alice","client_secret":"<user-password>"}'
 ```
 
 返回：
@@ -196,10 +196,19 @@ curl -X POST http://127.0.0.1:2345/v1/auth/token \
 ```json
 {
   "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImtleWxvLXJzMjU2LTEiLCJ0eXAiOiJKV1QifQ...",
-  "refresh_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImtleWxvLXJzMjU2LTEiLCJ0eXAiOiJKV1QifQ...",
   "token_type": "Bearer",
   "expires_in": 900
 }
+```
+
+### 获取管理 Token
+
+`/v1/admin/token` 仅用于受信任的管理客户端，签发的令牌带有 `role=admin`、`scope=admin`、`aud=admin-backend`。
+
+```bash
+curl -X POST http://127.0.0.1:2345/v1/admin/token \
+  -H "Content-Type: application/json" \
+  -d '{"client_id":"<admin-client-id>","client_secret":"<admin-client-secret>"}'
 ```
 
 ### 用户注册
@@ -229,13 +238,70 @@ curl -H "Authorization: Bearer <access_token>" \
 
 ```json
 {
-  "sub": "client:web",
+  "sub": "user:alice",
   "scope": ["read", "write"],
+  "role": "user",
   "aud": "admin-backend",
   "exp": 1704067200,
   "iss": "keylo",
   "jti": "550e8400-e29b-41d4-a716-446655440000"
 }
+```
+
+### 端点授权矩阵
+
+| 端点 | 令牌类型 | 必需 claims |
+| --- | --- | --- |
+| `POST /v1/auth/token` | 无 | 仅用户名/密码用户认证 |
+| `POST /v1/admin/token` | 无 | 仅受信任管理客户端 |
+| `POST /v1/service/token` | 无 | 仅已注册且激活的服务客户端 |
+| `POST /v1/auth/introspect` | `service_access` | `role=service`、`scope` 包含 `read`、`aud=admin-backend` |
+| `POST /v1/service/introspect` | `service_access` | `role=service`、`scope` 包含 `read` |
+| `GET/POST/PUT /v1/admin/*` | `access` | `role=admin`、`scope` 包含 `admin`、`aud=admin-backend` |
+| `POST /v1/user/change-password` | `access` | `role=user`、`scope` 包含 `write`、`aud=admin-backend` |
+
+未授权调用会返回稳定的 machine-readable 错误，如 `insufficient_role`、`insufficient_scope`、`service_client_not_authorized`。
+
+### 超级管理员初始化（可选）
+
+当你需要首启自动创建超级管理员用户时，可开启以下环境变量：
+
+```env
+ENABLE_SUPER_ADMIN_BOOTSTRAP=true
+SUPER_ADMIN_USERNAME=root_bootstrap
+SUPER_ADMIN_EMAIL=root_bootstrap@example.com
+SUPER_ADMIN_PASSWORD=RootBootstrap#123
+```
+
+说明：
+
+* 初始化过程幂等：重复启动会更新同一账号资料并确保绑定 `super_admin` 角色。
+* 仅在数据库可用时生效。
+* 建议上线后立即轮换为运维托管凭据。
+
+### 第三方用户迁移导入
+
+管理端提供批量迁移接口（支持幂等 external id 映射）：
+
+```bash
+curl -X POST http://127.0.0.1:2345/v1/admin/users/migrations/import \
+  -H "Authorization: Bearer <admin_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "provider": "agileboot",
+        "users": [
+          {
+            "external_user_id": "agileboot-1001",
+            "username": "tom",
+            "email": "tom@example.com",
+            "password": "StrongPass#123",
+            "active": true,
+            "roles": ["super_admin"],
+            "metadata": {"source": "agileboot"}
+          }
+        ],
+        "dry_run": false
+      }'
 ```
 
 ### 第三方系统内省用户 Token

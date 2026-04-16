@@ -23,7 +23,7 @@ mod tests {
 
     async fn get_access_token(server: &TestServer) -> String {
         let login_response = server
-            .post("/v1/auth/token")
+            .post("/v1/admin/token")
             .json(&json!({
                 "client_id": "cli",
                 "client_secret": "cli-secret"

@@ -5,6 +5,15 @@ use uuid::Uuid;
 
 use crate::models::service::ServiceInfo;
 
+pub enum ServiceCredentialVerification {
+    Authorized {
+        allowed_scopes: Vec<String>,
+        allowed_audiences: Vec<String>,
+    },
+    WrongSecret,
+    NotAuthorized,
+}
+
 /// 注册服务客户端
 pub async fn create_service_client(
     pool: &PgPool,
@@ -36,12 +45,12 @@ pub async fn create_service_client(
     Ok(())
 }
 
-/// 验证服务凭证，返回 (allowed_scopes, allowed_audiences)
+/// 验证服务凭证并区分未授权与错误密钥
 pub async fn verify_service_credentials(
     pool: &PgPool,
     service_id: &str,
     service_secret: &str,
-) -> Result<Option<(Vec<String>, Vec<String>)>> {
+) -> Result<ServiceCredentialVerification> {
     let row = sqlx::query(
         "SELECT secret_hash, allowed_scopes, allowed_audiences
          FROM service_clients
@@ -52,15 +61,18 @@ pub async fn verify_service_credentials(
     .await?;
 
     match row {
-        None => Ok(None),
+        None => Ok(ServiceCredentialVerification::NotAuthorized),
         Some(r) => {
             let secret_hash: String = r.get("secret_hash");
             if verify(service_secret, &secret_hash)? {
                 let scopes: Vec<String> = r.get("allowed_scopes");
                 let audiences: Vec<String> = r.get("allowed_audiences");
-                Ok(Some((scopes, audiences)))
+                Ok(ServiceCredentialVerification::Authorized {
+                    allowed_scopes: scopes,
+                    allowed_audiences: audiences,
+                })
             } else {
-                Ok(None)
+                Ok(ServiceCredentialVerification::WrongSecret)
             }
         }
     }

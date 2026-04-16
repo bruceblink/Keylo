@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use crate::{
     db::*,
+    handlers::user::import_third_party_users,
     models::{Claims, *},
     state::AppState,
     utils::{require_db, ApiResponse},
@@ -26,6 +27,10 @@ pub fn admin_user_routes() -> Router<AppState> {
         .route("/v1/admin/users/{user_id}", get(get_user_handler))
         .route("/v1/admin/users/{user_id}", put(update_user_handler))
         .route("/v1/admin/users/{user_id}", delete(delete_user_handler))
+        .route(
+            "/v1/admin/users/migrations/import",
+            post(import_third_party_users),
+        )
         .route(
             "/v1/admin/users/{user_id}/reset-password",
             post(reset_user_password_handler),

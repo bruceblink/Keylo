@@ -1,6 +1,8 @@
 use anyhow::Result;
 use bcrypt::{hash, verify, DEFAULT_COST};
+use serde_json::Value;
 use sqlx::PgPool;
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::models::User;
@@ -33,6 +35,18 @@ pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Optio
         "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE username = $1",
     )
     .bind(username)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(user)
+}
+
+/// 根据邮箱获取用户
+pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User>> {
+    let user = sqlx::query_as::<_, User>(
+        "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE email = $1",
+    )
+    .bind(email)
     .fetch_optional(pool)
     .await?;
 
@@ -126,6 +140,18 @@ pub async fn update_user(
     Ok(user)
 }
 
+/// 更新用户激活状态
+pub async fn set_user_active(pool: &PgPool, user_id: &str, active: bool) -> Result<bool> {
+    let result = sqlx::query("UPDATE users SET active = $2, updated_at = $3 WHERE id = $1")
+        .bind(user_id)
+        .bind(active)
+        .bind(chrono::Local::now().naive_utc())
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// 删除用户
 pub async fn delete_user(pool: &PgPool, user_id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM users WHERE id = $1")
@@ -206,4 +232,64 @@ pub async fn change_user_password(
         .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// 根据外部系统映射查询用户ID
+pub async fn get_mapped_user_id(
+    pool: &PgPool,
+    provider: &str,
+    external_user_id: &str,
+) -> Result<Option<String>> {
+    let row = sqlx::query(
+        "SELECT user_id FROM external_user_mappings WHERE provider = $1 AND external_user_id = $2",
+    )
+    .bind(provider)
+    .bind(external_user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|value| value.get("user_id")))
+}
+
+/// 创建或更新外部系统用户映射
+pub async fn upsert_external_user_mapping(
+    pool: &PgPool,
+    provider: &str,
+    external_user_id: &str,
+    user_id: &str,
+    metadata: Option<&Value>,
+) -> Result<()> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Local::now().naive_utc();
+
+    sqlx::query(
+        r#"
+        INSERT INTO external_user_mappings
+            (id, provider, external_user_id, user_id, metadata, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $6)
+        ON CONFLICT (provider, external_user_id) DO UPDATE
+            SET user_id = EXCLUDED.user_id,
+                metadata = EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(provider)
+    .bind(external_user_id)
+    .bind(user_id)
+    .bind(metadata)
+    .bind(now)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// 获取用户总量
+pub async fn count_users(pool: &PgPool) -> Result<i64> {
+    let row = sqlx::query("SELECT COUNT(*) AS count FROM users")
+        .fetch_one(pool)
+        .await?;
+
+    Ok(row.get::<Option<i64>, _>("count").unwrap_or(0))
 }

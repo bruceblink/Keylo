@@ -71,6 +71,10 @@ pub async fn init_app_router_with_db(
     crate::db::seed_default_clients(&db).await?;
     tracing::info!("Default clients seeded");
 
+    // Optional super admin bootstrap
+    crate::db::seed_super_admin_user(&db, &config).await?;
+    tracing::info!("Super admin bootstrap checked");
+
     // Cleanup old audit logs (best effort)
     match crate::db::cleanup_old_audit_logs(&db, config.audit_log_retention_days).await {
         Ok(deleted) => tracing::info!("Audit logs cleanup completed, deleted={}", deleted),
@@ -88,8 +92,16 @@ pub async fn init_app_router_with_db(
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
 
     let service_protected_routes = Router::new()
-        .merge(routes::auth::service_integration_routes())
-        .merge(routes::service::service_introspect_routes())
+        .merge(
+            routes::auth::service_integration_routes().route_layer(middleware::from_fn(
+                auth::service_integration_authorization_middleware,
+            )),
+        )
+        .merge(
+            routes::service::service_introspect_routes().route_layer(middleware::from_fn(
+                auth::service_read_authorization_middleware,
+            )),
+        )
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::service_auth_middleware,
@@ -98,28 +110,33 @@ pub async fn init_app_router_with_db(
     let protected_routes = Router::new()
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
-        .merge(routes::user::self_user_routes())
         .merge(
-            routes::auth::admin_router()
-                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+            routes::user::self_user_routes().route_layer(middleware::from_fn(
+                auth::user_authorization_middleware,
+            )),
+        )
+        .merge(
+            routes::auth::admin_router().route_layer(middleware::from_fn(
+                auth::admin_authorization_middleware,
+            )),
         )
         .nest(
             "/api/oauth",
             routes::oauth::oauth_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
         .nest(
             "/api/rbac",
             routes::rbac::rbac_routes()
-                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
         .merge(
             routes::service::service_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
         .merge(
             routes::user::admin_user_routes()
-                .route_layer(middleware::from_fn(auth::admin_scope_middleware)),
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
         .layer(middleware::from_fn_with_state(
             app_state.clone(),

@@ -8,12 +8,20 @@
 //!
 //! Quick instructions:
 //!
-//! - Get an authorization token:
+//! - Get a user authorization token:
 //!
 //! ```bash
 //! curl -s -X POST -H 'Content-Type: application/json' \
-//!   -d '{"client_id":"web","client_secret":"web-secret"}' \
+//!   -d '{"client_id":"alice","client_secret":"password123"}' \
 //!   http://localhost:2345/v1/auth/token
+//! ```
+//!
+//! - Get an admin management token:
+//!
+//! ```bash
+//! curl -s -X POST -H 'Content-Type: application/json' \
+//!   -d '{"client_id":"admin-console","client_secret":"admin-secret"}' \
+//!   http://localhost:2345/v1/admin/token
 //! ```
 //!
 //! - Get current user info (replace TOKEN with your access_token):

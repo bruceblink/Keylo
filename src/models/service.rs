@@ -15,6 +15,10 @@ pub struct ServiceClaims {
     /// Scope：授权给该服务的权限集合
     pub scope: Vec<String>,
 
+    /// Role：授权角色，固定为 service
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+
     /// Token 类型固定为 "service_access"
     pub token_type: String,
 
@@ -77,6 +81,8 @@ pub struct IntrospectResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub aud: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exp: Option<i64>,
@@ -94,6 +100,7 @@ impl IntrospectResponse {
             active: false,
             sub: None,
             scope: None,
+            role: None,
             aud: None,
             exp: None,
             iat: None,
@@ -107,6 +114,7 @@ impl IntrospectResponse {
             active: true,
             sub: Some(claims.sub.clone()),
             scope: Some(claims.scope.join(" ")),
+            role: claims.role.clone(),
             aud: Some(claims.aud.clone()),
             exp: Some(claims.exp),
             iat: Some(claims.iat),

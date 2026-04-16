@@ -15,7 +15,7 @@
 
 ### 1.1 Keylo 负责
 
-- 统一认证（用户/客户端/服务）
+- 统一认证（用户/管理客户端/服务）
 - JWT 签发（RS256）
 - JWKS 公钥发布
 - 用户 Token 与服务 Token 内省
@@ -28,19 +28,27 @@
 - 本地 RBAC（角色、菜单、数据权限）
 - 本地会话策略（如页面态）
 
-推荐原则：**认证集中在 Keylo，授权保留在业务系统本地**。
+推荐原则：**认证与接入授权集中在 Keylo，业务授权保留在业务系统本地**。
+
+Keylo 侧的边界规则如下：
+
+- `POST /v1/auth/token`：仅处理用户认证。
+- `POST /v1/admin/token`：仅处理受信任管理客户端。
+- `POST /v1/service/token`：仅处理已注册服务账号，并校验 `allowed_scopes` / `allowed_audiences`。
+- 管理接口（如 `/v1/admin/users`、`/v1/admin/services`）统一由 Keylo 校验 `role`、`scope`、`aud`。
 
 ---
 
 ## 2. Token 模型与字段约定
 
-Keylo 当前主要使用三类 JWT：
+Keylo 当前主要使用四类 JWT / 认证结果：
 
-1. 用户/客户端访问令牌：`token_type=access`
-2. 客户端刷新令牌：`token_type=refresh`
-3. 服务访问令牌：`token_type=service_access`
+1. 用户访问令牌：`token_type=access`，`role=user`
+2. 管理访问令牌：`token_type=access`，`role=admin`
+3. 管理刷新令牌：`token_type=refresh`，`role=admin`
+4. 服务访问令牌：`token_type=service_access`，`role=service`
 
-### 2.1 用户/客户端 Access Token（示例）
+### 2.1 用户 Access Token（示例）
 
 ```json
 {
@@ -48,6 +56,7 @@ Keylo 当前主要使用三类 JWT：
   "iss": "keylo",
   "aud": "admin-backend",
   "scope": ["read", "write"],
+  "role": "user",
   "token_type": "access",
   "exp": 1710000000,
   "iat": 1709990000,
@@ -63,6 +72,7 @@ Keylo 当前主要使用三类 JWT：
   "iss": "keylo",
   "aud": "admin-backend",
   "scope": ["user.read"],
+  "role": "service",
   "token_type": "service_access",
   "exp": 1710000000,
   "iat": 1709990000,
@@ -72,10 +82,11 @@ Keylo 当前主要使用三类 JWT：
 
 ### 2.3 实现注意点
 
-- 用户名密码登录时（用户身份）通常仅返回 `access_token`。
-- 客户端身份登录时（client 身份）会返回 `access_token` 与 `refresh_token`。
+- 用户名密码登录时（用户身份）仅返回 `access_token`。
+- 管理客户端登录时（`POST /v1/admin/token`）返回 `access_token` 与 `refresh_token`。
 - 受保护业务接口只接受 `token_type=access`。
 - 服务内省接口与用户内省接口都要求调用方携带合法 `service_access` Token。
+- 管理接口还会校验 `role=admin`、`scope` 包含 `admin`、`aud=admin-backend`。
 
 ---
 
@@ -131,7 +142,7 @@ Keylo 1.0 采用“服务账号白名单”而非独立拓扑图。
 
 ### 阶段 A：基础认证
 
-#### A-1 获取用户/客户端 Token
+#### A-1 获取用户 Token
 
 ```http
 POST /v1/auth/token
@@ -153,7 +164,19 @@ Content-Type: application/json
 }
 ```
 
-响应示例（客户端身份）：
+#### A-2 获取管理 Token
+
+```http
+POST /v1/admin/token
+Content-Type: application/json
+
+{
+  "client_id": "admin-console",
+  "client_secret": "admin-secret"
+}
+```
+
+响应示例（管理身份）：
 
 ```json
 {
@@ -164,7 +187,7 @@ Content-Type: application/json
 }
 ```
 
-#### A-2 刷新 Token（客户端模式）
+#### A-3 刷新 Token（管理模式）
 
 ```http
 POST /v1/auth/refresh
@@ -175,7 +198,7 @@ Content-Type: application/json
 }
 ```
 
-#### A-3 获取 JWKS
+#### A-4 获取 JWKS
 
 ```http
 GET /.well-known/jwks.json
@@ -244,6 +267,7 @@ Content-Type: application/json
   "active": true,
   "sub": "user:alice",
   "scope": "read write",
+  "role": "user",
   "aud": "admin-backend",
   "iss": "keylo",
   "exp": 1710000000,
@@ -261,6 +285,19 @@ Content-Type: application/json
 }
 ```
 
+### 5.1 端点权限矩阵
+
+| 端点 | 调用方 | Keylo 侧校验 |
+| --- | --- | --- |
+| `POST /v1/auth/token` | 用户 | 用户名/密码 |
+| `POST /v1/admin/token` | 管理客户端 | 受信任管理客户端身份 |
+| `POST /v1/service/token` | 服务客户端 | 已注册、激活，且请求的 `scope`/`audience` 在白名单内 |
+| `POST /v1/auth/introspect` | 服务客户端 | `token_type=service_access`、`role=service`、`scope` 包含 `read`、`aud=admin-backend` |
+| `GET/POST/PUT /v1/admin/users` | 管理客户端 | `token_type=access`、`role=admin`、`scope` 包含 `admin`、`aud=admin-backend` |
+| `POST /v1/admin/users/migrations/import` | 管理客户端 | `token_type=access`、`role=admin`、`scope` 包含 `admin`、`aud=admin-backend` |
+
+如果调用方没有完成受信任服务客户端注册或未满足所需 claims，Keylo 会直接返回 `403`，并携带可机读的 `error` 字段，例如 `service_client_not_authorized`、`insufficient_role`、`insufficient_scope`。
+
 #### B-4 内省服务 Token（服务令牌保护）
 
 ```http
@@ -271,6 +308,47 @@ Content-Type: application/json
 {
   "token": "<service-access-token>"
 }
+```
+
+#### B-5 第三方系统用户迁移导入（管理员）
+
+```http
+POST /v1/admin/users/migrations/import
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+
+{
+  "provider": "agileboot",
+  "users": [
+    {
+      "external_user_id": "agileboot-1001",
+      "username": "tom",
+      "email": "tom@example.com",
+      "password": "StrongPass#123",
+      "active": true,
+      "roles": ["super_admin"],
+      "metadata": {"source": "agileboot"}
+    }
+  ],
+  "dry_run": false
+}
+```
+
+语义说明：
+
+- `external_user_id` 在 `provider` 维度幂等。
+- 重复导入会更新映射到的 Keylo 用户资料并维持映射关系。
+- `dry_run=true` 仅校验输入，不落库。
+
+#### B-6 超级管理员初始化（可选）
+
+当需要首启引导时，在 Keylo 环境变量中配置：
+
+```env
+ENABLE_SUPER_ADMIN_BOOTSTRAP=true
+SUPER_ADMIN_USERNAME=root_bootstrap
+SUPER_ADMIN_EMAIL=root_bootstrap@example.com
+SUPER_ADMIN_PASSWORD=RootBootstrap#123
 ```
 
 ### 阶段 C：会话与审计（可选）

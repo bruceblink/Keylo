@@ -29,7 +29,17 @@ pub async fn service_token(
                 .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
         match result {
-            None => {
+            svc_db::ServiceCredentialVerification::NotAuthorized => {
+                audit_service_event(
+                    &state,
+                    "service.token.forbidden",
+                    Some(&payload.service_id),
+                    Some("Service client is not registered or active"),
+                )
+                .await;
+                return Err(AuthError::ServiceClientNotAuthorized);
+            }
+            svc_db::ServiceCredentialVerification::WrongSecret => {
                 audit_service_event(
                     &state,
                     "service.token.failed",
@@ -39,7 +49,10 @@ pub async fn service_token(
                 .await;
                 return Err(AuthError::WrongCredentials);
             }
-            Some((allowed_scopes, allowed_audiences)) => {
+            svc_db::ServiceCredentialVerification::Authorized {
+                allowed_scopes,
+                allowed_audiences,
+            } => {
                 let granted_scopes = resolve_scopes(&payload.scope, &allowed_scopes)?;
                 let audience = resolve_audience(&payload.audience, &allowed_audiences)?;
 
@@ -266,6 +279,7 @@ pub fn mint_service_token(
         iss: state.config.jwt_issuer.clone(),
         aud: audience.to_string(),
         scope: scopes.to_vec(),
+        role: Some("service".to_string()),
         token_type: "service_access".to_string(),
         exp,
         iat: now,

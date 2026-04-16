@@ -110,6 +110,14 @@ pub struct Config {
     pub audit_log_retention_days: i64,
     /// 服务间鉴权 Token 过期时间（秒），默认 3600（1 小时）
     pub service_token_expiry_seconds: i64,
+    /// 是否启用超级管理员初始化引导
+    pub enable_super_admin_bootstrap: bool,
+    /// 超级管理员用户名
+    pub super_admin_username: Option<String>,
+    /// 超级管理员邮箱
+    pub super_admin_email: Option<String>,
+    /// 超级管理员初始密码
+    pub super_admin_password: Option<String>,
 }
 
 impl Default for Config {
@@ -196,6 +204,15 @@ impl Config {
             .parse::<i64>()
             .unwrap_or(3600);
 
+        let enable_super_admin_bootstrap = env::var("ENABLE_SUPER_ADMIN_BOOTSTRAP")
+            .ok()
+            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+
+        let super_admin_username = env::var("SUPER_ADMIN_USERNAME").ok();
+        let super_admin_email = env::var("SUPER_ADMIN_EMAIL").ok();
+        let super_admin_password = env::var("SUPER_ADMIN_PASSWORD").ok();
+
         Self {
             jwt_issuer,
             jwt_key_id,
@@ -217,6 +234,10 @@ impl Config {
             redis_key_prefix,
             audit_log_retention_days,
             service_token_expiry_seconds,
+            enable_super_admin_bootstrap,
+            super_admin_username,
+            super_admin_email,
+            super_admin_password,
         }
     }
 

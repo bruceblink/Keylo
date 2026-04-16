@@ -1,5 +1,6 @@
 use crate::errors::AuthError;
 use crate::models::Claims;
+use crate::models::service::ServiceClaims;
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::State;
@@ -9,6 +10,65 @@ use axum::response::{IntoResponse, Response};
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
+
+fn ensure_access_claims(
+    claims: &Claims,
+    required_role: Option<&str>,
+    required_scope: Option<&str>,
+    required_audience: Option<&str>,
+) -> Result<(), AuthError> {
+    if claims.token_type != "access" {
+        return Err(AuthError::InvalidToken);
+    }
+
+    if let Some(role) = required_role {
+        if !claims.has_role(role) {
+            return Err(AuthError::InsufficientRole);
+        }
+    }
+
+    if let Some(scope) = required_scope {
+        if !claims.has_scope(scope) {
+            return Err(AuthError::InsufficientScope);
+        }
+    }
+
+    if let Some(audience) = required_audience {
+        if !claims.has_audience(audience) {
+            return Err(AuthError::InsufficientAudience);
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_service_claims(
+    claims: &ServiceClaims,
+    required_scope: Option<&str>,
+    required_audience: Option<&str>,
+) -> Result<(), AuthError> {
+    if claims.token_type != "service_access" {
+        return Err(AuthError::InvalidToken);
+    }
+
+    if claims.role.as_deref() != Some("service") {
+        return Err(AuthError::InsufficientRole);
+    }
+
+    if let Some(scope) = required_scope {
+        if !claims.scope.iter().any(|value| value == scope) {
+            return Err(AuthError::InsufficientScope);
+        }
+    }
+
+    if let Some(audience) = required_audience {
+        if claims.aud != audience && claims.aud != "*" {
+            return Err(AuthError::InsufficientAudience);
+        }
+    }
+
+    Ok(())
+}
 
 /// 认证中间件 - 检查token是否在黑名单中
 pub async fn auth_middleware(
@@ -57,8 +117,8 @@ pub async fn auth_middleware(
     Ok(next.run(request).await)
 }
 
-/// 管理员权限中间件
-pub async fn admin_scope_middleware(
+/// 管理端鉴权：仅允许 admin 角色访问管理接口
+pub async fn admin_authorization_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -67,8 +127,25 @@ pub async fn admin_scope_middleware(
         None => return Ok(AuthError::Unauthorized.into_response()),
     };
 
-    if !claims.scope.iter().any(|s| s == "admin") {
-        return Ok(AuthError::Forbidden.into_response());
+    if let Err(err) = ensure_access_claims(claims, Some("admin"), Some("admin"), Some("admin-backend")) {
+        return Ok(err.into_response());
+    }
+
+    Ok(next.run(request).await)
+}
+
+/// 用户自助接口鉴权：仅允许 user 角色访问
+pub async fn user_authorization_middleware(
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let claims = match request.extensions().get::<Claims>() {
+        Some(claims) => claims,
+        None => return Ok(AuthError::Unauthorized.into_response()),
+    };
+
+    if let Err(err) = ensure_access_claims(claims, Some("user"), Some("write"), Some("admin-backend")) {
+        return Ok(err.into_response());
     }
 
     Ok(next.run(request).await)
@@ -89,10 +166,6 @@ pub async fn service_auth_middleware(
         Err(err) => return Ok(err.into_response()),
     };
 
-    if claims.token_type != "service_access" {
-        return Ok(AuthError::InvalidToken.into_response());
-    }
-
     // 检查 Token 黑名单
     if let Some(db) = &state.db {
         match crate::db::is_token_blacklisted(db, token).await {
@@ -107,5 +180,39 @@ pub async fn service_auth_middleware(
     }
 
     request.extensions_mut().insert(claims);
+    Ok(next.run(request).await)
+}
+
+/// 面向授权中心集成的服务鉴权：需要 service 角色、read scope、admin-backend audience
+pub async fn service_integration_authorization_middleware(
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let claims = match request.extensions().get::<ServiceClaims>() {
+        Some(claims) => claims,
+        None => return Ok(AuthError::Unauthorized.into_response()),
+    };
+
+    if let Err(err) = ensure_service_claims(claims, Some("read"), Some("admin-backend")) {
+        return Ok(err.into_response());
+    }
+
+    Ok(next.run(request).await)
+}
+
+/// 服务 token introspect：需要 service 角色和 read scope
+pub async fn service_read_authorization_middleware(
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let claims = match request.extensions().get::<ServiceClaims>() {
+        Some(claims) => claims,
+        None => return Ok(AuthError::Unauthorized.into_response()),
+    };
+
+    if let Err(err) = ensure_service_claims(claims, Some("read"), None) {
+        return Ok(err.into_response());
+    }
+
     Ok(next.run(request).await)
 }

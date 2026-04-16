@@ -18,12 +18,30 @@ use chrono::Utc;
 use serde_json::json;
 use std::collections::HashMap;
 
-fn access_scope(subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
-    if subject_prefix == "client" && is_admin_client {
+fn access_scope(_subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
+    if is_admin_client {
         vec!["read".into(), "write".into(), "admin".into()]
     } else {
         vec!["read".into(), "write".into()]
     }
+}
+
+fn claim_role(subject_prefix: &str, is_admin_client: bool) -> Option<String> {
+    match subject_prefix {
+        "user" if is_admin_client => Some("admin".to_string()),
+        "user" => Some("user".to_string()),
+        "client" if is_admin_client => Some("admin".to_string()),
+        _ => None,
+    }
+}
+
+async fn is_user_admin(db: &sqlx::PgPool, user_id: &str) -> bool {
+    crate::db::user_has_role(db, user_id, "super_admin")
+        .await
+        .unwrap_or(false)
+        || crate::db::user_has_role(db, user_id, "admin")
+            .await
+            .unwrap_or(false)
 }
 
 async fn audit_event(
@@ -131,7 +149,7 @@ pub async fn auth_token(
 
     // First try to authenticate as a user
     let user_result = get_user_by_username(db, &payload.client_id).await;
-    let (is_user_valid, _user_id) = match user_result {
+    let (is_user_valid, user_id) = match user_result {
         Ok(Some(user)) => {
             // Verify password
             if let Some(ref password_hash) = user.password_hash {
@@ -153,39 +171,23 @@ pub async fn auth_token(
         }
     };
 
-    let mut is_admin_client = false;
-    let subject_prefix = if is_user_valid {
-        "user"
-    } else {
-        // If user auth failed, try client auth (prefer DB)
-        let client_valid = match crate::db::get_client_auth_info(db, &payload.client_id).await {
-            Ok(Some((secret, is_admin))) => {
-                is_admin_client = is_admin;
-                secret == payload.client_secret
-            }
-            Ok(None) => state.validate_client(&payload.client_id, &payload.client_secret),
-            Err(_) => return Err(AuthError::DatabaseError("Failed to get client".to_string())),
-        };
-
-        if !client_valid {
-            state
-                .record_login_failure(
-                    &payload.client_id,
-                    state.config.max_failed_login_attempts,
-                    state.config.login_lockout_seconds,
-                )
-                .await;
-            audit_event(
-                &state,
-                "auth.token.failed",
-                Some(&payload.client_id),
-                Some("Wrong credentials"),
+    if !is_user_valid {
+        state
+            .record_login_failure(
+                &payload.client_id,
+                state.config.max_failed_login_attempts,
+                state.config.login_lockout_seconds,
             )
             .await;
-            return Err(AuthError::WrongCredentials);
-        }
-        "client"
-    };
+        audit_event(
+            &state,
+            "auth.token.failed",
+            Some(&payload.client_id),
+            Some("Wrong credentials"),
+        )
+        .await;
+        return Err(AuthError::WrongCredentials);
+    }
 
     state.clear_login_failures(&payload.client_id).await;
     audit_event(
@@ -197,13 +199,20 @@ pub async fn auth_token(
     .await;
 
     let now = Utc::now().timestamp();
+    let subject_prefix = "user";
+    let is_admin_user = if let Some(user_id) = user_id.as_deref() {
+        is_user_admin(db, user_id).await
+    } else {
+        false
+    };
 
     // Create access token claims
     let access_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
-        scope: access_scope(subject_prefix, is_admin_client),
+        scope: access_scope(subject_prefix, is_admin_user),
+        role: claim_role(subject_prefix, is_admin_user),
         iat: now,
         exp: now + state.config.token_expiry_seconds,
         jti: utils::generate_jti(),
@@ -212,39 +221,154 @@ pub async fn auth_token(
 
     let access_token = state.jwt_keys.sign_token(&access_claims)?;
 
-    let refresh_token = if !is_user_valid {
-        let refresh_claims = Claims {
-            sub: format!("{}:{}", subject_prefix, payload.client_id),
-            iss: state.config.jwt_issuer.clone(),
-            aud: "admin-backend".to_string(),
-            scope: vec!["refresh".into()],
-            iat: now,
-            exp: now + state.config.refresh_token_expiry_seconds,
-            jti: utils::generate_jti(),
-            token_type: "refresh".to_string(),
-        };
-
-        let token = state.jwt_keys.sign_token(&refresh_claims)?;
-
-        crate::db::create_refresh_token(
-            db,
-            &refresh_claims.jti,
-            &payload.client_id,
-            &token,
-            refresh_claims.exp,
-        )
-        .await
-        .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
-
-        Some(token)
-    } else {
-        None
-    };
-
     // Send the authorized tokens
     Ok(Json(AuthBody::new(
         access_token,
-        refresh_token,
+        None,
+        state.config.token_expiry_seconds,
+    )))
+}
+
+pub async fn admin_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AuthPayload>,
+) -> Result<Json<AuthBody>, AuthError> {
+    if payload.client_id.is_empty() || payload.client_secret.is_empty() {
+        return Err(AuthError::MissingCredentials);
+    }
+
+    let client_ip = extract_client_ip(&headers);
+    let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
+    let global_rate_key = format!("global:{}", client_ip);
+
+    if !state
+        .allow_auth_request(
+            &global_rate_key,
+            state.config.auth_rate_limit_window_seconds,
+            state.config.auth_global_rate_limit_max_requests,
+        )
+        .await
+    {
+        return Err(AuthError::TooManyRequests);
+    }
+
+    if !state
+        .allow_auth_request(
+            &scoped_rate_key,
+            state.config.auth_rate_limit_window_seconds,
+            state.config.auth_rate_limit_max_requests,
+        )
+        .await
+    {
+        return Err(AuthError::TooManyRequests);
+    }
+
+    if state.is_login_locked(&payload.client_id).await.is_some() {
+        return Err(AuthError::TooManyRequests);
+    }
+
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+
+    let (stored_secret, is_admin_client) = match crate::db::get_client_auth_info(db, &payload.client_id).await {
+        Ok(Some((secret, is_admin))) => (secret, is_admin),
+        Ok(None) => {
+            state
+                .record_login_failure(
+                    &payload.client_id,
+                    state.config.max_failed_login_attempts,
+                    state.config.login_lockout_seconds,
+                )
+                .await;
+            return Err(AuthError::WrongCredentials);
+        }
+        Err(_) => return Err(AuthError::DatabaseError("Failed to get client".to_string())),
+    };
+
+    if stored_secret != payload.client_secret {
+        state
+            .record_login_failure(
+                &payload.client_id,
+                state.config.max_failed_login_attempts,
+                state.config.login_lockout_seconds,
+            )
+            .await;
+        audit_event(
+            &state,
+            "admin.token.failed",
+            Some(&payload.client_id),
+            Some("Wrong credentials"),
+        )
+        .await;
+        return Err(AuthError::WrongCredentials);
+    }
+
+    if !is_admin_client {
+        audit_event(
+            &state,
+            "admin.token.forbidden",
+            Some(&payload.client_id),
+            Some("Client is not authorized for management token issuance"),
+        )
+        .await;
+        return Err(AuthError::InsufficientRole);
+    }
+
+    state.clear_login_failures(&payload.client_id).await;
+
+    let now = Utc::now().timestamp();
+    let subject_prefix = "client";
+    let access_claims = Claims {
+        sub: format!("{}:{}", subject_prefix, payload.client_id),
+        iss: state.config.jwt_issuer.clone(),
+        aud: "admin-backend".to_string(),
+        scope: access_scope(subject_prefix, true),
+        role: claim_role(subject_prefix, true),
+        iat: now,
+        exp: now + state.config.token_expiry_seconds,
+        jti: utils::generate_jti(),
+        token_type: "access".to_string(),
+    };
+
+    let refresh_claims = Claims {
+        sub: format!("{}:{}", subject_prefix, payload.client_id),
+        iss: state.config.jwt_issuer.clone(),
+        aud: "admin-backend".to_string(),
+        scope: vec!["refresh".into()],
+        role: claim_role(subject_prefix, true),
+        iat: now,
+        exp: now + state.config.refresh_token_expiry_seconds,
+        jti: utils::generate_jti(),
+        token_type: "refresh".to_string(),
+    };
+
+    let access_token = state.jwt_keys.sign_token(&access_claims)?;
+    let refresh_token = state.jwt_keys.sign_token(&refresh_claims)?;
+
+    crate::db::create_refresh_token(
+        db,
+        &refresh_claims.jti,
+        &payload.client_id,
+        &refresh_token,
+        refresh_claims.exp,
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
+
+    audit_event(
+        &state,
+        "admin.token.success",
+        Some(&payload.client_id),
+        Some("Management access token issued"),
+    )
+    .await;
+
+    Ok(Json(AuthBody::new(
+        access_token,
+        Some(refresh_token),
         state.config.token_expiry_seconds,
     )))
 }
@@ -579,6 +703,7 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
     Ok(Json(MeResponse {
         sub: claims.sub,
         scope: claims.scope,
+        role: claims.role,
         aud: claims.aud,
         exp: claims.exp,
         iss: claims.iss,
@@ -642,12 +767,17 @@ pub async fn auth_refresh(
         false
     };
 
+    if !is_admin_client {
+        return Err(AuthError::InsufficientRole);
+    }
+
     // Create new access token claims
     let access_claims = Claims {
         sub: format!("client:{}", client_id),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope("client", is_admin_client),
+        role: claim_role("client", is_admin_client),
         iat: now,
         exp: now + state.config.token_expiry_seconds,
         jti: utils::generate_jti(),
@@ -660,6 +790,7 @@ pub async fn auth_refresh(
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
+        role: claim_role("client", is_admin_client),
         iat: now,
         exp: now + state.config.refresh_token_expiry_seconds,
         jti: utils::generate_jti(),
