@@ -745,6 +745,15 @@ pub async fn auth_refresh(
     State(state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Result<Json<AuthBody>, AuthError> {
+    // Validate JWT token_type before touching the database to prevent
+    // access tokens from being accepted as refresh tokens.
+    let refresh_claims = state.jwt_keys.decode_token(&payload.refresh_token);
+    match refresh_claims {
+        Ok(ref c) if c.token_type != "refresh" => return Err(AuthError::InvalidToken),
+        Err(_) => return Err(AuthError::InvalidToken),
+        Ok(_) => {}
+    }
+
     // Check if refresh token exists and is not revoked
     let (token_id, client_id) = if let Some(db) = &state.db {
         match crate::db::validate_refresh_token(db, &payload.refresh_token).await {
