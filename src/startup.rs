@@ -96,12 +96,18 @@ pub async fn init_app_router_with_db(
         .route("/", get(index))
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
 
+    // service_integration_routes 需要 audience="admin-backend"，使用在 JWT 层严格校验 aud 的专用中间件
+    let service_integration_routes = routes::auth::service_integration_routes()
+        .route_layer(middleware::from_fn(
+            auth::service_integration_authorization_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::service_integration_auth_middleware,
+        ));
+
     let service_protected_routes = Router::new()
-        .merge(
-            routes::auth::service_integration_routes().route_layer(middleware::from_fn(
-                auth::service_integration_authorization_middleware,
-            )),
-        )
+        .merge(service_integration_routes)
         .merge(
             routes::service::service_introspect_routes().route_layer(middleware::from_fn(
                 auth::service_read_authorization_middleware,

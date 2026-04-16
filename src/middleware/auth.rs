@@ -157,6 +157,7 @@ pub async fn user_authorization_middleware(
 
 /// 服务间鉴权中间件
 /// 验证 Bearer Token 为有效的 service_access JWT，并将 ServiceClaims 注入请求扩展
+/// aud 字段的精确校验由后续授权中间件（ensure_service_claims）负责
 pub async fn service_auth_middleware(
     State(state): State<AppState>,
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
@@ -166,6 +167,43 @@ pub async fn service_auth_middleware(
     let token = auth.token();
 
     let claims = match crate::handlers::service::decode_service_token(&state, token) {
+        Ok(c) => c,
+        Err(err) => return Ok(err.into_response()),
+    };
+
+    // 检查 Token 黑名单
+    if let Some(db) = &state.db {
+        match crate::db::is_token_blacklisted(db, token).await {
+            Ok(true) => return Ok(AuthError::InvalidToken.into_response()),
+            Err(_) => {
+                return Ok(
+                    AuthError::DatabaseError("Token validation failed".to_string()).into_response(),
+                )
+            }
+            Ok(false) => {}
+        }
+    }
+
+    request.extensions_mut().insert(claims);
+    Ok(next.run(request).await)
+}
+
+/// 面向授权中心集成的服务鉴权：
+/// 在 JWT 层严格校验 audience = "admin-backend"（防御纵深），
+/// 同时注入 ServiceClaims 供后续 service_integration_authorization_middleware 使用
+pub async fn service_integration_auth_middleware(
+    State(state): State<AppState>,
+    TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let token = auth.token();
+
+    let claims = match crate::handlers::service::decode_service_token_for_audience(
+        &state,
+        token,
+        "admin-backend",
+    ) {
         Ok(c) => c,
         Err(err) => return Ok(err.into_response()),
     };

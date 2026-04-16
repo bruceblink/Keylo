@@ -193,6 +193,35 @@ impl Keys {
         validation.validate_aud = false;
         validation.set_issuer(&[self.issuer.as_str()]);
 
+        let claims =
+            decode::<crate::models::service::ServiceClaims>(token, &self.decoding, &validation)
+                .map(|data| data.claims)
+                .map_err(|err| match err.kind() {
+                    ErrorKind::ExpiredSignature => AuthError::ExpiredToken,
+                    _ => AuthError::InvalidToken,
+                })?;
+
+        // Ensure aud field is present and non-empty; precise audience enforcement
+        // is performed by the middleware layer (ensure_service_claims).
+        if claims.aud.trim().is_empty() {
+            return Err(AuthError::InvalidToken);
+        }
+
+        Ok(claims)
+    }
+
+    /// Like [`decode_service_token`] but also validates that the token's `aud` matches
+    /// `expected_audience` at the JWT level, providing defense-in-depth for call sites
+    /// that know the expected audience at decode time.
+    pub fn decode_service_token_for_audience(
+        &self,
+        token: &str,
+        expected_audience: &str,
+    ) -> Result<crate::models::service::ServiceClaims, AuthError> {
+        let mut validation = Validation::new(self.algorithm);
+        validation.set_audience(&[expected_audience]);
+        validation.set_issuer(&[self.issuer.as_str()]);
+
         decode::<crate::models::service::ServiceClaims>(token, &self.decoding, &validation)
             .map(|data| data.claims)
             .map_err(|err| match err.kind() {

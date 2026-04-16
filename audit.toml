@@ -2,9 +2,6 @@
 ignore = [
     # Transitive via sqlx-macros-core -> sqlx-mysql; no patched release available upstream yet.
     "RUSTSEC-2023-0071",
-    # rustls-webpki URI name constraints bug; fixed in >=0.103.12 but no direct dependency yet.
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    # rand unsound with custom logger; warning only, no fix available via direct deps.
+    # rand unsound with custom logger; transitive dep, no actionable fix.
     "RUSTSEC-2026-0097",
 ]

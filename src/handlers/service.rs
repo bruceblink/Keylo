@@ -294,6 +294,17 @@ pub fn decode_service_token(state: &AppState, token: &str) -> Result<ServiceClai
     state.jwt_keys.decode_service_token(token)
 }
 
+/// 解码并验证服务 Token，同时在 JWT 层强制校验 audience（防御纵深）
+pub fn decode_service_token_for_audience(
+    state: &AppState,
+    token: &str,
+    expected_audience: &str,
+) -> Result<ServiceClaims, AuthError> {
+    state
+        .jwt_keys
+        .decode_service_token_for_audience(token, expected_audience)
+}
+
 /// 解析请求的 scope：必须是 allowed_scopes 的子集
 fn resolve_scopes(
     requested: &Option<String>,
