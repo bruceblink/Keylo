@@ -92,13 +92,16 @@ pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
     let admin_client_secret = std::env::var("ADMIN_CLIENT_SECRET").ok();
 
     if let (Some(id), Some(secret)) = (admin_client_id, admin_client_secret) {
-        upsert_client(
-            pool,
-            &id,
-            &secret,
-            "Admin Client",
-            Some("Configured admin client"),
+        // Use INSERT ... ON CONFLICT DO NOTHING so that a rotated secret is never
+        // overwritten by a subsequent application restart or test setup call.
+        sqlx::query(
+            "INSERT INTO clients (id, secret, name, description, active)
+             VALUES ($1, $2, 'Admin Client', 'Configured admin client', TRUE)
+             ON CONFLICT (id) DO NOTHING",
         )
+        .bind(&id)
+        .bind(&secret)
+        .execute(pool)
         .await?;
     }
 
