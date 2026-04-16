@@ -233,32 +233,33 @@ async fn run_third_party_import(
                         }
                     }
                 }
-                Ok(None) => match create_user(db, &username, &email, item.password.as_deref()).await
-                {
-                    Ok(new_user) => {
-                        if !active {
-                            let _ = set_user_active(db, &new_user.id, false).await;
+                Ok(None) => {
+                    match create_user(db, &username, &email, item.password.as_deref()).await {
+                        Ok(new_user) => {
+                            if !active {
+                                let _ = set_user_active(db, &new_user.id, false).await;
+                            }
+                            created += 1;
+                            (
+                                new_user.clone(),
+                                "created".to_string(),
+                                Some(new_user.id.clone()),
+                            )
                         }
-                        created += 1;
-                        (
-                            new_user.clone(),
-                            "created".to_string(),
-                            Some(new_user.id.clone()),
-                        )
+                        Err(e) => {
+                            failed += 1;
+                            let error_string = e.to_string();
+                            push_failed_result(
+                                &mut results,
+                                external_user_id,
+                                None,
+                                map_item_error_code(&error_string),
+                                format!("failed to create remapped user: {error_string}"),
+                            );
+                            continue;
+                        }
                     }
-                    Err(e) => {
-                        failed += 1;
-                        let error_string = e.to_string();
-                        push_failed_result(
-                            &mut results,
-                            external_user_id,
-                            None,
-                            map_item_error_code(&error_string),
-                            format!("failed to create remapped user: {error_string}"),
-                        );
-                        continue;
-                    }
-                },
+                }
                 Err(e) => {
                     failed += 1;
                     push_failed_result(
@@ -300,27 +301,29 @@ async fn run_third_party_import(
                         .await;
                         (user.clone(), "linked".to_string(), Some(user.id.clone()))
                     }
-                    Ok(None) => match create_user(db, &username, &email, item.password.as_deref()).await {
-                        Ok(user) => {
-                            if !active {
-                                let _ = set_user_active(db, &user.id, false).await;
+                    Ok(None) => {
+                        match create_user(db, &username, &email, item.password.as_deref()).await {
+                            Ok(user) => {
+                                if !active {
+                                    let _ = set_user_active(db, &user.id, false).await;
+                                }
+                                created += 1;
+                                (user.clone(), "created".to_string(), Some(user.id.clone()))
                             }
-                            created += 1;
-                            (user.clone(), "created".to_string(), Some(user.id.clone()))
+                            Err(e) => {
+                                failed += 1;
+                                let error_string = e.to_string();
+                                push_failed_result(
+                                    &mut results,
+                                    external_user_id,
+                                    None,
+                                    map_item_error_code(&error_string),
+                                    format!("failed to create user: {error_string}"),
+                                );
+                                continue;
+                            }
                         }
-                        Err(e) => {
-                            failed += 1;
-                            let error_string = e.to_string();
-                            push_failed_result(
-                                &mut results,
-                                external_user_id,
-                                None,
-                                map_item_error_code(&error_string),
-                                format!("failed to create user: {error_string}"),
-                            );
-                            continue;
-                        }
-                    },
+                    }
                     Err(e) => {
                         failed += 1;
                         push_failed_result(
@@ -441,7 +444,13 @@ async fn run_third_party_import(
             Some(actor_sub),
             Some(&format!(
                 "provider={}, dry_run={}, total={}, created={}, updated={}, linked={}, failed={}",
-                provider, dry_run, summary.total, summary.created, summary.updated, summary.linked, summary.failed
+                provider,
+                dry_run,
+                summary.total,
+                summary.created,
+                summary.updated,
+                summary.linked,
+                summary.failed
             )),
         )
         .await;
@@ -711,14 +720,8 @@ pub async fn start_third_party_import_job(
             }
         };
 
-        let output = run_third_party_import(
-            db,
-            &provider_for_task,
-            users,
-            dry_run,
-            Some(&actor),
-        )
-        .await;
+        let output =
+            run_third_party_import(db, &provider_for_task, users, dry_run, Some(&actor)).await;
 
         let mut jobs = state_for_task.migration_jobs.write().await;
         if let Some(job) = jobs.get_mut(&job_id_for_task) {

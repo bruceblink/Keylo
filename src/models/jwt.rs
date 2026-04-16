@@ -53,7 +53,11 @@ pub struct Claims {
 
 impl Display for Claims {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Sub: {}\nScop: {:?}\nRole: {:?}", self.sub, self.scope, self.role)
+        write!(
+            f,
+            "Sub: {}\nScop: {:?}\nRole: {:?}",
+            self.sub, self.scope, self.role
+        )
     }
 }
 

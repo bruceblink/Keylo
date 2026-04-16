@@ -273,20 +273,21 @@ pub async fn admin_token(
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
 
-    let (stored_secret, is_admin_client) = match crate::db::get_client_auth_info(db, &payload.client_id).await {
-        Ok(Some((secret, is_admin))) => (secret, is_admin),
-        Ok(None) => {
-            state
-                .record_login_failure(
-                    &payload.client_id,
-                    state.config.max_failed_login_attempts,
-                    state.config.login_lockout_seconds,
-                )
-                .await;
-            return Err(AuthError::WrongCredentials);
-        }
-        Err(_) => return Err(AuthError::DatabaseError("Failed to get client".to_string())),
-    };
+    let (stored_secret, is_admin_client) =
+        match crate::db::get_client_auth_info(db, &payload.client_id).await {
+            Ok(Some((secret, is_admin))) => (secret, is_admin),
+            Ok(None) => {
+                state
+                    .record_login_failure(
+                        &payload.client_id,
+                        state.config.max_failed_login_attempts,
+                        state.config.login_lockout_seconds,
+                    )
+                    .await;
+                return Err(AuthError::WrongCredentials);
+            }
+            Err(_) => return Err(AuthError::DatabaseError("Failed to get client".to_string())),
+        };
 
     if stored_secret != payload.client_secret {
         state

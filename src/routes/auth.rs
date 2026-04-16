@@ -1,9 +1,9 @@
 use crate::handlers::user::{jit_register_user, register_user};
 use crate::handlers::{
-    auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client, auth_get_audit_logs,
-    auth_get_blacklisted_tokens, auth_introspect, auth_jwks, auth_list_clients, auth_logout,
-    auth_me, auth_refresh, auth_rotate_client_secret, auth_token, auth_update_client,
-    admin_token,
+    admin_token, auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client,
+    auth_get_audit_logs, auth_get_blacklisted_tokens, auth_introspect, auth_jwks,
+    auth_list_clients, auth_logout, auth_me, auth_refresh, auth_rotate_client_secret, auth_token,
+    auth_update_client,
 };
 use crate::state::AppState;
 use axum::routing::{get, post, put};

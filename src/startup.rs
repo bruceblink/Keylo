@@ -111,14 +111,12 @@ pub async fn init_app_router_with_db(
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
         .merge(
-            routes::user::self_user_routes().route_layer(middleware::from_fn(
-                auth::user_authorization_middleware,
-            )),
+            routes::user::self_user_routes()
+                .route_layer(middleware::from_fn(auth::user_authorization_middleware)),
         )
         .merge(
-            routes::auth::admin_router().route_layer(middleware::from_fn(
-                auth::admin_authorization_middleware,
-            )),
+            routes::auth::admin_router()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
         .nest(
             "/api/oauth",
