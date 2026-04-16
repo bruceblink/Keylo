@@ -422,7 +422,7 @@ async fn run_third_party_import(
 
         results.push(ThirdPartyUserImportResultItem {
             external_user_id,
-            user_id: user_id.or_else(|| Some(resolved_user.id)),
+            user_id: user_id.or(Some(resolved_user.id)),
             status,
             error_code: None,
             message: None,
