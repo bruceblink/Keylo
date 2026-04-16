@@ -315,9 +315,7 @@ pub async fn update_management_client(
     description: Option<&str>,
     active: Option<bool>,
 ) -> Result<bool> {
-    let hashed_secret: Option<String> = client_secret
-        .map(|s| hash(s, DEFAULT_COST))
-        .transpose()?;
+    let hashed_secret: Option<String> = client_secret.map(|s| hash(s, DEFAULT_COST)).transpose()?;
     let result = sqlx::query(
         "UPDATE clients
          SET secret = COALESCE($2, secret),
