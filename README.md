@@ -1,4 +1,4 @@
-# Keylo v1.0.1
+# Keylo v1.1.0
 
 **Keylo** 是一个轻量、可扩展的 **统一认证与授权服务**（Auth Service），为你的多服务系统提供统一的 JWT 签发、Session 管理和 OAuth 支持。
 
@@ -15,6 +15,12 @@
 * ✅ PostgreSQL 自动迁移，Redis 可选增强限流、锁定和 OAuth state
 * ✅ 使用 Axum 0.8 + Tokio 的模块化 Rust 服务架构
 * ✅ Docker / GHCR 镜像发布支持
+* ✅ 客户端密钥 bcrypt 哈希存储，杜绝明文泄露风险
+* ✅ 生产环境强制 Redis 限流，禁止降级为内存模式
+* ✅ 密码复杂度策略（大写、小写、数字、特殊字符）
+* ✅ OAuth state 原子消费（GETDEL），消除 TOCTOU 竞态
+* ✅ 服务 Token audience 严格校验
+* ✅ 数据库连接池大小可通过 `DB_POOL_SIZE` 环境变量配置
 
 ---
 
@@ -105,9 +111,10 @@ cargo tarpaulin --out Html
 
 ### 生产部署与发布说明
 
-Keylo 1.0 的生产部署要求、发布能力边界和密钥轮换建议见以下文档：
+Keylo 的生产部署要求、发布能力边界和密钥轮换建议见以下文档：
 
 * [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
+* [docs/RELEASE_1_1.md](docs/RELEASE_1_1.md)
 * [docs/RELEASE_1_0.md](docs/RELEASE_1_0.md)
 * [docs/KEY_ROTATION.md](docs/KEY_ROTATION.md)
 

@@ -1,16 +1,16 @@
-# Keylo 1.0 生产部署指南
+# Keylo 1.1.0 生产部署指南
 
-本文档定义 Keylo 1.0 在生产环境中的最小部署要求、配置要求和上线前检查项。
+本文档定义 Keylo 1.1.0 在生产环境中的最小部署要求、配置要求和上线前检查项。
 
 ## 目标
 
-Keylo 在生产环境中承担统一认证中心职责，因此部署目标不是“能启动”，而是：
+Keylo 在生产环境中承担统一认证中心职责，因此部署目标不是"能启动"，而是：
 
 - 使用显式提供的 RSA 密钥对签发 JWT
 - 通过 JWKS 暴露公开验签密钥
 - 提供用户与服务 Token 内省能力
 - 使用 PostgreSQL 持久化认证状态
-- 可选接入 Redis 支持分布式限流、登录锁定和 OAuth state 管理
+- **（1.1.0 起生产环境强制）** 接入 Redis 支持分布式限流、登录锁定和 OAuth state 管理
 
 ## 必要配置
 
@@ -23,6 +23,7 @@ JWT_KEY_ID=keylo-rs256-1
 JWT_PRIVATE_KEY_PATH=/app/keys/private.pem
 JWT_PUBLIC_KEY_PATH=/app/keys/public.pem
 DATABASE_URL=postgres://keylo_user:keylo_password@postgres:5432/keylo
+DB_POOL_SIZE=20
 ADMIN_CLIENT_ID=cli-admin-root
 ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
 REDIS_URL=redis://redis:6379
@@ -33,8 +34,10 @@ RUST_LOG=keylo=info,axum=info
 
 - 生产环境禁止使用内置开发密钥。
 - 生产环境要求显式提供管理客户端。
-- 生产环境要求显式提供 Redis。
+- **1.1.0 起生产环境 Redis 为强制依赖**：若 Redis 不可用，限流中间件将拒绝请求，服务不会降级为内存限流。
+- `DB_POOL_SIZE` 控制数据库连接池大小，生产环境建议根据并发量设置（默认 5）。
 - 如果数据库初始化失败，服务会直接失败启动，不再回退到内存模式。
+- 客户端密钥（`client_secret`）存储为 bcrypt 哈希；从 1.0.x 升级时需重置所有客户端密钥。
 
 ## RSA 密钥要求
 
