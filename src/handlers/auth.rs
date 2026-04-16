@@ -289,7 +289,7 @@ pub async fn admin_token(
             Err(_) => return Err(AuthError::DatabaseError("Failed to get client".to_string())),
         };
 
-    if stored_secret != payload.client_secret {
+    if !verify(&payload.client_secret, &stored_secret).unwrap_or(false) {
         state
             .record_login_failure(
                 &payload.client_id,

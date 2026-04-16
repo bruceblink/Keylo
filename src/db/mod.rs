@@ -1,5 +1,6 @@
 use crate::config::Config;
 use anyhow::Result;
+use bcrypt::{hash, DEFAULT_COST};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use uuid::Uuid;
@@ -38,9 +39,10 @@ pub async fn create_client(
     name: &str,
     description: Option<&str>,
 ) -> Result<()> {
+    let hashed = hash(client_secret, DEFAULT_COST)?;
     sqlx::query("INSERT INTO clients (id, secret, name, description) VALUES ($1, $2, $3, $4)")
         .bind(client_id)
-        .bind(client_secret)
+        .bind(&hashed)
         .bind(name)
         .bind(description)
         .execute(pool)
@@ -57,6 +59,7 @@ pub async fn upsert_client(
     name: &str,
     description: Option<&str>,
 ) -> Result<()> {
+    let hashed = hash(client_secret, DEFAULT_COST)?;
     sqlx::query(
         "INSERT INTO clients (id, secret, name, description, active)
          VALUES ($1, $2, $3, $4, TRUE)
@@ -68,7 +71,7 @@ pub async fn upsert_client(
              updated_at = NOW()",
     )
     .bind(client_id)
-    .bind(client_secret)
+    .bind(&hashed)
     .bind(name)
     .bind(description)
     .execute(pool)
@@ -94,13 +97,14 @@ pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
     if let (Some(id), Some(secret)) = (admin_client_id, admin_client_secret) {
         // Use INSERT ... ON CONFLICT DO NOTHING so that a rotated secret is never
         // overwritten by a subsequent application restart or test setup call.
+        let hashed_admin_secret = hash(&secret, DEFAULT_COST)?;
         sqlx::query(
             "INSERT INTO clients (id, secret, name, description, active)
              VALUES ($1, $2, 'Admin Client', 'Configured admin client', TRUE)
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(&id)
-        .bind(&secret)
+        .bind(&hashed_admin_secret)
         .execute(pool)
         .await?;
     }
@@ -236,13 +240,14 @@ pub async fn rotate_client_secret(
     client_id: &str,
     new_secret: &str,
 ) -> Result<bool> {
+    let hashed = hash(new_secret, DEFAULT_COST)?;
     let result = sqlx::query(
         "UPDATE clients
          SET secret = $2, updated_at = NOW()
          WHERE id = $1 AND active = TRUE",
     )
     .bind(client_id)
-    .bind(new_secret)
+    .bind(&hashed)
     .execute(pool)
     .await?;
 
@@ -285,12 +290,13 @@ pub async fn create_management_client(
     description: Option<&str>,
     active: bool,
 ) -> Result<()> {
+    let hashed = hash(client_secret, DEFAULT_COST)?;
     sqlx::query(
         "INSERT INTO clients (id, secret, name, description, active)
          VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(client_id)
-    .bind(client_secret)
+    .bind(&hashed)
     .bind(name)
     .bind(description)
     .bind(active)
@@ -309,6 +315,9 @@ pub async fn update_management_client(
     description: Option<&str>,
     active: Option<bool>,
 ) -> Result<bool> {
+    let hashed_secret: Option<String> = client_secret
+        .map(|s| hash(s, DEFAULT_COST))
+        .transpose()?;
     let result = sqlx::query(
         "UPDATE clients
          SET secret = COALESCE($2, secret),
@@ -319,7 +328,7 @@ pub async fn update_management_client(
          WHERE id = $1",
     )
     .bind(client_id)
-    .bind(client_secret)
+    .bind(hashed_secret.as_deref())
     .bind(name)
     .bind(description)
     .bind(active)

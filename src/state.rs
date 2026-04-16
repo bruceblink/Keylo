@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::models::Keys;
 use crate::models::MigrationBatchJob;
+use bcrypt::verify;
 use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -83,7 +84,7 @@ impl AppState {
     pub fn validate_client(&self, client_id: &str, client_secret: &str) -> bool {
         self.clients
             .get(client_id)
-            .is_some_and(|secret| secret == client_secret)
+            .is_some_and(|hash| verify(client_secret, hash).unwrap_or(false))
     }
 
     /// 获取动态的允许 audience
