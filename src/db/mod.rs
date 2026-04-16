@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::config::Config;
+use anyhow::Result;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use uuid::Uuid;
@@ -115,17 +115,23 @@ pub async fn seed_super_admin_user(pool: &PgPool, config: &Config) -> Result<()>
         .super_admin_username
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("SUPER_ADMIN_USERNAME is required when bootstrap is enabled"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("SUPER_ADMIN_USERNAME is required when bootstrap is enabled")
+        })?;
     let email = config
         .super_admin_email
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("SUPER_ADMIN_EMAIL is required when bootstrap is enabled"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("SUPER_ADMIN_EMAIL is required when bootstrap is enabled")
+        })?;
     let password = config
         .super_admin_password
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("SUPER_ADMIN_PASSWORD is required when bootstrap is enabled"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("SUPER_ADMIN_PASSWORD is required when bootstrap is enabled")
+        })?;
 
     if password.len() < 8 {
         anyhow::bail!("SUPER_ADMIN_PASSWORD must be at least 8 characters");
@@ -137,9 +143,16 @@ pub async fn seed_super_admin_user(pool: &PgPool, config: &Config) -> Result<()>
     };
 
     let user = if let Some(existing) = get_user_by_username(pool, username).await? {
-        update_user(pool, &existing.id, Some(username), Some(email), Some(password), Some(true))
-            .await?
-            .unwrap_or(existing)
+        update_user(
+            pool,
+            &existing.id,
+            Some(username),
+            Some(email),
+            Some(password),
+            Some(true),
+        )
+        .await?
+        .unwrap_or(existing)
     } else if let Some(existing_email) = get_user_by_email(pool, email).await? {
         update_user(
             pool,
@@ -157,7 +170,8 @@ pub async fn seed_super_admin_user(pool: &PgPool, config: &Config) -> Result<()>
 
     assign_role_to_user(pool, &user.id, &super_role.id).await?;
     if get_permission_by_name(pool, "admin.full").await?.is_none() {
-        let permission = create_permission(pool, "admin.full", Some("Full admin permission")).await?;
+        let permission =
+            create_permission(pool, "admin.full", Some("Full admin permission")).await?;
         let _ = assign_permission_to_role(pool, &super_role.id, &permission.id).await;
     }
 

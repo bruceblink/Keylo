@@ -550,7 +550,13 @@ mod tests {
         let admin_login_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_login_body["access_token"].as_str().unwrap();
 
-        let client_id = format!("untrusted-client-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis());
+        let client_id = format!(
+            "untrusted-client-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
 
         let create_resp = server
             .post("/v1/admin/clients")

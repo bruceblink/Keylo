@@ -1,6 +1,6 @@
 use crate::errors::AuthError;
-use crate::models::Claims;
 use crate::models::service::ServiceClaims;
+use crate::models::Claims;
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::State;
@@ -127,7 +127,9 @@ pub async fn admin_authorization_middleware(
         None => return Ok(AuthError::Unauthorized.into_response()),
     };
 
-    if let Err(err) = ensure_access_claims(claims, Some("admin"), Some("admin"), Some("admin-backend")) {
+    if let Err(err) =
+        ensure_access_claims(claims, Some("admin"), Some("admin"), Some("admin-backend"))
+    {
         return Ok(err.into_response());
     }
 
@@ -144,7 +146,9 @@ pub async fn user_authorization_middleware(
         None => return Ok(AuthError::Unauthorized.into_response()),
     };
 
-    if let Err(err) = ensure_access_claims(claims, Some("user"), Some("write"), Some("admin-backend")) {
+    if let Err(err) =
+        ensure_access_claims(claims, Some("user"), Some("write"), Some("admin-backend"))
+    {
         return Ok(err.into_response());
     }
 
