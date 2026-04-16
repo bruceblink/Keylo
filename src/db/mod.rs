@@ -18,8 +18,13 @@ pub use user::*;
 
 /// 初始化数据库连接池
 pub async fn init_db_pool(database_url: &str) -> Result<PgPool> {
+    let max_connections: u32 = std::env::var("DB_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(max_connections)
         .connect(database_url)
         .await?;
 
