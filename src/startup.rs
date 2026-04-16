@@ -52,6 +52,10 @@ pub async fn init_app_router_with_db(
         if config.redis_url.is_none() {
             anyhow::bail!("REDIS_URL must be set in production");
         }
+    } else if config.jwt_using_default_dev_keys {
+        tracing::warn!("⚠️  SECURITY WARNING: Using hardcoded development JWT keys. \
+            Set JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM (or their *_PATH equivalents) \
+            before deploying to production. These keys are public and MUST NOT be used in production.");
     }
 
     if config.is_production() {
