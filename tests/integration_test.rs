@@ -261,15 +261,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_rotate_client_secret_revokes_refresh_tokens() {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
+        // Use a UNIQUE admin client for this test to avoid polluting the shared
+        // cli-admin-root client (rotation leaves the secret changed in the DB and
+        // ON CONFLICT DO NOTHING prevents subsequent seed calls from restoring it,
+        // which would break other parallel tests that rely on cli-admin-root).
+        //
+        // Since is_admin_client is now stored in the DB (not from ADMIN_CLIENT_ID
+        // env var at request time), seeding a unique client via setup_test_server
+        // gives it admin privileges independently without affecting cli-admin-root.
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let rotate_client_id = format!("cli-rotate-test-{}", ts);
+        let rotate_client_secret = "RotateTest123!";
+
+        std::env::set_var("ADMIN_CLIENT_ID", &rotate_client_id);
+        std::env::set_var("ADMIN_CLIENT_SECRET", rotate_client_secret);
 
         let server = setup_test_server().await;
         let admin_login_resp = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli-admin-root",
-                "client_secret": "cli-admin-root-secret"
+                "client_id": rotate_client_id,
+                "client_secret": rotate_client_secret
             }))
             .await;
 
@@ -282,23 +297,20 @@ mod tests {
         let admin_refresh_token = admin_login_body["refresh_token"].as_str().unwrap();
 
         let rotate_resp = server
-            .post(&format!(
-                "/v1/admin/clients/{}/rotate-secret",
-                "cli-admin-root"
-            ))
+            .post(&format!("/v1/admin/clients/{}/rotate-secret", rotate_client_id))
             .add_header("Authorization", format!("Bearer {}", admin_access_token))
             .json(&json!({}))
             .await;
         rotate_resp.assert_status_ok();
         let rotate_body: serde_json::Value = rotate_resp.json();
         let new_secret = rotate_body["new_secret"].as_str().unwrap();
-        assert_ne!(new_secret, "cli-admin-root-secret");
+        assert_ne!(new_secret, rotate_client_secret);
 
         let old_login = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli-admin-root",
-                "client_secret": "cli-admin-root-secret"
+                "client_id": rotate_client_id,
+                "client_secret": rotate_client_secret
             }))
             .await;
         assert_eq!(old_login.status_code(), StatusCode::UNAUTHORIZED);
@@ -306,7 +318,7 @@ mod tests {
         let new_login = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli-admin-root",
+                "client_id": rotate_client_id,
                 "client_secret": new_secret
             }))
             .await;
@@ -319,6 +331,11 @@ mod tests {
             }))
             .await;
         assert_eq!(refresh_resp.status_code(), StatusCode::UNAUTHORIZED);
+
+        // Restore env vars so other tests (which may run concurrently) see the
+        // shared admin client again.
+        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
+        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
     }
 
     #[tokio::test]
@@ -407,7 +424,7 @@ mod tests {
             .json(&json!({
                 "username": username,
                 "email": email,
-                "password": "password123"
+                "password": "Password123!"
             }))
             .await;
 
@@ -420,7 +437,7 @@ mod tests {
             .post("/v1/auth/token")
             .json(&json!({
                 "client_id": username,
-                "client_secret": "password123"
+                "client_secret": "Password123!"
             }))
             .await;
         login_resp.assert_status_ok();
@@ -501,7 +518,7 @@ mod tests {
             .json(&json!({
                 "username": username,
                 "email": email,
-                "password": "password123"
+                "password": "Password123!"
             }))
             .await;
         register_resp.assert_status_ok();
@@ -510,7 +527,7 @@ mod tests {
             .post("/v1/auth/token")
             .json(&json!({
                 "client_id": username,
-                "client_secret": "password123"
+                "client_secret": "Password123!"
             }))
             .await;
         user_login_resp.assert_status_ok();

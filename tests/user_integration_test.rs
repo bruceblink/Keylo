@@ -44,7 +44,7 @@ mod tests {
             .json(&json!({
                 "username": username,
                 "email": email,
-                "password": "oldpassword123"
+                "password": "OldPassword123!"
             }))
             .await;
 
@@ -66,7 +66,7 @@ mod tests {
             .post("/v1/auth/token")
             .json(&json!({
                 "client_id": username.clone(),
-                "client_secret": "oldpassword123"
+                "client_secret": "OldPassword123!"
             }))
             .await;
 
@@ -89,8 +89,8 @@ mod tests {
             .post("/v1/user/change-password")
             .add_header("Authorization", format!("Bearer {}", access_token))
             .json(&json!({
-                "current_password": "oldpassword123",
-                "new_password": "newpassword123"
+                "current_password": "OldPassword123!",
+                "new_password": "NewPassword123!"
             }))
             .await;
 
@@ -112,7 +112,7 @@ mod tests {
             .post("/v1/auth/token")
             .json(&json!({
                 "client_id": username,
-                "client_secret": "newpassword123"
+                "client_secret": "NewPassword123!"
             }))
             .await;
 
@@ -123,7 +123,7 @@ mod tests {
             .post("/v1/auth/token")
             .json(&json!({
                 "client_id": username,
-                "client_secret": "oldpassword123"
+                "client_secret": "OldPassword123!"
             }))
             .await;
 
@@ -150,7 +150,7 @@ mod tests {
             .json(&json!({
                 "username": username,
                 "email": email,
-                "password": "correctpassword123"
+                "password": "CorrectPassword123!"
             }))
             .await;
 
@@ -161,7 +161,7 @@ mod tests {
             .post("/v1/auth/token")
             .json(&json!({
                 "client_id": username.clone(),
-                "client_secret": "correctpassword123"
+                "client_secret": "CorrectPassword123!"
             }))
             .await;
 
@@ -175,8 +175,8 @@ mod tests {
             .post("/v1/user/change-password")
             .add_header("Authorization", format!("Bearer {}", access_token))
             .json(&json!({
-                "current_password": "wrongpassword123",
-                "new_password": "newpassword123"
+                "current_password": "WrongPassword123!",
+                "new_password": "NewPassword123!"
             }))
             .await;
 
@@ -210,7 +210,7 @@ mod tests {
             .json(&json!({
                 "username": username.clone(),
                 "email": email,
-                "password": "oldpassword123"
+                "password": "OldPassword123!"
             }))
             .await;
 
@@ -221,7 +221,7 @@ mod tests {
             .post("/v1/auth/token")
             .json(&json!({
                 "client_id": username,
-                "client_secret": "oldpassword123"
+                "client_secret": "OldPassword123!"
             }))
             .await;
 
@@ -235,7 +235,7 @@ mod tests {
             .post("/v1/user/change-password")
             .add_header("Authorization", format!("Bearer {}", access_token))
             .json(&json!({
-                "current_password": "oldpassword123",
+                "current_password": "OldPassword123!",
                 "new_password": "short"
             }))
             .await;
@@ -261,7 +261,7 @@ mod tests {
             .post("/v1/user/change-password")
             .json(&json!({
                 "current_password": "somepassword",
-                "new_password": "newpassword123"
+                "new_password": "NewPassword123!"
             }))
             .await;
 

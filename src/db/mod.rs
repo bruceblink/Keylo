@@ -103,10 +103,14 @@ pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
     if let (Some(id), Some(secret)) = (admin_client_id, admin_client_secret) {
         // Use INSERT ... ON CONFLICT DO NOTHING so that a rotated secret is never
         // overwritten by a subsequent application restart or test setup call.
+        // is_admin_client=TRUE marks this client as authorised for /v1/admin/token,
+        // which is now stored in the database rather than inferred from ADMIN_CLIENT_ID
+        // at request time, allowing tests to use independent admin clients without
+        // process-wide env-var races.
         let hashed_admin_secret = hash(&secret, DEFAULT_COST)?;
         sqlx::query(
-            "INSERT INTO clients (id, secret, name, description, active)
-             VALUES ($1, $2, 'Admin Client', 'Configured admin client', TRUE)
+            "INSERT INTO clients (id, secret, name, description, active, is_admin_client)
+             VALUES ($1, $2, 'Admin Client', 'Configured admin client', TRUE, TRUE)
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(&id)
@@ -217,16 +221,15 @@ pub async fn get_client_auth_info(
     pool: &PgPool,
     client_id: &str,
 ) -> Result<Option<(String, bool)>> {
-    let row = sqlx::query("SELECT secret FROM clients WHERE id = $1 AND active = TRUE")
-        .bind(client_id)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT secret, is_admin_client FROM clients WHERE id = $1 AND active = TRUE",
+    )
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await?;
 
-    let configured_admin_id = std::env::var("ADMIN_CLIENT_ID").ok();
     Ok(row.map(|r| {
-        let is_admin = configured_admin_id
-            .as_deref()
-            .is_some_and(|admin_id| admin_id == client_id);
+        let is_admin: bool = r.get("is_admin_client");
         (r.get("secret"), is_admin)
     }))
 }
