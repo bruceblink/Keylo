@@ -118,7 +118,7 @@ pub async fn seed_default_clients_with_admin(
         // regardless of prior DB state. This prevents 401s in CI (clean DB) and
         // in parallel tests where a stale secret was left from a previous run.
         // is_admin_client=TRUE marks this client as authorised for /v1/admin/token.
-        let hashed_admin_secret = hash(&secret, DEFAULT_COST)?;
+        let hashed_admin_secret = hash(secret, DEFAULT_COST)?;
         sqlx::query(
             "INSERT INTO clients (id, secret, name, description, active, is_admin_client)
              VALUES ($1, $2, 'Admin Client', 'Configured admin client', TRUE, TRUE)
