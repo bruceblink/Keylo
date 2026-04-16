@@ -137,15 +137,11 @@ impl AppState {
             if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
                 let key = format!("oauth:state:{}", state);
                 let namespaced_key = self.redis_key(&key);
-                let existed = conn
-                    .exists::<_, bool>(&namespaced_key)
-                    .await
-                    .unwrap_or(false);
-                if existed {
-                    let _ = conn.del::<_, i32>(&namespaced_key).await;
-                    return true;
-                }
-                return false;
+                // GETDEL is atomic: returns the value and deletes it in one operation,
+                // preventing TOCTOU race conditions between EXISTS and DEL.
+                let result: redis::RedisResult<Option<String>> =
+                    conn.get_del(&namespaced_key).await;
+                return result.unwrap_or(None).is_some();
             }
         }
 
