@@ -5,6 +5,9 @@ use keylo::config::Config;
 use keylo::startup;
 use serde_json::json;
 
+const INTEGRATION_ADMIN_CLIENT_ID: &str = "cli-admin-root";
+const INTEGRATION_ADMIN_CLIENT_SECRET: &str = "CliAdminRoot#123";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -21,11 +24,16 @@ mod tests {
             "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
         });
 
-        // 尝试连接数据库，如果失败则使用无数据库版本
-        match startup::init_app_router_with_db(config, &database_url).await {
+        match startup::init_app_router_with_db_and_admin(
+            config,
+            &database_url,
+            INTEGRATION_ADMIN_CLIENT_ID,
+            INTEGRATION_ADMIN_CLIENT_SECRET,
+        )
+        .await
+        {
             Ok(app) => TestServer::new(app),
             Err(_) => {
-                // 如果数据库不可用，使用无数据库版本
                 let app = startup::init_app_router();
                 TestServer::new(app)
             }
@@ -276,10 +284,21 @@ mod tests {
         let rotate_client_id = format!("cli-rotate-test-{}", ts);
         let rotate_client_secret = "RotateTest123!";
 
-        std::env::set_var("ADMIN_CLIENT_ID", &rotate_client_id);
-        std::env::set_var("ADMIN_CLIENT_SECRET", rotate_client_secret);
-
-        let server = setup_test_server().await;
+        let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
+        });
+        let router = match startup::init_app_router_with_db_and_admin(
+            Config::default(),
+            &database_url,
+            &rotate_client_id,
+            rotate_client_secret,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        let server = TestServer::new(router);
         let admin_login_resp = server
             .post("/v1/admin/token")
             .json(&json!({
@@ -334,24 +353,16 @@ mod tests {
             }))
             .await;
         assert_eq!(refresh_resp.status_code(), StatusCode::UNAUTHORIZED);
-
-        // Restore env vars so other tests (which may run concurrently) see the
-        // shared admin client again.
-        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
     }
 
     #[tokio::test]
     async fn test_admin_client_management_api() {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
-
         let server = setup_test_server().await;
         let login_resp = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli-admin-root",
-                "client_secret": "cli-admin-root-secret"
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
             }))
             .await;
         if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
@@ -462,16 +473,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_can_introspect_user_access_token() {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
-
         let server = setup_test_server().await;
 
         let admin_login_resp = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli-admin-root",
-                "client_secret": "cli-admin-root-secret"
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
             }))
             .await;
         if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
@@ -556,15 +564,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_untrusted_management_client_cannot_use_user_or_admin_token_flow() {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
-
         let server = setup_test_server().await;
         let admin_login_resp = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli-admin-root",
-                "client_secret": "cli-admin-root-secret"
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
             }))
             .await;
 
@@ -680,15 +685,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_third_party_user_migration_import_is_idempotent() {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
-
         let server = setup_test_server().await;
         let admin_login_resp = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli-admin-root",
-                "client_secret": "cli-admin-root-secret"
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
             }))
             .await;
 
@@ -800,15 +802,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_migration_job_submit_and_query_status() {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
-
         let server = setup_test_server().await;
         let admin_login_resp = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli-admin-root",
-                "client_secret": "cli-admin-root-secret"
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
             }))
             .await;
 

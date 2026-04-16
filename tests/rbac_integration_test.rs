@@ -2,20 +2,27 @@
 mod tests {
     use axum_test::TestServer;
     use keylo::config::Config;
-    use keylo::startup::init_app_router_with_db;
+    use keylo::startup::init_app_router_with_db_and_admin;
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    async fn setup_test_server() -> Option<TestServer> {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-secret");
+    const RBAC_ADMIN_CLIENT_ID: &str = "cli-rbac-test";
+    const RBAC_ADMIN_CLIENT_SECRET: &str = "CliRbacTest#123";
 
+    async fn setup_test_server() -> Option<TestServer> {
         let config = Config::default();
         let db_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
             "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
         });
 
-        match init_app_router_with_db(config, &db_url).await {
+        match init_app_router_with_db_and_admin(
+            config,
+            &db_url,
+            RBAC_ADMIN_CLIENT_ID,
+            RBAC_ADMIN_CLIENT_SECRET,
+        )
+        .await
+        {
             Ok(router) => Some(TestServer::new(router)),
             Err(e) => {
                 println!("Skipping test: DB unavailable ({})", e);
@@ -28,8 +35,8 @@ mod tests {
         let login_response = server
             .post("/v1/admin/token")
             .json(&json!({
-                "client_id": "cli",
-                "client_secret": "cli-secret"
+                "client_id": RBAC_ADMIN_CLIENT_ID,
+                "client_secret": RBAC_ADMIN_CLIENT_SECRET
             }))
             .await;
 

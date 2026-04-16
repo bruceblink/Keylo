@@ -88,6 +88,22 @@ pub async fn upsert_client(
 
 /// 初始化默认客户端
 pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
+    let admin_client_id = std::env::var("ADMIN_CLIENT_ID").ok();
+    let admin_client_secret = std::env::var("ADMIN_CLIENT_SECRET").ok();
+    seed_default_clients_with_admin(
+        pool,
+        admin_client_id.as_deref(),
+        admin_client_secret.as_deref(),
+    )
+    .await
+}
+
+/// 初始化默认客户端（显式传入 admin 凭据，避免全局 env var 竞态）
+pub async fn seed_default_clients_with_admin(
+    pool: &PgPool,
+    admin_client_id: Option<&str>,
+    admin_client_secret: Option<&str>,
+) -> Result<()> {
     upsert_client(
         pool,
         "web",
@@ -97,23 +113,21 @@ pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
-    let admin_client_id = std::env::var("ADMIN_CLIENT_ID").ok();
-    let admin_client_secret = std::env::var("ADMIN_CLIENT_SECRET").ok();
-
     if let (Some(id), Some(secret)) = (admin_client_id, admin_client_secret) {
-        // Use INSERT ... ON CONFLICT DO NOTHING so that a rotated secret is never
-        // overwritten by a subsequent application restart or test setup call.
-        // is_admin_client=TRUE marks this client as authorised for /v1/admin/token,
-        // which is now stored in the database rather than inferred from ADMIN_CLIENT_ID
-        // at request time, allowing tests to use independent admin clients without
-        // process-wide env-var races.
+        // Always upsert the admin client so that the expected secret is written
+        // regardless of prior DB state. This prevents 401s in CI (clean DB) and
+        // in parallel tests where a stale secret was left from a previous run.
+        // is_admin_client=TRUE marks this client as authorised for /v1/admin/token.
         let hashed_admin_secret = hash(&secret, DEFAULT_COST)?;
         sqlx::query(
             "INSERT INTO clients (id, secret, name, description, active, is_admin_client)
              VALUES ($1, $2, 'Admin Client', 'Configured admin client', TRUE, TRUE)
-             ON CONFLICT (id) DO NOTHING",
+             ON CONFLICT (id) DO UPDATE
+             SET secret = EXCLUDED.secret,
+                 is_admin_client = TRUE,
+                 updated_at = NOW()",
         )
-        .bind(&id)
+        .bind(id)
         .bind(&hashed_admin_secret)
         .execute(pool)
         .await?;

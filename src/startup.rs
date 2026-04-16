@@ -178,6 +178,96 @@ pub async fn init_app_router_with_db(
         .with_state(app_state))
 }
 
+/// 测试专用：显式传入 admin 凭据，避免 std::env::set_var 的并发竞态。
+/// 每次调用都会 upsert admin client，确保密码始终与传入参数一致。
+pub async fn init_app_router_with_db_and_admin(
+    config: Config,
+    database_url: &str,
+    admin_client_id: &str,
+    admin_client_secret: &str,
+) -> Result<Router, anyhow::Error> {
+    let db = crate::db::init_db_pool(database_url).await?;
+    crate::db::run_migrations(&db).await?;
+    crate::db::seed_default_clients_with_admin(
+        &db,
+        Some(admin_client_id),
+        Some(admin_client_secret),
+    )
+    .await?;
+    crate::db::seed_super_admin_user(&db, &config).await?;
+
+    let app_state = AppState::new(config, Some(Arc::new(db)))?;
+
+    let public_routes = Router::new()
+        .merge(routes::auth::public_router())
+        .merge(routes::service::service_public_routes())
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/", get(index))
+        .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
+
+    let service_integration_routes = routes::auth::service_integration_routes()
+        .route_layer(middleware::from_fn(
+            auth::service_integration_authorization_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::service_integration_auth_middleware,
+        ));
+
+    let service_protected_routes = Router::new()
+        .merge(service_integration_routes)
+        .merge(
+            routes::service::service_introspect_routes().route_layer(middleware::from_fn(
+                auth::service_read_authorization_middleware,
+            )),
+        )
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::service_auth_middleware,
+        ));
+
+    let protected_routes = Router::new()
+        .route("/protected", get(protected))
+        .merge(routes::auth::protected_router())
+        .merge(
+            routes::user::self_user_routes()
+                .route_layer(middleware::from_fn(auth::user_authorization_middleware)),
+        )
+        .merge(
+            routes::auth::admin_router()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .nest(
+            "/api/oauth",
+            routes::oauth::oauth_admin_routes()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .nest(
+            "/api/rbac",
+            routes::rbac::rbac_routes()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .merge(
+            routes::service::service_admin_routes()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .merge(
+            routes::user::admin_user_routes()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::auth_middleware,
+        ));
+
+    Ok(Router::new()
+        .merge(public_routes)
+        .merge(service_protected_routes)
+        .merge(protected_routes)
+        .with_state(app_state))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
