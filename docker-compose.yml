@@ -5,6 +5,7 @@ services:
   postgres:
     image: postgres:17-alpine
     container_name: keylo-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: keylo_user
       POSTGRES_PASSWORD: keylo_password
@@ -24,7 +25,8 @@ services:
   # Redis for session/token caching (optional)
   redis:
     image: redis:8.6.2-alpine
-    container_name: keylo_redis
+    container_name: keylo-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
