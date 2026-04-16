@@ -280,6 +280,23 @@ impl AppState {
                 }
                 return (count as u32) <= max_requests;
             }
+
+            // Redis client exists but connection failed in production:
+            // deny the request to prevent brute-force via Redis outage.
+            if self.config.is_production() {
+                tracing::warn!(
+                    "Rate limit Redis connection failed for '{}'; denying request in production",
+                    principal
+                );
+                return false;
+            }
+        } else if self.config.is_production() {
+            // No Redis configured in production; deny to prevent bypass via in-memory fallback.
+            tracing::warn!(
+                "Rate limiting has no Redis in production for '{}'; denying request",
+                principal
+            );
+            return false;
         }
 
         let now = chrono::Utc::now().timestamp();
