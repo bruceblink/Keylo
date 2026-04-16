@@ -103,17 +103,22 @@ mod database_tests {
         .await
         .expect("Failed to create client");
 
-        // 验证客户端存在
-        let secret = db::get_client_secret(&pool, "test-client")
+        // 验证客户端存在（secret 已 bcrypt 哈希，验证其存在且可通过 verify）
+        let auth_info = db::get_client_auth_info(&pool, "test-client")
             .await
-            .expect("Failed to get client secret");
+            .expect("Failed to get client auth info");
 
-        assert_eq!(secret, Some("test-secret".to_string()));
+        assert!(auth_info.is_some(), "Client should exist");
+        let (hashed_secret, _) = auth_info.unwrap();
+        assert!(
+            bcrypt::verify("test-secret", &hashed_secret).unwrap_or(false),
+            "Secret hash should match"
+        );
 
         // 验证不存在的客户端
-        let non_existent = db::get_client_secret(&pool, "non-existent")
+        let non_existent = db::get_client_auth_info(&pool, "non-existent")
             .await
-            .expect("Failed to get client secret");
+            .expect("Failed to query non-existent client");
 
         assert_eq!(non_existent, None);
     }
