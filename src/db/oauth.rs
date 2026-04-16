@@ -5,6 +5,13 @@ use uuid::Uuid;
 use crate::models::*;
 
 /// OAuth提供商相关数据库操作
+fn validate_https_url(label: &str, url: &str) -> Result<()> {
+    if !url.starts_with("https://") {
+        anyhow::bail!("{} must use the https scheme, got: {}", label, url);
+    }
+    Ok(())
+}
+
 /// 创建OAuth提供商
 #[allow(clippy::too_many_arguments)]
 pub async fn create_oauth_provider(
@@ -18,6 +25,10 @@ pub async fn create_oauth_provider(
     scope: &str,
     redirect_url: &str,
 ) -> Result<OAuthProvider> {
+    validate_https_url("authorization_url", authorization_url)?;
+    validate_https_url("token_url", token_url)?;
+    validate_https_url("user_info_url", user_info_url)?;
+
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().naive_utc();
 
@@ -113,6 +124,16 @@ pub async fn update_oauth_provider(
     active: Option<bool>,
 ) -> Result<Option<OAuthProvider>> {
     let now = chrono::Local::now().naive_utc();
+
+    if let Some(u) = authorization_url {
+        validate_https_url("authorization_url", u)?;
+    }
+    if let Some(u) = token_url {
+        validate_https_url("token_url", u)?;
+    }
+    if let Some(u) = user_info_url {
+        validate_https_url("user_info_url", u)?;
+    }
 
     let provider = sqlx::query_as::<_, OAuthProvider>(
         r#"
