@@ -1,35 +1,46 @@
-# Keylo 第三方系统集成指南
+# Keylo 第三方系统与服务对接指南
 
-本文档说明第三方系统如何将 Keylo 作为统一认证中心接入，适用于后端管理系统、内部业务服务和 API 网关。
+本文档用于指导第三方系统把 Keylo 作为统一认证中心接入，覆盖：
 
-## 集成目标
+- 后台管理系统（如 AgileBoot）
+- API 网关 / BFF
+- 内部微服务（Service-to-Service）
+- 外部 OAuth 提供商接入
 
-Keylo 负责：
+> 版本基线：Keylo v1.0.x（当前代码行为）
 
-- 用户认证
-- Access Token / Refresh Token 签发
-- 服务到服务鉴权
-- OAuth 第三方登录
-- 审计日志
+---
 
-第三方系统负责：
+## 1. 角色边界与职责拆分
 
-- 本地业务用户资料
-- 菜单、角色、数据权限
-- 页面与运营后台
+### 1.1 Keylo 负责
 
-推荐模式是：第三方系统信任 Keylo 的身份认证结果，但保留自己的授权模型。
+- 统一认证（用户/客户端/服务）
+- JWT 签发（RS256）
+- JWKS 公钥发布
+- 用户 Token 与服务 Token 内省
+- 服务账号白名单策略（`allowed_scopes` + `allowed_audiences`）
+- 审计日志与黑名单吊销
 
-Keylo 1.0 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 发布公开密钥集合。
+### 1.2 第三方系统负责
 
-## Token 类型
+- 本地业务数据
+- 本地 RBAC（角色、菜单、数据权限）
+- 本地会话策略（如页面态）
 
-Keylo 当前提供两类 Token：
+推荐原则：**认证集中在 Keylo，授权保留在业务系统本地**。
 
-- 用户访问 Token：`token_type=access`
-- 服务访问 Token：`token_type=service_access`
+---
 
-用户访问 Token 的典型 Claims：
+## 2. Token 模型与字段约定
+
+Keylo 当前主要使用三类 JWT：
+
+1. 用户/客户端访问令牌：`token_type=access`
+2. 客户端刷新令牌：`token_type=refresh`
+3. 服务访问令牌：`token_type=service_access`
+
+### 2.1 用户/客户端 Access Token（示例）
 
 ```json
 {
@@ -44,14 +55,14 @@ Keylo 当前提供两类 Token：
 }
 ```
 
-服务访问 Token 的典型 Claims：
+### 2.2 服务 Access Token（示例）
 
 ```json
 {
   "sub": "service:agileboot-admin",
   "iss": "keylo",
   "aud": "admin-backend",
-  "scope": ["read"],
+  "scope": ["user.read"],
   "token_type": "service_access",
   "exp": 1710000000,
   "iat": 1709990000,
@@ -59,67 +70,120 @@ Keylo 当前提供两类 Token：
 }
 ```
 
-## 推荐接入架构
+### 2.3 实现注意点
 
-### 场景一：后台管理系统接入
+- 用户名密码登录时（用户身份）通常仅返回 `access_token`。
+- 客户端身份登录时（client 身份）会返回 `access_token` 与 `refresh_token`。
+- 受保护业务接口只接受 `token_type=access`。
+- 服务内省接口与用户内省接口都要求调用方携带合法 `service_access` Token。
 
-例如 AgileBoot 这类带 UI 的后台系统。
+---
 
-1. 前端登录页提交用户名密码到 AgileBoot。
-2. AgileBoot 后端将认证请求转发给 Keylo 的 `/v1/auth/token`。
-3. Keylo 返回用户 Access Token。
-4. AgileBoot 按 `sub` 将 Keylo 身份映射到本地用户。
-5. AgileBoot 根据本地角色、菜单、数据权限完成授权。
-6. 前端后续请求继续携带 Keylo 的 Access Token。
+## 3. 推荐接入架构
 
-### 场景二：后端服务接入
+### 3.1 管理后台接入（典型）
 
-适用于不直接承接用户登录页面的业务服务。
+1. 前端向业务后端提交账号密码。
+2. 业务后端转发到 Keylo：`POST /v1/auth/token`。
+3. Keylo 返回 Access Token。
+4. 业务后端基于 `sub` 做本地用户映射。
+5. 业务后端继续使用本地 RBAC 完成授权。
+
+### 3.2 纯后端服务接入
 
 1. 在 Keylo 注册服务账号。
-2. 服务使用 `/v1/service/token` 获取自己的 `service_access` Token。
-3. 服务收到用户 Access Token 后，通过 `/v1/auth/introspect` 内省用户 Token。
-4. Keylo 返回 Token 是否有效以及标准 Claims。
-5. 服务根据 `sub`、`scope`、`aud` 建立本地安全上下文。
+2. 使用 `POST /v1/service/token` 获取 `service_access` Token。
+3. 收到用户 Token 时，调用 `POST /v1/auth/introspect` 做统一内省。
+4. 按 `sub`、`scope`、`aud` 生成本地安全上下文。
 
-## 服务间调用设计
+### 3.3 网关/BFF 接入
 
-Keylo 当前对服务间调用使用的是“白名单模式”，而不是单独维护一张调用拓扑关系表。
+推荐策略：
 
-它的设计原则是：
+- 常规流量：JWKS 本地验签（低延迟）
+- 高敏接口：本地验签 + 内省双检
+- 网关仅做认证前置，细粒度授权下沉至业务服务
 
-- 每个调用方服务先在 Keylo 中注册为一个独立的服务账号
-- 每个服务账号都配置自己允许申请的 `allowed_scopes`
-- 每个服务账号都配置自己允许访问的 `allowed_audiences`
-- 服务真正申请 `service_access` Token 时，请求值必须是白名单的子集
+---
 
-这意味着，当前 Keylo 中“调用拓扑”是通过以下两项联合表达的：
+## 4. 服务间调用白名单模型
 
-- `allowed_audiences`：这个服务能调用谁
-- `allowed_scopes`：这个服务调用时最多能带什么权限
+Keylo 1.0 采用“服务账号白名单”而非独立拓扑图。
 
-### 为什么当前白名单模式够用
+每个服务账号维护两类边界：
 
-对于大多数内部系统，服务调用权限并不需要一张复杂的调用图，只需要回答两个问题：
+- `allowed_scopes`：最多可申请哪些权限
+- `allowed_audiences`：最多可访问哪些目标服务
 
-1. 这个服务可以访问哪些目标系统？
-2. 这个服务访问时可以声明哪些权限？
+签发服务 Token 时，请求值必须是白名单子集，否则拒绝。
 
-Keylo 现在已经可以稳定回答这两个问题，因此在 1.0 阶段不需要额外引入单独的“服务拓扑策略表”。
+### 4.1 管理入口
 
-### 配置入口
+- `POST /v1/admin/services`
+- `GET /v1/admin/services`
+- `GET /v1/admin/services/{service_id}`
+- `PUT /v1/admin/services/{service_id}`
+- `POST /v1/admin/services/{service_id}/rotate-secret`
 
-服务间调用白名单的配置入口是管理员接口：
+---
 
-- `POST /v1/admin/services`：注册服务账号
-- `PUT /v1/admin/services/{service_id}`：更新白名单
-- `GET /v1/admin/services`：查看服务列表
-- `GET /v1/admin/services/{service_id}`：查看单个服务配置
-- `POST /v1/admin/services/{service_id}/rotate-secret`：轮换服务密钥
+## 5. 对接接口矩阵（按阶段）
 
-### 示例：AgileBoot 作为调用方服务
+### 阶段 A：基础认证
 
-如果 AgileBoot 需要调用 `admin-backend` 相关受保护接口，可以为它注册如下服务账号：
+#### A-1 获取用户/客户端 Token
+
+```http
+POST /v1/auth/token
+Content-Type: application/json
+
+{
+  "client_id": "alice",
+  "client_secret": "user-password"
+}
+```
+
+响应示例（用户身份）：
+
+```json
+{
+  "access_token": "<jwt>",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+响应示例（客户端身份）：
+
+```json
+{
+  "access_token": "<jwt>",
+  "refresh_token": "<jwt>",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+#### A-2 刷新 Token（客户端模式）
+
+```http
+POST /v1/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "<refresh-token>"
+}
+```
+
+#### A-3 获取 JWKS
+
+```http
+GET /.well-known/jwks.json
+```
+
+### 阶段 B：服务集成
+
+#### B-1 注册服务账号（管理员）
 
 ```http
 POST /v1/admin/services
@@ -136,12 +200,7 @@ Content-Type: application/json
 }
 ```
 
-这代表：
-
-- `agileboot-admin` 可以面向 `admin-backend` 申请 Token
-- 它最多只能申请 `user.read` 和 `user.write` 这两个 scope
-
-随后 AgileBoot 申请服务 Token：
+#### B-2 获取服务 Token
 
 ```http
 POST /v1/service/token
@@ -155,89 +214,6 @@ Content-Type: application/json
 }
 ```
 
-如果它改成申请：
-
-- 未授权的 `audience`
-- 未授权的 `scope`
-
-Keylo 会直接拒绝签发 `service_access` Token。
-
-### 与数据库类型无关
-
-服务间调用白名单配置完全在 Keylo 内部生效，依赖的是：
-
-- Keylo 自己的 PostgreSQL 配置表
-- Keylo 对外提供的 HTTP API
-- JWT / JWKS / introspection 协议
-
-因此，不管调用方系统本地使用的是 MySQL、PostgreSQL 还是其他数据库，都不影响它接入 Keylo 的服务间鉴权能力。
-
-## 接口清单
-
-### 1. 用户登录
-
-请求：
-
-```http
-POST /v1/auth/token
-Content-Type: application/json
-
-{
-  "client_id": "alice",
-  "client_secret": "user-password"
-}
-```
-
-响应：
-
-```json
-{
-  "access_token": "<jwt>",
-  "token_type": "Bearer",
-  "expires_in": 900
-}
-```
-
-说明：
-
-- 对用户身份，`client_id` 实际上等于用户名。
-- 当前实现中，用户登录返回 Access Token；客户端凭证模式会额外返回 Refresh Token。
-
-### 2. 注册第三方服务
-
-请求：
-
-```http
-POST /v1/admin/services
-Authorization: Bearer <admin_access_token>
-Content-Type: application/json
-
-{
-  "service_id": "agileboot-admin",
-  "service_secret": "replace-with-strong-secret",
-  "name": "AgileBoot Admin",
-  "description": "AgileBoot 管理后台",
-  "allowed_scopes": ["read"],
-  "allowed_audiences": ["admin-backend"]
-}
-```
-
-### 3. 获取服务 Token
-
-请求：
-
-```http
-POST /v1/service/token
-Content-Type: application/json
-
-{
-  "service_id": "agileboot-admin",
-  "service_secret": "replace-with-strong-secret",
-  "audience": "admin-backend",
-  "scope": "read"
-}
-```
-
 响应：
 
 ```json
@@ -245,13 +221,11 @@ Content-Type: application/json
   "access_token": "<service-jwt>",
   "token_type": "Bearer",
   "expires_in": 3600,
-  "scope": "read"
+  "scope": "user.read"
 }
 ```
 
-### 4. 内省用户 Access Token
-
-请求：
+#### B-3 内省用户 Token（服务令牌保护）
 
 ```http
 POST /v1/auth/introspect
@@ -263,7 +237,7 @@ Content-Type: application/json
 }
 ```
 
-响应：
+有效响应：
 
 ```json
 {
@@ -279,7 +253,7 @@ Content-Type: application/json
 }
 ```
 
-无效或过期 Token：
+无效响应：
 
 ```json
 {
@@ -287,34 +261,7 @@ Content-Type: application/json
 }
 ```
 
-### 4.1 获取 JWKS
-
-请求：
-
-```http
-GET /.well-known/jwks.json
-```
-
-响应：
-
-```json
-{
-  "keys": [
-    {
-      "kty": "RSA",
-      "use": "sig",
-      "alg": "RS256",
-      "kid": "keylo-rs256-1",
-      "n": "...",
-      "e": "AQAB"
-    }
-  ]
-}
-```
-
-### 5. 内省服务 Token
-
-请求：
+#### B-4 内省服务 Token（服务令牌保护）
 
 ```http
 POST /v1/service/introspect
@@ -326,50 +273,95 @@ Content-Type: application/json
 }
 ```
 
-## 第三方系统的校验策略
+### 阶段 C：会话与审计（可选）
 
-第三方系统推荐校验以下字段：
+- `POST /v1/auth/logout`：注销并拉黑当前 Access Token
+- `GET /v1/auth/me`：查看当前 Claims 摘要
+- `GET /v1/admin/audit-logs`：审计查询（admin scope）
 
-- `iss` 必须等于 `keylo`
-- `token_type` 必须是 `access`
-- `aud` 必须匹配当前系统标识，例如 `admin-backend`
-- `exp` 必须晚于当前时间
-- `active` 必须为 `true`
+---
 
-推荐校验顺序：
+## 6. OAuth 外部身份源接入（可选）
 
-1. 优先通过 JWKS 做本地签名验证
-2. 对高敏感接口或需要实时吊销判断的场景，调用内省接口补充校验
+如果你希望 Keylo 充当 OAuth 聚合入口（如 GitHub 登录）：
 
-若系统自身保留本地授权模型，还应执行：
+### 6.1 公开登录入口
 
-- 通过 `sub` 找到本地用户映射
-- 加载本地角色、菜单、数据权限
-- 将 Keylo 的认证身份与本地业务授权解耦
+- `GET /v1/auth/oauth/login/{provider}`
+- `GET /v1/auth/oauth/callback/{provider}`
 
-## AgileBoot 集成建议
+### 6.2 管理配置入口（admin scope）
 
-如需落地到 Spring Security / MySQL 项目，可继续参考 [docs/AGILEBOOT_INTEGRATION.md](AGILEBOOT_INTEGRATION.md)。
+- `GET /api/oauth/providers`
+- `POST /api/oauth/providers`
+- `PUT /api/oauth/providers/{provider_id}`
+- `DELETE /api/oauth/providers/{provider_id}`
 
-对于 AgileBoot 这类管理系统，建议职责划分如下：
+建议：第三方业务系统只对接 Keylo 的统一 Token，不直接耦合各 OAuth Provider 的细节。
 
-- Keylo：统一认证中心
-- AgileBoot：管理 UI、本地 RBAC、菜单权限、数据权限
+---
 
-推荐实现：
+## 7. 第三方系统校验策略（强烈建议）
 
-1. AgileBoot 登录接口代理 Keylo 的 `/v1/auth/token`。
-2. AgileBoot 将 Keylo 的 `sub` 映射为本地用户外部身份。
-3. AgileBoot 后续请求直接信任 Keylo Access Token。
-4. AgileBoot 作为内部调用方时，使用服务账号模式获取 `service_access` Token。
-5. AgileBoot 内部服务或网关使用 `/v1/auth/introspect` 做用户 Token 内省。
+对用户访问 Token 至少校验：
 
-## 安全建议
+- `iss`：必须匹配部署值（默认 `keylo`）
+- `token_type`：必须为 `access`
+- `exp`：未过期
+- `aud`：必须匹配当前系统标识（如 `admin-backend`）
 
-- 不要让第三方系统直接共享 Keylo 的 JWT 私钥。
-- 第三方系统优先通过 JWKS 获取公钥，本地验签。
-- 需要实时吊销判断时，通过服务 Token 调用 Keylo 内省接口。
-- 后台系统只把 UI 和本地授权留在自己侧，不要复制 Keylo 的认证逻辑。
-- 所有服务账号都应限制 `allowed_scopes` 与 `allowed_audiences`。
-- 管理接口只允许带有 `admin` scope 的用户 Token 访问。
+对内省结果还应校验：
+
+- `active=true`
+
+推荐顺序：
+
+1. JWKS 本地验签
+2. 高敏接口补内省
+3. `sub` 映射本地用户并加载本地授权
+
+---
+
+## 8. 常见错误与处理建议
+
+### 8.1 `401 Unauthorized`
+
+常见原因：
+
+- Token 缺失或格式错误
+- 签名无效/过期
+- 黑名单吊销
+- 调用内省接口时未携带 `service_access` Token
+
+### 8.2 `403 Forbidden`
+
+常见原因：
+
+- 调用管理员接口但无 `admin` scope
+- 服务申请了未授权 `scope` 或 `audience`
+
+### 8.3 `429 Too Many Requests`
+
+常见于登录接口频繁失败触发限流或锁定，建议客户端退避重试并记录审计。
+
+---
+
+## 9. 上线前检查清单
+
+- [ ] 生产环境使用专用 RSA 密钥（禁止默认开发密钥）
+- [ ] 所有服务账号仅配置最小 `allowed_scopes` / `allowed_audiences`
+- [ ] 管理接口仅对 `admin` scope 开放
+- [ ] 网关与服务已完成 `iss`/`aud`/`exp`/`token_type` 校验
+- [ ] 高敏接口已增加内省
+- [ ] 密钥轮换流程已演练（JWKS 缓存策略已验证）
+- [ ] 审计日志与告警阈值已配置
+
+---
+
+## 10. 参考文档
+
+- AgileBoot 对接： [AGILEBOOT_INTEGRATION.md](AGILEBOOT_INTEGRATION.md)
+- 生产部署： [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)
+- 密钥轮换： [KEY_ROTATION.md](KEY_ROTATION.md)
+- 版本边界： [RELEASE_1_0.md](RELEASE_1_0.md)
 
