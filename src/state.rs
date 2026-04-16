@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::models::Keys;
+use crate::models::MigrationBatchJob;
 use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -34,6 +35,9 @@ pub struct AppState {
 
     /// Redis 客户端（可选）
     pub redis_client: Option<redis::Client>,
+
+    /// 异步迁移任务状态
+    pub migration_jobs: Arc<RwLock<HashMap<String, MigrationBatchJob>>>,
 }
 
 impl Default for AppState {
@@ -71,6 +75,7 @@ impl AppState {
             login_attempts: Arc::new(RwLock::new(HashMap::new())),
             auth_rate_limits: Arc::new(RwLock::new(HashMap::new())),
             redis_client,
+            migration_jobs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 

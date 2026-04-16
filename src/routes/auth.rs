@@ -1,4 +1,4 @@
-use crate::handlers::user::register_user;
+use crate::handlers::user::{jit_register_user, register_user};
 use crate::handlers::{
     auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client, auth_get_audit_logs,
     auth_get_blacklisted_tokens, auth_introspect, auth_jwks, auth_list_clients, auth_logout,
@@ -44,7 +44,8 @@ pub fn public_router() -> Router<AppState> {
     Router::new()
         .route("/.well-known/jwks.json", get(auth_jwks))
         .route("/v1/auth/register", post(register_user))
+        .route("/v1/auth/migrations/jit-register", post(jit_register_user))
         .route("/v1/auth/token", post(auth_token))
-    .route("/v1/admin/token", post(admin_token))
+        .route("/v1/admin/token", post(admin_token))
         .route("/v1/auth/refresh", post(auth_refresh))
 }

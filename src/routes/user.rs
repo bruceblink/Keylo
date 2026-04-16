@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use crate::{
     db::*,
-    handlers::user::import_third_party_users,
+    handlers::user::{
+        get_third_party_import_job_status, import_third_party_users, start_third_party_import_job,
+    },
     models::{Claims, *},
     state::AppState,
     utils::{require_db, ApiResponse},
@@ -30,6 +32,14 @@ pub fn admin_user_routes() -> Router<AppState> {
         .route(
             "/v1/admin/users/migrations/import",
             post(import_third_party_users),
+        )
+        .route(
+            "/v1/admin/users/migrations/jobs",
+            post(start_third_party_import_job),
+        )
+        .route(
+            "/v1/admin/users/migrations/jobs/{job_id}",
+            get(get_third_party_import_job_status),
         )
         .route(
             "/v1/admin/users/{user_id}/reset-password",

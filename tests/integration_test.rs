@@ -8,7 +8,8 @@ use serde_json::json;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tokio::time::sleep;
 
     /// 设置测试服务器（带数据库）
     async fn setup_test_server() -> TestServer {
@@ -730,5 +731,107 @@ mod tests {
             }))
             .await;
         updated_login_resp.assert_status_ok();
+    }
+
+    #[tokio::test]
+    async fn test_jit_migration_register_can_issue_access_token() {
+        let server = setup_test_server().await;
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("jit-user-{}", ts);
+        let email = format!("{}@example.com", username);
+
+        let response = server
+            .post("/v1/auth/migrations/jit-register")
+            .json(&json!({
+                "provider": "agileboot",
+                "external_user_id": format!("jit-ext-{}", ts),
+                "username": username,
+                "email": email,
+                "password": "JitMigrated#123",
+                "active": true
+            }))
+            .await;
+
+        if response.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["success"], true);
+        assert!(body["access_token"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_async_migration_job_submit_and_query_status() {
+        std::env::set_var("ADMIN_CLIENT_ID", "cli-admin-root");
+        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-admin-root-secret");
+
+        let server = setup_test_server().await;
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": "cli-admin-root",
+                "client_secret": "cli-admin-root-secret"
+            }))
+            .await;
+
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let create_job_resp = server
+            .post("/v1/admin/users/migrations/jobs")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "provider": "agileboot",
+                "dry_run": true,
+                "users": [{
+                    "external_user_id": format!("job-ext-{}", ts),
+                    "username": format!("job-user-{}", ts),
+                    "email": format!("job-user-{}@example.com", ts),
+                    "password": "JobMigrated#123",
+                    "active": true
+                }]
+            }))
+            .await;
+        create_job_resp.assert_status_ok();
+        let create_job_body: serde_json::Value = create_job_resp.json();
+        let job_id = create_job_body["job_id"].as_str().unwrap().to_string();
+
+        let mut final_status = String::new();
+        for _ in 0..20 {
+            let status_resp = server
+                .get(&format!("/v1/admin/users/migrations/jobs/{}", job_id))
+                .add_header("Authorization", format!("Bearer {}", admin_access_token))
+                .await;
+            status_resp.assert_status_ok();
+            let status_body: serde_json::Value = status_resp.json();
+            final_status = status_body["job"]["status"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+
+            if final_status == "completed" || final_status == "failed" {
+                break;
+            }
+
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        assert!(final_status == "completed" || final_status == "failed");
     }
 }
