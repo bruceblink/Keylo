@@ -8,6 +8,7 @@ use axum::routing::get;
 use axum::Router;
 use redis::AsyncCommands;
 use std::sync::Arc;
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 
 pub fn init_app_router() -> Router {
     let app_state = AppState::default();
@@ -145,10 +146,27 @@ pub async fn init_app_router_with_db(
             auth::auth_middleware,
         ));
 
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin, _| {
+            // Only allow https origins (or localhost for dev)
+            let s = origin.as_bytes();
+            s.starts_with(b"https://") || s.starts_with(b"http://localhost")
+        }))
+        .allow_methods(AllowMethods::list([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+        ]))
+        .allow_headers(AllowHeaders::mirror_request())
+        .allow_credentials(true);
+
     Ok(Router::new()
         .merge(public_routes)
         .merge(service_protected_routes)
         .merge(protected_routes)
+        .layer(cors)
         .with_state(app_state))
 }
 

@@ -36,7 +36,7 @@ bcrypt = "0.19"
 http-body-util = "0.1.0"
 hyper-util = { version = "0.1", features = ["client", "http1", "client-legacy"] }
 mime = "0.3"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
 redis = { version = "0.31", features = ["tokio-comp"] }
 
 [dev-dependencies]
