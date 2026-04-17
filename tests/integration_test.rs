@@ -560,7 +560,7 @@ mod tests {
         assert_eq!(introspect_body["active"], true);
         assert_eq!(introspect_body["sub"], format!("user:{}", username));
         assert_eq!(introspect_body["aud"], "admin-backend");
-        assert_eq!(introspect_body["role"], "user");
+        assert_eq!(introspect_body["role"], json!(["user"]));
         assert_eq!(introspect_body["token_type"], "access");
     }
 
