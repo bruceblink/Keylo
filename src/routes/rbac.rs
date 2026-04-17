@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get, post, put},
     Router,
 };
 use serde_json::json;
+use std::collections::HashMap;
 
 use crate::{
     db::*,
@@ -39,6 +40,10 @@ pub fn rbac_routes() -> Router<AppState> {
         .route("/users/{user_id}/roles", get(get_user_roles_handler))
         .route("/users/{user_id}/roles", post(assign_role_to_user_handler))
         .route(
+            "/users/{user_id}/roles/batch",
+            post(assign_roles_to_user_batch_handler),
+        )
+        .route(
             "/users/{user_id}/roles/{role_id}",
             delete(revoke_role_from_user_handler),
         )
@@ -50,6 +55,10 @@ pub fn rbac_routes() -> Router<AppState> {
         .route(
             "/roles/{role_id}/permissions",
             post(assign_permission_to_role_handler),
+        )
+        .route(
+            "/roles/{role_id}/permissions/batch",
+            post(assign_permissions_to_role_batch_handler),
         )
         .route(
             "/roles/{role_id}/permissions/{permission_id}",
@@ -72,6 +81,21 @@ async fn audit_event(state: &AppState, event_type: &str, actor: Option<&str>, de
             tracing::warn!("Failed to write RBAC audit log: {}", err);
         }
     }
+}
+
+fn error_response(
+    status: StatusCode,
+    error: &str,
+    message: &str,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        status,
+        Json(json!({
+            "success": false,
+            "error": error,
+            "message": message
+        })),
+    )
 }
 
 /// 获取所有角色
@@ -135,11 +159,25 @@ async fn create_role_handler(
 
 /// 获取单个角色
 async fn get_role(State(state): State<AppState>, Path(role_id): Path<String>) -> ApiResponse {
-    match get_role_by_id(require_db(&state)?, &role_id).await {
-        Ok(Some(role)) => Ok(Json(json!({
-            "success": true,
-            "data": role
-        }))),
+    let db = require_db(&state)?;
+
+    match get_role_by_id(db, &role_id).await {
+        Ok(Some(role)) => match get_role_permissions(db, &role_id).await {
+            Ok(permissions) => Ok(Json(json!({
+                "success": true,
+                "data": RoleDetail {
+                    role,
+                    permissions,
+                }
+            }))),
+            Err(e) => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Failed to get role permissions: {}", e)
+                })),
+            )),
+        },
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -252,8 +290,18 @@ async fn delete_role_handler(
 }
 
 /// 获取所有权限
-async fn get_permissions(State(state): State<AppState>) -> ApiResponse {
-    match get_all_permissions(require_db(&state)?).await {
+async fn get_permissions(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+    let result = if let Some(prefix) = params.get("prefix") {
+        get_permissions_by_prefix(db, prefix).await
+    } else {
+        get_all_permissions(db).await
+    };
+
+    match result {
         Ok(permissions) => Ok(Json(json!({
             "success": true,
             "data": permissions
@@ -509,12 +557,10 @@ async fn revoke_role_from_user_handler(
                 "message": "Role revoked from user successfully"
             })))
         }
-        Ok(false) => Err((
+        Ok(false) => Err(error_response(
             StatusCode::NOT_FOUND,
-            Json(json!({
-                "success": false,
-                "error": "User role assignment not found"
-            })),
+            "role_not_bound",
+            "User role assignment not found",
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -598,18 +644,103 @@ async fn revoke_permission_from_role_handler(
                 "message": "Permission revoked from role successfully"
             })))
         }
-        Ok(false) => Err((
+        Ok(false) => Err(error_response(
             StatusCode::NOT_FOUND,
-            Json(json!({
-                "success": false,
-                "error": "Role permission assignment not found"
-            })),
+            "permission_not_bound",
+            "Role permission assignment not found",
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
                 "success": false,
                 "error": format!("Failed to revoke permission from role: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 为用户批量分配角色
+async fn assign_roles_to_user_batch_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    Json(req): Json<AssignRolesBatchRequest>,
+) -> ApiResponse {
+    if req.role_ids.is_empty() {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "role_not_bound",
+            "role_ids must not be empty",
+        ));
+    }
+
+    match assign_roles_to_user_batch(require_db(&state)?, &user_id, &req.role_ids).await {
+        Ok(_) => {
+            audit_event(
+                &state,
+                "rbac.user.roles_assigned_batch",
+                Some(&claims.sub),
+                format!(
+                    "target_user_id={}, role_ids={}",
+                    user_id,
+                    req.role_ids.join(",")
+                ),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "Roles assigned to user successfully"
+            })))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to assign roles to user: {}", e)
+            })),
+        )),
+    }
+}
+
+/// 为角色批量分配权限
+async fn assign_permissions_to_role_batch_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+    Json(req): Json<AssignPermissionsBatchRequest>,
+) -> ApiResponse {
+    if req.permission_ids.is_empty() {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "permission_not_bound",
+            "permission_ids must not be empty",
+        ));
+    }
+
+    match assign_permissions_to_role_batch(require_db(&state)?, &role_id, &req.permission_ids).await
+    {
+        Ok(_) => {
+            audit_event(
+                &state,
+                "rbac.role.permissions_assigned_batch",
+                Some(&claims.sub),
+                format!(
+                    "role_id={}, permission_ids={}",
+                    role_id,
+                    req.permission_ids.join(",")
+                ),
+            )
+            .await;
+            Ok(Json(json!({
+                "success": true,
+                "message": "Permissions assigned to role successfully"
+            })))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to assign permissions to role: {}", e)
             })),
         )),
     }

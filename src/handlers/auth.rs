@@ -26,12 +26,12 @@ fn access_scope(_subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
     }
 }
 
-fn claim_role(subject_prefix: &str, is_admin_client: bool) -> Option<String> {
+fn claim_role(subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
     match subject_prefix {
-        "user" if is_admin_client => Some("admin".to_string()),
-        "user" => Some("user".to_string()),
-        "client" if is_admin_client => Some("admin".to_string()),
-        _ => None,
+        "user" if is_admin_client => vec!["admin".to_string()],
+        "user" => vec!["user".to_string()],
+        "client" if is_admin_client => vec!["admin".to_string()],
+        _ => Vec::new(),
     }
 }
 
@@ -762,7 +762,7 @@ pub async fn auth_refresh(
     // access tokens from being accepted as refresh tokens.
     let refresh_claims = state.jwt_keys.decode_token(&payload.refresh_token);
     match refresh_claims {
-        Ok(ref c) if c.token_type != "refresh" => return Err(AuthError::InvalidToken),
+        Ok(ref c) if c.token_type != "refresh" => return Err(AuthError::TokenTypeInvalid),
         Err(_) => return Err(AuthError::InvalidToken),
         Ok(_) => {}
     }

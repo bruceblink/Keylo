@@ -23,6 +23,25 @@ pub struct CreateUserRequest {
     pub password: Option<String>,
 }
 
+/// 创建用户并绑定角色模板（原子）
+#[derive(Debug, Deserialize)]
+pub struct ProvisionUserRequest {
+    pub username: String,
+    pub email: String,
+    pub password: Option<String>,
+    #[serde(default)]
+    pub role_ids: Vec<String>,
+    #[serde(default)]
+    pub role_names: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProvisionUserResponse {
+    pub user: User,
+    pub roles: Vec<crate::models::Role>,
+    pub permissions: Vec<crate::models::Permission>,
+}
+
 /// 更新用户请求
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserRequest {

@@ -71,8 +71,35 @@ pub struct AssignRoleRequest {
     pub role_id: String,
 }
 
+/// 批量分配角色请求
+#[derive(Debug, Deserialize)]
+pub struct AssignRolesBatchRequest {
+    pub role_ids: Vec<String>,
+}
+
 /// 分配权限的请求
 #[derive(Debug, Deserialize)]
 pub struct AssignPermissionRequest {
     pub permission_id: String,
+}
+
+/// 批量分配权限请求
+#[derive(Debug, Deserialize)]
+pub struct AssignPermissionsBatchRequest {
+    pub permission_ids: Vec<String>,
+}
+
+/// 角色详情（含权限）
+#[derive(Debug, Clone, Serialize)]
+pub struct RoleDetail {
+    pub role: Role,
+    pub permissions: Vec<Permission>,
+}
+
+/// 用户最终有效权限
+#[derive(Debug, Clone, Serialize)]
+pub struct EffectivePermissionsResponse {
+    pub user_id: String,
+    pub roles: Vec<Role>,
+    pub permissions: Vec<Permission>,
 }

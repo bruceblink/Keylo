@@ -18,7 +18,7 @@ fn ensure_access_claims(
     required_audience: Option<&str>,
 ) -> Result<(), AuthError> {
     if claims.token_type != "access" {
-        return Err(AuthError::InvalidToken);
+        return Err(AuthError::TokenTypeInvalid);
     }
 
     if let Some(role) = required_role {
@@ -35,7 +35,7 @@ fn ensure_access_claims(
 
     if let Some(audience) = required_audience {
         if !claims.has_audience(audience) {
-            return Err(AuthError::InsufficientAudience);
+            return Err(AuthError::InvalidAudience);
         }
     }
 
@@ -48,7 +48,7 @@ fn ensure_service_claims(
     required_audience: Option<&str>,
 ) -> Result<(), AuthError> {
     if claims.token_type != "service_access" {
-        return Err(AuthError::InvalidToken);
+        return Err(AuthError::TokenTypeInvalid);
     }
 
     if claims.role.as_deref() != Some("service") {
@@ -63,7 +63,7 @@ fn ensure_service_claims(
 
     if let Some(audience) = required_audience {
         if claims.aud != audience && claims.aud != "*" {
-            return Err(AuthError::InsufficientAudience);
+            return Err(AuthError::InvalidAudience);
         }
     }
 
@@ -87,7 +87,7 @@ pub async fn auth_middleware(
 
     // 仅允许 access token 访问受保护接口
     if claims.token_type != "access" {
-        return Ok(AuthError::InvalidToken.into_response());
+        return Ok(AuthError::TokenTypeInvalid.into_response());
     }
 
     // 检查token是否在黑名单中

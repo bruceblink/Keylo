@@ -31,9 +31,9 @@ pub struct TokenIntrospectResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
+    pub scope: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
+    pub role: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aud: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,8 +68,8 @@ impl TokenIntrospectResponse {
         Self {
             active: true,
             sub: Some(claims.sub.clone()),
-            scope: Some(claims.scope.join(" ")),
-            role: claims.role.clone(),
+            scope: Some(claims.scope.clone()),
+            role: Some(claims.role.clone()),
             aud: Some(claims.aud.clone()),
             iss: Some(claims.iss.clone()),
             exp: Some(claims.exp),
@@ -131,8 +131,8 @@ pub struct MeResponse {
     pub sub: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub scope: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub role: Vec<String>,
     pub aud: String,
     pub exp: i64,
     pub iss: String,

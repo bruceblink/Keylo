@@ -656,11 +656,11 @@ pub async fn jit_register_user(
         } else {
             vec!["read".into(), "write".into()]
         },
-        role: Some(if is_admin {
+        role: vec![if is_admin {
             "admin".to_string()
         } else {
             "user".to_string()
-        }),
+        }],
         iat: now,
         exp: now + state.config.token_expiry_seconds,
         jti: crate::utils::generate_jti(),

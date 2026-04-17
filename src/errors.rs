@@ -18,6 +18,10 @@ pub enum AuthError {
     InsufficientScope,
     InsufficientAudience,
     InsufficientRole,
+    InvalidAudience,
+    TokenTypeInvalid,
+    PermissionNotBound,
+    RoleNotBound,
     ServiceClientNotAuthorized,
     TooManyRequests,
     InternalServerError(String),
@@ -38,6 +42,10 @@ impl fmt::Display for AuthError {
             AuthError::InsufficientScope => write!(f, "Insufficient scope"),
             AuthError::InsufficientAudience => write!(f, "Insufficient audience"),
             AuthError::InsufficientRole => write!(f, "Insufficient role"),
+            AuthError::InvalidAudience => write!(f, "Invalid audience"),
+            AuthError::TokenTypeInvalid => write!(f, "Token type invalid"),
+            AuthError::PermissionNotBound => write!(f, "Permission not bound"),
+            AuthError::RoleNotBound => write!(f, "Role not bound"),
             AuthError::ServiceClientNotAuthorized => {
                 write!(f, "Service client not authorized")
             }
@@ -115,14 +123,38 @@ impl IntoResponse for AuthError {
             AuthError::InsufficientAudience => (
                 StatusCode::FORBIDDEN,
                 1013,
-                "insufficient_audience",
-                "Insufficient audience",
+                "invalid_audience",
+                "Invalid audience",
             ),
             AuthError::InsufficientRole => (
                 StatusCode::FORBIDDEN,
                 1014,
                 "insufficient_role",
                 "Insufficient role",
+            ),
+            AuthError::InvalidAudience => (
+                StatusCode::FORBIDDEN,
+                1016,
+                "invalid_audience",
+                "Invalid audience",
+            ),
+            AuthError::TokenTypeInvalid => (
+                StatusCode::FORBIDDEN,
+                1017,
+                "token_type_invalid",
+                "Token type invalid",
+            ),
+            AuthError::PermissionNotBound => (
+                StatusCode::NOT_FOUND,
+                1018,
+                "permission_not_bound",
+                "Permission not bound",
+            ),
+            AuthError::RoleNotBound => (
+                StatusCode::NOT_FOUND,
+                1019,
+                "role_not_bound",
+                "Role not bound",
             ),
             AuthError::ServiceClientNotAuthorized => (
                 StatusCode::FORBIDDEN,

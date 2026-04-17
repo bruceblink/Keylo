@@ -1,6 +1,7 @@
 use keylo::db;
 use sqlx::PgPool;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+use tokio::sync::Mutex;
 
 static DB_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -20,12 +21,12 @@ mod database_tests {
         };
 
         // 运行迁移
-        if let Err(_) = db::run_migrations(&pool).await {
+        if db::run_migrations(&pool).await.is_err() {
             return Err("Failed to run migrations");
         }
 
         // 清理测试数据，保留表结构
-        if let Err(_) = sqlx::query(
+        if (sqlx::query(
             "TRUNCATE TABLE
                 user_oauth_accounts,
                 oauth_providers,
@@ -42,7 +43,8 @@ mod database_tests {
              RESTART IDENTITY CASCADE",
         )
         .execute(&pool)
-        .await
+        .await)
+            .is_err()
         {
             return Err("Failed to clean database data");
         }
@@ -52,7 +54,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_database_migrations() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -83,7 +85,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_client_creation_and_validation() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -125,7 +127,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_refresh_token_operations() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -179,7 +181,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_blacklist_operations() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -223,7 +225,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_cleanup_operations() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {
@@ -291,7 +293,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn test_audit_log_operations() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {
             Ok(pool) => pool,
             Err(msg) => {

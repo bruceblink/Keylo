@@ -465,7 +465,7 @@ async fn oauth_callback(
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["read".into(), "write".into()],
-        role: Some("user".into()),
+        role: vec!["user".into()],
         iat: now,
         exp: now + token_expires_in,
         jti: uuid::Uuid::new_v4().to_string(),

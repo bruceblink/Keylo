@@ -293,3 +293,106 @@ pub async fn count_users(pool: &PgPool) -> Result<i64> {
 
     Ok(row.get::<Option<i64>, _>("count").unwrap_or(0))
 }
+
+/// 原子创建用户并绑定角色模板（role_id + role_name）
+pub async fn provision_user_with_roles(
+    pool: &PgPool,
+    username: &str,
+    email: &str,
+    password: Option<&str>,
+    role_ids: &[String],
+    role_names: &[String],
+) -> Result<(
+    User,
+    Vec<crate::models::Role>,
+    Vec<crate::models::Permission>,
+)> {
+    let mut tx = pool.begin().await?;
+
+    let user_id = Uuid::new_v4().to_string();
+    let password_hash = if let Some(p) = password {
+        Some(hash_password(p)?)
+    } else {
+        None
+    };
+    let now = chrono::Local::now().naive_utc();
+
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        INSERT INTO users (id, username, email, password_hash, active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, TRUE, $5, $6)
+        RETURNING id, username, email, password_hash, active, created_at, updated_at
+        "#,
+    )
+    .bind(&user_id)
+    .bind(username)
+    .bind(email)
+    .bind(password_hash)
+    .bind(now)
+    .bind(now)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let mut normalized_role_ids: Vec<String> = role_ids
+        .iter()
+        .map(|role_id| role_id.trim().to_string())
+        .filter(|role_id| !role_id.is_empty())
+        .collect();
+
+    if !role_names.is_empty() {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name
+            FROM roles
+            WHERE name = ANY($1)
+            "#,
+        )
+        .bind(role_names)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let mut found_names = std::collections::HashSet::new();
+        for row in rows {
+            let role_id: String = row.get("id");
+            let role_name: String = row.get("name");
+            found_names.insert(role_name);
+            normalized_role_ids.push(role_id);
+        }
+
+        for role_name in role_names {
+            if !found_names.contains(role_name) {
+                anyhow::bail!("role_not_bound: role name not found: {}", role_name);
+            }
+        }
+    }
+
+    normalized_role_ids.sort();
+    normalized_role_ids.dedup();
+
+    for role_id in normalized_role_ids {
+        sqlx::query(
+            "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(&user_id)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    let roles = crate::db::get_user_roles(pool, &user_id).await?;
+    let permissions = crate::db::get_user_permissions(pool, &user_id).await?;
+
+    Ok((user, roles, permissions))
+}
+
+/// 查询用户最终权限并集
+pub async fn get_effective_permissions(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<(Vec<crate::models::Role>, Vec<crate::models::Permission>)> {
+    let roles = crate::db::get_user_roles(pool, user_id).await?;
+    let permissions = crate::db::get_user_permissions(pool, user_id).await?;
+    Ok((roles, permissions))
+}

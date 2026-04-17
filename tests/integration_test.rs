@@ -202,11 +202,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_token_rate_limit() {
-        let mut config = Config::default();
-        config.max_failed_login_attempts = 100; // 避免锁定逻辑先触发
-        config.auth_rate_limit_max_requests = 3;
-        config.auth_global_rate_limit_max_requests = 100;
-        config.auth_rate_limit_window_seconds = 60;
+        let config = Config {
+            max_failed_login_attempts: 100, // 避免锁定逻辑先触发
+            auth_rate_limit_max_requests: 3,
+            auth_global_rate_limit_max_requests: 100,
+            auth_rate_limit_window_seconds: 60,
+            ..Config::default()
+        };
         let server = setup_test_server_with_config(config).await;
 
         let ts = SystemTime::now()
@@ -651,11 +653,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_super_admin_bootstrap_can_access_admin_routes() {
-        let mut config = Config::default();
-        config.enable_super_admin_bootstrap = true;
-        config.super_admin_username = Some("root_bootstrap".to_string());
-        config.super_admin_email = Some("root_bootstrap@example.com".to_string());
-        config.super_admin_password = Some("RootBootstrap#123".to_string());
+        let config = Config {
+            enable_super_admin_bootstrap: true,
+            super_admin_username: Some("root_bootstrap".to_string()),
+            super_admin_email: Some("root_bootstrap@example.com".to_string()),
+            super_admin_password: Some("RootBootstrap#123".to_string()),
+            ..Config::default()
+        };
 
         let server = setup_test_server_with_config(config).await;
 

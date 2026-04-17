@@ -35,8 +35,8 @@ pub struct Claims {
     pub scope: Vec<String>,
 
     /// Role：授权角色
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_roles")]
+    pub role: Vec<String>,
 
     /// Token 类型：access_token 或 refresh_token
     pub token_type: String,
@@ -71,8 +71,27 @@ impl Claims {
     }
 
     pub fn has_role(&self, role: &str) -> bool {
-        self.role.as_deref() == Some(role)
+        self.role.iter().any(|value| value == role)
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RolesField {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn deserialize_roles<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let parsed = Option::<RolesField>::deserialize(deserializer)?;
+    Ok(match parsed {
+        Some(RolesField::One(value)) => vec![value],
+        Some(RolesField::Many(values)) => values,
+        None => Vec::new(),
+    })
 }
 
 impl FromRequestParts<AppState> for Claims {
@@ -168,6 +187,7 @@ impl Keys {
             .map(|data| data.claims)
             .map_err(|err| match err.kind() {
                 ErrorKind::ExpiredSignature => AuthError::ExpiredToken,
+                ErrorKind::InvalidAudience => AuthError::InvalidAudience,
                 _ => {
                     match err.kind() {
                         ErrorKind::InvalidToken => warn!("JWT decode failed: invalid token"),

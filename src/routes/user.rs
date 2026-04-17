@@ -27,9 +27,14 @@ pub fn admin_user_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/admin/users", get(list_users_handler))
         .route("/v1/admin/users", post(create_user_handler))
+        .route("/v1/admin/users/provision", post(provision_user_handler))
         .route("/v1/admin/users/{user_id}", get(get_user_handler))
         .route("/v1/admin/users/{user_id}", put(update_user_handler))
         .route("/v1/admin/users/{user_id}", delete(delete_user_handler))
+        .route(
+            "/v1/admin/users/{user_id}/effective-permissions",
+            get(get_user_effective_permissions_handler),
+        )
         .route(
             "/v1/admin/users/migrations/import",
             post(import_third_party_users),
@@ -113,6 +118,106 @@ async fn create_user_handler(
                 ))
             }
         }
+    }
+}
+
+async fn provision_user_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Json(req): Json<ProvisionUserRequest>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+
+    match provision_user_with_roles(
+        db,
+        &req.username,
+        &req.email,
+        req.password.as_deref(),
+        &req.role_ids,
+        &req.role_names,
+    )
+    .await
+    {
+        Ok((user, roles, permissions)) => {
+            create_audit_log(
+                db,
+                "user.provisioned",
+                Some(&claims.sub),
+                Some(&format!(
+                    "user_id={}, role_ids={}, role_names={}",
+                    user.id,
+                    req.role_ids.join(","),
+                    req.role_names.join(",")
+                )),
+            )
+            .await
+            .ok();
+
+            Ok(Json(json!({
+                "success": true,
+                "data": ProvisionUserResponse {
+                    user,
+                    roles,
+                    permissions,
+                }
+            })))
+        }
+        Err(e) => {
+            let message = e.to_string();
+            if message.contains("duplicate key") {
+                Err((
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "success": false,
+                        "error": "conflict",
+                        "message": "Username or email already exists",
+                    })),
+                ))
+            } else if message.contains("role_not_bound") {
+                Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "success": false,
+                        "error": "role_not_bound",
+                        "message": message,
+                    })),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "success": false,
+                        "error": "internal_server_error",
+                        "message": format!("Failed to provision user: {}", message),
+                    })),
+                ))
+            }
+        }
+    }
+}
+
+async fn get_user_effective_permissions_handler(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+
+    match get_effective_permissions(db, &user_id).await {
+        Ok((roles, permissions)) => Ok(Json(json!({
+            "success": true,
+            "data": EffectivePermissionsResponse {
+                user_id,
+                roles,
+                permissions,
+            }
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": format!("Failed to get effective permissions: {}", e),
+            })),
+        )),
     }
 }
 

@@ -141,6 +141,19 @@ pub async fn get_all_permissions(pool: &PgPool) -> Result<Vec<Permission>> {
     Ok(permissions)
 }
 
+/// 按前缀获取权限
+pub async fn get_permissions_by_prefix(pool: &PgPool, prefix: &str) -> Result<Vec<Permission>> {
+    let pattern = format!("{}%", prefix);
+    let permissions = sqlx::query_as::<_, Permission>(
+        "SELECT id, name, description, created_at, updated_at FROM permissions WHERE name LIKE $1 ORDER BY name",
+    )
+    .bind(pattern)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(permissions)
+}
+
 /// 根据ID获取权限
 pub async fn get_permission_by_id(
     pool: &PgPool,
@@ -219,6 +232,19 @@ pub async fn assign_role_to_user(pool: &PgPool, user_id: &str, role_id: &str) ->
     Ok(())
 }
 
+/// 为用户批量分配角色
+pub async fn assign_roles_to_user_batch(
+    pool: &PgPool,
+    user_id: &str,
+    role_ids: &[String],
+) -> Result<()> {
+    for role_id in role_ids {
+        assign_role_to_user(pool, user_id, role_id).await?;
+    }
+
+    Ok(())
+}
+
 /// 撤销用户的角色
 pub async fn revoke_role_from_user(pool: &PgPool, user_id: &str, role_id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2")
@@ -291,6 +317,19 @@ pub async fn assign_permission_to_role(
     .bind(permission_id)
     .execute(pool)
     .await?;
+
+    Ok(())
+}
+
+/// 为角色批量分配权限
+pub async fn assign_permissions_to_role_batch(
+    pool: &PgPool,
+    role_id: &str,
+    permission_ids: &[String],
+) -> Result<()> {
+    for permission_id in permission_ids {
+        assign_permission_to_role(pool, role_id, permission_id).await?;
+    }
 
     Ok(())
 }
