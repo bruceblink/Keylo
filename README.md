@@ -109,6 +109,8 @@ cargo tarpaulin --out Html
 
 多客户端统一用户池与 API 级授权接入说明见 [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)。
 
+完整接口清单见 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)。
+
 如果你是以 AgileBoot 这类 Spring Boot 管理后台接入 Keylo，可进一步参考 [docs/AGILEBOOT_INTEGRATION.md](docs/AGILEBOOT_INTEGRATION.md)。
 
 ### 生产部署与发布说明
