@@ -251,7 +251,7 @@ curl -H "Authorization: Bearer <access_token>" \
 {
   "sub": "user:alice",
   "scope": ["read", "write"],
-  "role": "user",
+  "role": ["user"],
   "aud": "admin-backend",
   "exp": 1704067200,
   "iss": "keylo",

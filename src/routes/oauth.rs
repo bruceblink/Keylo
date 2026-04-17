@@ -417,7 +417,9 @@ async fn oauth_callback(
             .unwrap_or_else(|| format!("{}@oauth.local", username));
 
         // 创建用户记录
-        crate::db::create_user(db, &new_user_id, &username, Some(&email))
+        // create_user 参数为 (username, email, password)
+        // OAuth 首次登录场景不设置本地密码
+        crate::db::create_user(db, &username, &email, None)
             .await
             .map_err(|e| {
                 (

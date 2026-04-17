@@ -229,6 +229,18 @@ pub async fn get_all_active_clients(pool: &PgPool) -> Result<Vec<(String, String
         .collect())
 }
 
+/// 是否存在可用的管理客户端
+pub async fn has_active_admin_client(pool: &PgPool) -> Result<bool> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS count FROM clients WHERE active = TRUE AND is_admin_client = TRUE",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let count: i64 = row.get::<Option<i64>, _>("count").unwrap_or(0);
+    Ok(count > 0)
+}
+
 /// 获取客户端密钥
 /// 获取客户端凭证信息
 pub async fn get_client_auth_info(

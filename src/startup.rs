@@ -82,6 +82,19 @@ pub async fn init_app_router_with_db(
     crate::db::seed_super_admin_user(&db, &config).await?;
     tracing::info!("Super admin bootstrap checked");
 
+    // 非生产环境下，若未配置管理客户端且未启用超级管理员引导，提示管理面可能不可用
+    if !config.is_production() {
+        let has_admin_client = crate::db::has_active_admin_client(&db)
+            .await
+            .unwrap_or(false);
+        if !has_admin_client && !config.enable_super_admin_bootstrap {
+            tracing::warn!(
+                "No active admin client found and SUPER_ADMIN bootstrap is disabled. \
+                 /v1/admin/token and admin management APIs may be unavailable."
+            );
+        }
+    }
+
     // Cleanup old audit logs (best effort)
     match crate::db::cleanup_old_audit_logs(&db, config.audit_log_retention_days).await {
         Ok(deleted) => tracing::info!("Audit logs cleanup completed, deleted={}", deleted),
