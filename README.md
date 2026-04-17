@@ -1,4 +1,4 @@
-# Keylo v1.1.0
+# Keylo v1.1.1
 
 **Keylo** 是一个轻量、可扩展的 **统一认证与授权服务**（Auth Service），为你的多服务系统提供统一的 JWT 签发、Session 管理和 OAuth 支持。
 
@@ -7,7 +7,7 @@
 ## 🚀 特性
 
 * ✅ 基于 RS256 的 JWT 签发与验证，内置 JWKS 公钥发布
-* ✅ `/v1/auth/token`（用户认证）、`/v1/admin/token`（管理令牌）、`/v1/auth/refresh`、`/v1/auth/logout`、`/v1/auth/me` 核心 API
+* ✅ `/v1/auth/token`（用户认证）、`/v1/admin/token`（管理令牌）、`/v1/auth/refresh`、`/v1/auth/logout`、`/v1/auth/me` 核心 API（当前 refresh 主要用于管理客户端链路）
 * ✅ 用户 Token 内省与服务 Token 内省
 * ✅ 服务凭证模式与 `service_access` Token
 * ✅ GitHub OAuth 登录，可扩展其他 OAuth 提供商
@@ -190,380 +190,31 @@ RUST_LOG=keylo=debug cargo run
 
 ---
 
-## 🔑 API 示例
+## 🔑 API 快速指引
 
-### 获取用户 Token
+为避免 README 与实现长期漂移，完整接口说明统一收敛到专门文档：
 
-`/v1/auth/token` 仅用于用户认证语义，不再接受未注册或未授权的客户端凭证。
+* 全量接口与鉴权规则： [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
+* 多客户端统一用户池与 RBAC： [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
+* 第三方系统对接： [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)
+* AgileBoot 对接： [docs/AGILEBOOT_INTEGRATION.md](docs/AGILEBOOT_INTEGRATION.md)
 
-```bash
-curl -X POST http://127.0.0.1:2345/v1/auth/token \
-  -H "Content-Type: application/json" \
-  -d '{"client_id":"alice","client_secret":"<user-password>"}'
-```
+### 常用接口（快速确认）
 
-返回：
+* 公开：`POST /v1/auth/token`、`POST /v1/admin/token`、`POST /v1/auth/refresh`、`POST /v1/service/token`
+* 用户：`GET /v1/auth/me`、`POST /v1/auth/logout`、`POST /v1/user/change-password`
+* 管理：`/v1/admin/*`、`/v1/admin/users/*`、`/v1/admin/services/*`
+* RBAC：`/api/rbac/*`
+* OAuth：公开流程 `/v1/auth/oauth/*`，管理接口 `/api/oauth/*`
 
-```json
-{
-  "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImtleWxvLXJzMjU2LTEiLCJ0eXAiOiJKV1QifQ...",
-  "token_type": "Bearer",
-  "expires_in": 900
-}
-```
+### Refresh Token 说明（重要）
 
-### 获取管理 Token
+当前实现中：
 
-`/v1/admin/token` 仅用于受信任的管理客户端，签发的令牌带有 `role=admin`、`scope=admin`、`aud=admin-backend`。
+* `POST /v1/admin/token` 返回 `access_token + refresh_token`
+* `POST /v1/auth/token` 当前仅返回 `access_token`
 
-```bash
-curl -X POST http://127.0.0.1:2345/v1/admin/token \
-  -H "Content-Type: application/json" \
-  -d '{"client_id":"<admin-client-id>","client_secret":"<admin-client-secret>"}'
-```
-
-### 用户注册
-
-```bash
-curl -X POST http://127.0.0.1:2345/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alice","email":"alice@example.com","password":"change-me-123"}'
-```
-
-### 获取 JWKS 公钥集合
-
-第三方系统可通过公开端点获取 Keylo 的当前验签公钥：
-
-```bash
-curl http://127.0.0.1:2345/.well-known/jwks.json
-```
-
-### 获取当前用户信息
-
-```bash
-curl -H "Authorization: Bearer <access_token>" \
-  http://127.0.0.1:2345/v1/auth/me
-```
-
-返回：
-
-```json
-{
-  "sub": "user:alice",
-  "scope": ["read", "write"],
-  "role": ["user"],
-  "aud": "admin-backend",
-  "exp": 1704067200,
-  "iss": "keylo",
-  "jti": "550e8400-e29b-41d4-a716-446655440000"
-}
-```
-
-### 端点授权矩阵
-
-| 端点 | 令牌类型 | 必需 claims |
-| --- | --- | --- |
-| `POST /v1/auth/token` | 无 | 仅用户名/密码用户认证 |
-| `POST /v1/admin/token` | 无 | 仅受信任管理客户端 |
-| `POST /v1/service/token` | 无 | 仅已注册且激活的服务客户端 |
-| `POST /v1/auth/introspect` | `service_access` | `role=service`、`scope` 包含 `read`、`aud=admin-backend` |
-| `POST /v1/service/introspect` | `service_access` | `role=service`、`scope` 包含 `read` |
-| `GET/POST/PUT /v1/admin/*` | `access` | `role=admin`、`scope` 包含 `admin`、`aud=admin-backend` |
-| `POST /v1/user/change-password` | `access` | `role=user`、`scope` 包含 `write`、`aud=admin-backend` |
-
-未授权调用会返回稳定的 machine-readable 错误，如 `insufficient_role`、`insufficient_scope`、`service_client_not_authorized`。
-
-### 超级管理员初始化（可选）
-
-当你需要首启自动创建超级管理员用户时，可开启以下环境变量：
-
-```env
-ENABLE_SUPER_ADMIN_BOOTSTRAP=true
-SUPER_ADMIN_USERNAME=root_bootstrap
-SUPER_ADMIN_EMAIL=root_bootstrap@example.com
-SUPER_ADMIN_PASSWORD=RootBootstrap#123
-```
-
-说明：
-
-* 初始化过程幂等：重复启动会更新同一账号资料并确保绑定 `super_admin` 角色。
-* 仅在数据库可用时生效。
-* 建议上线后立即轮换为运维托管凭据。
-
-### 第三方用户迁移导入
-
-管理端提供批量迁移接口（支持幂等 external id 映射）：
-
-```bash
-curl -X POST http://127.0.0.1:2345/v1/admin/users/migrations/import \
-  -H "Authorization: Bearer <admin_access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-        "provider": "agileboot",
-        "users": [
-          {
-            "external_user_id": "agileboot-1001",
-            "username": "tom",
-            "email": "tom@example.com",
-            "password": "StrongPass#123",
-            "active": true,
-            "roles": ["super_admin"],
-            "metadata": {"source": "agileboot"}
-          }
-        ],
-        "dry_run": false
-      }'
-```
-
-### 单用户 JIT 迁移注册（登录时迁移）
-
-当第三方系统首次登录用户尚未在 Keylo 建档时，可调用 JIT 接口完成“迁移 + 发 token”：
-
-```bash
-curl -X POST http://127.0.0.1:2345/v1/auth/migrations/jit-register \
-  -H "Content-Type: application/json" \
-  -d '{
-        "provider": "agileboot",
-        "external_user_id": "ab-1001",
-        "username": "tom",
-        "email": "tom@example.com",
-        "password": "StrongPass#123",
-        "active": true,
-        "roles": ["super_admin"]
-      }'
-```
-
-### 异步批次导入任务
-
-提交批次任务（管理员）：
-
-```bash
-curl -X POST http://127.0.0.1:2345/v1/admin/users/migrations/jobs \
-  -H "Authorization: Bearer <admin_access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-        "provider": "agileboot",
-        "dry_run": false,
-        "users": [
-          {
-            "external_user_id": "ab-1002",
-            "username": "jerry",
-            "email": "jerry@example.com",
-            "password": "StrongPass#123"
-          }
-        ]
-      }'
-```
-
-查询任务状态：
-
-```bash
-curl -X GET http://127.0.0.1:2345/v1/admin/users/migrations/jobs/<job_id> \
-  -H "Authorization: Bearer <admin_access_token>"
-```
-
-### 迁移统一错误码
-
-迁移相关接口返回稳定的 `error_code`，例如：
-
-* `migration_invalid_input`
-* `migration_conflict`
-* `migration_mapping_error`
-* `migration_role_assignment_failed`
-* `migration_provider_invalid`
-* `migration_internal_error`
-* `migration_not_found`
-
-### 第三方系统内省用户 Token
-
-第三方后端服务应先申请自己的 `service_access` Token，再调用用户 Token 内省接口：
-
-```bash
-curl -X POST http://127.0.0.1:2345/v1/auth/introspect \
-  -H "Authorization: Bearer <service_access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{"token":"<user_access_token>"}'
-```
-
-### 服务间调用白名单配置
-
-Keylo 当前采用“服务账号 + scope 白名单 + audience 白名单”的模式控制服务间调用，而不是单独维护一张调用拓扑表。
-
-你需要配置两类约束：
-
-* `allowed_scopes`：该服务最多能申请哪些调用权限
-* `allowed_audiences`：该服务最多能面向哪些目标服务申请 Token
-
-示例：为 `agileboot-admin` 注册一个只能访问 `admin-backend` 的服务账号：
-
-```bash
-curl -X POST http://127.0.0.1:2345/v1/admin/services \
-  -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "service_id": "agileboot-admin",
-    "service_secret": "replace-with-strong-secret",
-    "name": "AgileBoot Admin",
-    "description": "AgileBoot 管理平台服务账号",
-    "allowed_scopes": ["user.read", "user.write"],
-    "allowed_audiences": ["admin-backend"]
-  }'
-```
-
-随后该服务只能申请被允许的 scope/audience 子集：
-
-```bash
-curl -X POST http://127.0.0.1:2345/v1/service/token \
-  -H "Content-Type: application/json" \
-  -d '{
-    "service_id": "agileboot-admin",
-    "service_secret": "replace-with-strong-secret",
-    "audience": "admin-backend",
-    "scope": "user.read"
-  }'
-```
-
-如果请求超出白名单范围，Keylo 会拒绝签发服务 Token。
-
-### 登出
-
-```bash
-curl -X POST -H "Authorization: Bearer <access_token>" \
-  http://127.0.0.1:2345/v1/auth/logout
-```
-
-返回：
-
-```json
-{
-  "message": "Successfully logged out",
-  "sub": "client:web"
-}
-```
-
-### 测试受保护的路由
-
-```bash
-curl -H "Authorization: Bearer <access_token>" \
-  http://127.0.0.1:2345/protected
-```
-
-### RBAC 角色和权限管理
-
-以下接口属于管理员接口，调用时应使用带 `admin` scope 的 `admin_token`。
-
-#### 创建角色
-
-```bash
-curl -X POST -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  http://127.0.0.1:2345/api/rbac/roles \
-  -d '{"name": "admin", "description": "Administrator role"}'
-```
-
-#### 创建权限
-
-```bash
-curl -X POST -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  http://127.0.0.1:2345/api/rbac/permissions \
-  -d '{"name": "user.manage", "description": "Manage users permission"}'
-```
-
-#### 为用户分配角色
-
-```bash
-curl -X POST -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  http://127.0.0.1:2345/api/rbac/users/{user_id}/roles \
-  -d '{"role_id": "role-uuid"}'
-```
-
-#### 检查用户权限
-
-```bash
-curl -H "Authorization: Bearer <admin_token>" \
-  http://127.0.0.1:2345/api/rbac/users/{user_id}/check-permission/user.manage
-```
-
-返回：
-
-```json
-{
-  "success": true,
-  "data": {
-    "user_id": "user-uuid",
-    "permission": "user.manage",
-    "has_permission": true
-  }
-}
-```
-
-### OAuth 第三方登录
-
-#### 配置OAuth提供商
-
-```bash
-curl -X POST -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  http://127.0.0.1:2345/api/oauth/providers \
-  -d '{
-    "name": "github",
-    "client_id": "your_github_client_id",
-    "client_secret": "your_github_client_secret",
-    "authorization_url": "https://github.com/login/oauth/authorize",
-    "token_url": "https://github.com/login/oauth/access_token",
-    "user_info_url": "https://api.github.com/user",
-    "scope": "read:user user:email",
-    "redirect_url": "http://yourapp.com/callback/github"
-  }'
-```
-
-#### 发起GitHub登录
-
-```bash
-curl -L http://127.0.0.1:2345/v1/auth/oauth/login/github
-```
-
-这将重定向到GitHub授权页面。
-
-#### 关联OAuth账户
-
-```bash
-curl -X POST -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  http://127.0.0.1:2345/api/oauth/link \
-  -d '{
-    "provider": "github",
-    "code": "authorization_code_from_callback",
-    "state": "state_parameter"
-  }'
-```
-
-#### 获取用户的OAuth账户
-
-```bash
-curl -H "Authorization: Bearer <admin_token>" \
-  http://127.0.0.1:2345/api/oauth/accounts
-```
-
-### 审计日志（管理员）
-
-#### 查询审计日志
-
-```bash
-curl -H "Authorization: Bearer <admin_token>" \
-  "http://127.0.0.1:2345/v1/admin/audit-logs?limit=50&offset=0"
-```
-
-#### 清理历史审计日志
-
-```bash
-curl -X POST -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  http://127.0.0.1:2345/v1/admin/audit-logs/cleanup \
-  -d '{"retention_days": 30}'
-```
+即：`POST /v1/auth/refresh` 所使用的 `refresh_token` 主要来源于管理客户端登录链路。
 
 ---
 
@@ -576,26 +227,20 @@ src/
 ├── config.rs        # 环境配置管理
 ├── state.rs         # AppState 定义，应用全局状态
 ├── startup.rs       # 路由初始化，应用启动逻辑
-├── routes/          # 路由定义
-│   ├── auth.rs      # 认证路由
-│   └── mod.rs
-├── handlers/        # Handler 实现
-│   ├── auth.rs      # 认证 handlers
-│   ├── common.rs    # 通用 handlers
-│   └── mod.rs
-├── models/          # 数据模型
-│   ├── jwt.rs       # JWT Claims 定义
-│   ├── auth.rs      # 认证模型
-│   └── mod.rs
-├── db/              # 数据库操作
-│   └── mod.rs       # 数据库初始化、迁移、查询
-├── errors.rs        # 错误类型定义
-└── utils.rs         # 工具函数 (UUID、时间、验证等)
+├── db/              # 数据访问层
+├── handlers/        # HTTP handlers
+├── middleware/      # 鉴权与授权中间件
+├── models/          # 领域模型
+├── routes/          # 路由定义（auth/user/rbac/oauth/service）
+├── errors.rs        # 错误定义
+└── utils.rs         # 工具函数
 
-Dockerfile          # 容器镜像配置
-docker-compose.yml  # 开发环境容器编排
-.env.example        # 环境变量示例
-Cargo.toml          # 项目依赖配置
+docs/                # 对接、发布与运维文档
+migrations/          # SQLx 迁移脚本
+tests/               # 集成与负载测试
+Dockerfile           # 容器镜像配置
+docker-compose.yml   # 开发环境容器编排
+Cargo.toml           # 项目依赖配置
 ```
 
 ---
@@ -624,7 +269,7 @@ Cargo.toml          # 项目依赖配置
 | `JWT_PUBLIC_KEY_PATH` | `` | RSA 公钥文件路径，生产推荐 |
 | `JWT_PRIVATE_KEY_PEM` | `` | RSA 私钥 PEM 内容，可替代路径 |
 | `JWT_PUBLIC_KEY_PEM` | `` | RSA 公钥 PEM 内容，可替代路径 |
-| `DATABASE_URL` | `postgres://user:password@localhost/keylo` | 数据库连接字符串 |
+| `DATABASE_URL` | `postgres://user:password@localhost:5432/keylo` | 数据库连接字符串 |
 | `SERVER_ADDR` | `127.0.0.1` | 服务器监听地址 |
 | `SERVER_PORT` | `2345` | 服务器监听端口 |
 | `ENVIRONMENT` | `development` | 运行环境 |
@@ -639,12 +284,18 @@ Cargo.toml          # 项目依赖配置
 | `ADMIN_CLIENT_SECRET` | `` | 管理员客户端密钥（建议生产配置） |
 | `REDIS_URL` | `` | Redis 地址（配置后启用分布式状态存储） |
 | `REDIS_KEY_PREFIX` | `keylo` | Redis key 前缀（多环境隔离） |
+| `DB_POOL_SIZE` | `10` | 数据库连接池最大连接数 |
 | `AUDIT_LOG_RETENTION_DAYS` | `30` | 审计日志保留天数 |
+| `SERVICE_TOKEN_EXPIRY_SECONDS` | `3600` | 服务 Token 过期时间（秒） |
+| `ENABLE_SUPER_ADMIN_BOOTSTRAP` | `false` | 是否启用超级管理员首启引导 |
+| `SUPER_ADMIN_USERNAME` | `` | 超级管理员用户名（引导启用时） |
+| `SUPER_ADMIN_EMAIL` | `` | 超级管理员邮箱（引导启用时） |
+| `SUPER_ADMIN_PASSWORD` | `` | 超级管理员初始密码（引导启用时） |
 | `RUST_LOG` | `keylo=debug` | 日志级别 |
 
 ## 🔐 JWKS
 
-Keylo 1.0 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 暴露公开验签密钥集合。
+Keylo 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 暴露公开验签密钥集合。
 
 * 生产环境不要使用内置开发密钥
 * 下游系统推荐优先使用 JWKS 做本地验签
@@ -668,22 +319,11 @@ curl http://127.0.0.1:2345/readyz
 
 ## 🗄️ 数据库迁移
 
-服务启动时会自动执行 `migrations/` 下的 SQLx 迁移，并初始化默认客户端。1.0 版本的迁移覆盖用户、客户端、刷新 Token、OAuth、RBAC、审计日志和服务客户端等核心表结构。
+服务启动时会自动执行 `migrations/` 下的 SQLx 迁移，并初始化默认客户端。当前版本迁移覆盖用户、客户端、刷新 Token、OAuth、RBAC、审计日志和服务客户端等核心表结构。
 
 ---
 
-## 🧪 运行测试
-
-```bash
-# 运行所有测试
-cargo test
-
-# 运行特定测试
-cargo test test_index
-
-# 输出详细信息
-cargo test -- --nocapture --test-threads=1
-```
+> 测试命令与测试脚本请以本文前面的“🧪 测试”章节为准。
 
 ---
 
@@ -692,7 +332,7 @@ cargo test -- --nocapture --test-threads=1
 ### 使用 GitHub Container Registry 镜像
 
 ```bash
-docker pull ghcr.io/bruceblink/keylo:v1.0.1
+docker pull ghcr.io/bruceblink/keylo:v1.1.1
 ```
 
 ### 运行容器
@@ -709,7 +349,7 @@ docker run --rm -p 2345:2345 \
   -e ADMIN_CLIENT_ID="cli-admin-root" \
   -e ADMIN_CLIENT_SECRET="replace-with-strong-admin-secret" \
   -e REDIS_URL="redis://redis:6379" \
-  ghcr.io/bruceblink/keylo:v1.0.1
+  ghcr.io/bruceblink/keylo:v1.1.1
 ```
 
 ### 本地构建镜像
@@ -730,12 +370,12 @@ docker-compose logs -f postgres
 
 ---
 
-## ✨ 1.0 核心能力
+## ✨ 当前核心能力
 
 ### 1. 统一认证
 
 * 支持用户登录、客户端登录和用户注册
-* 支持 Access Token / Refresh Token
+* 支持 Access Token / Refresh Token（当前 refresh 主要用于管理客户端链路）
 * 支持 `me`、登出和黑名单
 
 ### 2. 服务间鉴权
@@ -758,9 +398,9 @@ docker-compose logs -f postgres
 
 ---
 
-## 🚦 1.x 后续方向
+## 🚦 演进方向
 
-以下内容属于 1.x 后续增强，不影响 1.0 正式使用：
+后续增强方向：
 
 * 多把 RSA 密钥并行发布
 * 自动密钥轮换流程
@@ -828,4 +468,4 @@ MIT License - 查看 [LICENSE](LICENSE) 文件
 
 ---
 
-**Last Updated**: 2026年04月16日
+**Last Updated**: 2026年04月17日
