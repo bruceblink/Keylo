@@ -100,6 +100,10 @@
 }
 ```
 
+- `POST /v1/auth/refresh` 的 `refresh_token` 来源说明：
+  - 通过 `POST /v1/admin/token` 获取（该接口会返回 `refresh_token`）
+  - `POST /v1/auth/token` 当前仅返回 `access_token`，不返回 `refresh_token`
+
 ### 3.4 当前用户信息
 
 - **GET** `/v1/auth/me`

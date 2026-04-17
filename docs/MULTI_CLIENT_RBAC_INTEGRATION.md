@@ -52,7 +52,7 @@
 
 ### 3.2 用户创建即授权（原子）
 
-5. 创建用户并直接绑定角色模板  
+1. 创建用户并直接绑定角色模板  
    `POST /v1/admin/users/provision`
 
 请求体（支持 role_id / role_name 混用）：
@@ -69,13 +69,13 @@
 
 ### 3.3 查询与调试
 
-6. 查询用户最终权限并集  
+1. 查询用户最终权限并集  
    `GET /v1/admin/users/{user_id}/effective-permissions`
 
-7. 查询角色详情（含权限）  
+2. 查询角色详情（含权限）  
    `GET /api/rbac/roles/{role_id}`
 
-8. 按前缀查询权限点  
+3. 按前缀查询权限点  
    `GET /api/rbac/permissions?prefix=ssc.`
 
 ---
@@ -114,6 +114,21 @@
 
 - `role` 已升级为数组输出。
 - 服务端对历史单字符串 `role` 保持兼容反序列化（平滑升级）。
+
+### 4.2 Refresh Token 获取与刷新链路说明
+
+当前实现中，`refresh_token` 仅在**管理客户端登录**时签发：
+
+- `POST /v1/admin/token`：返回 `access_token + refresh_token`
+- `POST /v1/auth/token`：当前仅返回 `access_token`（不返回 `refresh_token`）
+
+因此，`POST /v1/auth/refresh` 的 `refresh_token` 来源是：
+
+1. 先调用 `POST /v1/admin/token`
+2. 从响应体中读取 `refresh_token`
+3. 再调用 `POST /v1/auth/refresh` 换取新的 `access_token`（并轮换新的 `refresh_token`）
+
+如果是普通用户登录链路（`/v1/auth/token`），当前策略是**到期后重新登录换 token**，不是 refresh 模式。
 
 ---
 
