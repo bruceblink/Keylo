@@ -90,6 +90,11 @@ pub async fn upsert_client(
 pub async fn seed_default_clients(pool: &PgPool) -> Result<()> {
     let admin_client_id = std::env::var("ADMIN_CLIENT_ID").ok();
     let admin_client_secret = std::env::var("ADMIN_CLIENT_SECRET").ok();
+    if admin_client_id.is_none() || admin_client_secret.is_none() {
+        tracing::warn!(
+            "ADMIN_CLIENT_ID or ADMIN_CLIENT_SECRET is not set, skipping admin client seed"
+        );
+    }
     seed_default_clients_with_admin(
         pool,
         admin_client_id.as_deref(),
@@ -124,6 +129,9 @@ pub async fn seed_default_clients_with_admin(
              VALUES ($1, $2, 'Admin Client', 'Configured admin client', TRUE, TRUE)
              ON CONFLICT (id) DO UPDATE
              SET secret = EXCLUDED.secret,
+                 name = EXCLUDED.name,
+                 description = EXCLUDED.description,
+                 active = TRUE,
                  is_admin_client = TRUE,
                  updated_at = NOW()",
         )
