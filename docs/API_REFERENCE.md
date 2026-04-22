@@ -4,6 +4,8 @@
 
 > 基于当前代码路由整理，覆盖认证、用户、RBAC、OAuth、服务间认证与系统健康检查。
 
+> 从初始化到用户/RBAC/服务客户端的完整实操流程，请参考：[END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md)
+
 > 多客户端统一用户池与权限模型落地步骤请参考：[MULTI_CLIENT_RBAC_INTEGRATION.md](MULTI_CLIENT_RBAC_INTEGRATION.md)
 
 ## 1. 鉴权约定

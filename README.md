@@ -2,6 +2,12 @@
 
 **Keylo** 是一个轻量、可扩展的 **统一认证与授权服务**（Auth Service），为你的多服务系统提供统一的 JWT 签发、Session 管理和 OAuth 支持。
 
+快速上手建议：
+
+* 完整使用步骤见 [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)
+* 完整接口定义见 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
+* 多客户端权限建模见 [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
+
 ---
 
 ## 🚀 特性

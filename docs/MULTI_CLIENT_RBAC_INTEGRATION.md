@@ -2,6 +2,8 @@
 
 > 本文档聚焦“如何落地集成”。完整接口清单与字段定义请以 [API_REFERENCE.md](API_REFERENCE.md) 为准。
 
+> 如果你需要一份从系统初始化到管理客户端、用户、RBAC、服务客户端的完整操作手册，请参考：[END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md)
+
 ## 1. 适用场景
 
 - 多业务客户端接入同一用户池
