@@ -8,6 +8,8 @@ use axum::routing::get;
 use axum::Router;
 use redis::AsyncCommands;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 
 pub fn init_app_router() -> Router {
@@ -63,12 +65,76 @@ pub async fn init_app_router_with_db(
 
     if config.is_production() {
         let redis_url = config.redis_url.as_deref().unwrap_or_default();
-        let redis_client = redis::Client::open(redis_url)?;
-        let mut conn = redis_client.get_multiplexed_tokio_connection().await?;
-        let _: String = conn.ping().await?;
+        let redis_client = redis::Client::open(redis_url)
+            .map_err(|e| anyhow::anyhow!("Invalid REDIS_URL '{}': {}", redis_url, e))?;
+
+        let mut redis_ready = false;
+        let mut last_redis_err: Option<String> = None;
+        for attempt in 1..=30 {
+            match redis_client.get_multiplexed_tokio_connection().await {
+                Ok(mut conn) => match conn.ping::<String>().await {
+                    Ok(_) => {
+                        redis_ready = true;
+                        break;
+                    }
+                    Err(e) => {
+                        last_redis_err = Some(e.to_string());
+                    }
+                },
+                Err(e) => {
+                    last_redis_err = Some(e.to_string());
+                }
+            }
+
+            tracing::warn!(
+                "Redis not ready (attempt {}/30, url={}): {}",
+                attempt,
+                redis_url,
+                last_redis_err.as_deref().unwrap_or("unknown error")
+            );
+            sleep(Duration::from_secs(1)).await;
+        }
+
+        if !redis_ready {
+            anyhow::bail!(
+                "Redis connection failed after 30 attempts (url={}): {}",
+                redis_url,
+                last_redis_err.as_deref().unwrap_or("unknown error")
+            );
+        }
     }
 
-    let db = crate::db::init_db_pool(database_url).await?;
+    let db = {
+        let mut connected: Option<sqlx::PgPool> = None;
+        let mut last_db_err: Option<String> = None;
+
+        for attempt in 1..=30 {
+            match crate::db::init_db_pool(database_url).await {
+                Ok(pool) => {
+                    connected = Some(pool);
+                    break;
+                }
+                Err(e) => {
+                    last_db_err = Some(e.to_string());
+                    tracing::warn!(
+                        "Postgres not ready (attempt {}/30, url={}): {}",
+                        attempt,
+                        database_url,
+                        last_db_err.as_deref().unwrap_or("unknown error")
+                    );
+                    sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+
+        connected.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Postgres connection failed after 30 attempts (url={}): {}",
+                database_url,
+                last_db_err.as_deref().unwrap_or("unknown error")
+            )
+        })?
+    };
 
     // Run migrations
     crate::db::run_migrations(&db).await?;

@@ -418,6 +418,7 @@ docker-compose logs -f postgres
 当前仓库的 [docker-compose.yml](docker-compose.yml) 默认按生产模板组织：
 
 * `keylo` 服务默认监听 `0.0.0.0:2345`
+* compose 与本地统一使用同名变量（如 `DATABASE_URL`、`REDIS_URL`），按运行场景调整取值
 * 默认要求提供管理客户端（`ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`）
 * 默认挂载 `${JWT_KEYS_DIR:-./keys}` 到 `/app/keys`
 * Redis 默认启用，满足生产环境的限流、登录锁定和 OAuth state 依赖
