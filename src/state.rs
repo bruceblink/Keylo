@@ -115,7 +115,7 @@ impl AppState {
     pub async fn store_oauth_state(&self, state: String, expires_at: i64) {
         if let Some(redis_client) = &self.redis_client {
             let ttl = (expires_at - chrono::Utc::now().timestamp()).max(1) as u64;
-            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+            if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
                 let key = format!("oauth:state:{}", state);
                 let namespaced_key = self.redis_key(&key);
                 if conn
@@ -134,7 +134,7 @@ impl AppState {
 
     pub async fn consume_oauth_state(&self, state: &str) -> bool {
         if let Some(redis_client) = &self.redis_client {
-            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+            if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
                 let key = format!("oauth:state:{}", state);
                 let namespaced_key = self.redis_key(&key);
                 // GETDEL is atomic: returns the value and deletes it in one operation,
@@ -162,7 +162,7 @@ impl AppState {
 
     pub async fn is_login_locked(&self, principal: &str) -> Option<i64> {
         if let Some(redis_client) = &self.redis_client {
-            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+            if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
                 let key = format!("auth:lock:{}", principal);
                 let namespaced_key = self.redis_key(&key);
                 if let Ok(Some(locked_until)) = conn.get::<_, Option<i64>>(&namespaced_key).await {
@@ -199,7 +199,7 @@ impl AppState {
         lockout_seconds: i64,
     ) {
         if let Some(redis_client) = &self.redis_client {
-            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+            if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
                 let now = chrono::Utc::now().timestamp();
                 let lock_key = self.redis_key(&format!("auth:lock:{}", principal));
                 let fail_key = self.redis_key(&format!("auth:fail:{}", principal));
@@ -240,7 +240,7 @@ impl AppState {
 
     pub async fn clear_login_failures(&self, principal: &str) {
         if let Some(redis_client) = &self.redis_client {
-            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+            if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
                 let fail_key = format!("auth:fail:{}", principal);
                 let lock_key = format!("auth:lock:{}", principal);
                 let _ = conn.del::<_, i32>(&self.redis_key(&fail_key)).await;
@@ -260,7 +260,7 @@ impl AppState {
         max_requests: u32,
     ) -> bool {
         if let Some(redis_client) = &self.redis_client {
-            if let Ok(mut conn) = redis_client.get_multiplexed_tokio_connection().await {
+            if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
                 let now = chrono::Utc::now().timestamp();
                 let bucket = now / window_seconds.max(1);
                 let key = format!("auth:rate:{}:{}", principal, bucket);

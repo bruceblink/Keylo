@@ -54,7 +54,7 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
 
     if state.config.redis_url.is_some() {
         if let Some(redis_client) = &state.redis_client {
-            match redis_client.get_multiplexed_tokio_connection().await {
+            match redis_client.get_multiplexed_async_connection().await {
                 Ok(mut conn) => match conn.ping::<String>().await {
                     Ok(_) => checks["redis"] = json!("ok"),
                     Err(err) => {

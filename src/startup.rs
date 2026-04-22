@@ -71,7 +71,7 @@ pub async fn init_app_router_with_db(
         let mut redis_ready = false;
         let mut last_redis_err: Option<String> = None;
         for attempt in 1..=30 {
-            match redis_client.get_multiplexed_tokio_connection().await {
+            match redis_client.get_multiplexed_async_connection().await {
                 Ok(mut conn) => match conn.ping::<String>().await {
                     Ok(_) => {
                         redis_ready = true;
