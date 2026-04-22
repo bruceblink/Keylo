@@ -1,407 +1,176 @@
-# 本地开发指南
+﻿# 本地开发指南
 
-## 快速开始
+本文档只保留本地开发所需的信息；完整使用流程、接口定义和集成方案分别以以下文档为准：
 
-### 1. 环境准备
+- [README.md](README.md)：项目概览、部署入口、环境变量说明
+- [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)：从初始化到管理客户端、用户、RBAC、服务客户端的完整操作步骤
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md)：完整接口清单与鉴权规则
+
+---
+
+## 1. 快速开始
+
+### 1.1 准备环境
 
 ```bash
-# 克隆仓库
 git clone https://github.com/bruceblink/Keylo.git
 cd keylo
-
-# 复制环境变量
 cp .env.example .env
-
-# 启动数据库
-docker-compose up -d
 ```
 
-### 2. 验证数据库连接
+如果需要模拟生产签名方式，请先生成 RSA 密钥：
 
 ```bash
-# 进入PostgreSQL
-docker exec -it keylo_postgres psql -U keylo_user -d keylo
-
-# 查看创建的表
-\dt
-
-# 退出
-\q
+mkdir -p keys
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/private.pem
+openssl rsa -pubout -in keys/private.pem -out keys/public.pem
 ```
 
-### 3. 运行服务
+### 1.2 启动依赖
 
 ```bash
-# 开发模式
-RUST_LOG=keylo=debug cargo run
-
-# 或使用cargo watch自动重新加载
-cargo install cargo-watch
-cargo watch -x run
+docker compose up -d postgres redis
+docker compose ps
 ```
 
-服务将在 `http://127.0.0.1:2345` 启动。
+### 1.3 启动服务
+
+```bash
+RUST_LOG=keylo=debug,axum=info cargo run
+```
+
+服务默认监听 [http://127.0.0.1:2345](http://127.0.0.1:2345)。
+
+建议启动后先确认以下日志：
+
+- `Database migrations completed`
+- `Default clients seeded`
+- `Database initialized successfully`
 
 ---
 
-## API 测试
+## 2. 开发调试
 
-### 获取 Token
-
-```bash
-curl -X POST http://127.0.0.1:2345/v1/auth/token \
-  -H "Content-Type: application/json" \
-  -d '{"client_id":"web","client_secret":"web-secret"}'
-```
-
-保存返回的 `access_token`。
-
-### 获取用户信息
+### 2.1 查看健康状态
 
 ```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://127.0.0.1:2345/v1/auth/me
-```
-
-### 访问受保护路由
-
-```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://127.0.0.1:2345/protected
-```
-
-### 登出
-
-```bash
-curl -X POST -H "Authorization: Bearer YOUR_TOKEN" \
-  http://127.0.0.1:2345/v1/auth/logout
-```
-
----
-
-## 调试
-
-### 启用详细日志
-
-```bash
-RUST_LOG=keylo=trace,axum=trace cargo run
-```
-
-### 调试 JWT Token
-
-使用 [jwt.io](https://jwt.io) 解析 JWT Token，查看其中的声明。
-
-开发环境可通过以下命令查看 JWKS：
-
-```bash
+curl http://127.0.0.1:2345/healthz
+curl http://127.0.0.1:2345/readyz
 curl http://127.0.0.1:2345/.well-known/jwks.json
 ```
 
-### 查看数据库
+### 2.2 查看数据库
 
 ```bash
-# 连接数据库
-docker exec -it keylo_postgres psql -U keylo_user -d keylo
-
-# 查看客户端
-SELECT * FROM clients;
-
-# 查看会话
-SELECT * FROM sessions;
-
-# 查看用户
-SELECT * FROM users;
+docker exec -it keylo-postgres psql -U keylo_user -d keylo
 ```
 
----
-
-## 常见任务
-
-### 添加新的认证客户端
-
-#### 方式1：直接在数据库中添加
+常用查询：
 
 ```sql
-INSERT INTO clients (id, secret, name, description) 
-VALUES ('mobile', 'mobile-secret-123', 'Mobile App', 'iOS/Android app');
+SELECT id, active, is_admin_client FROM clients ORDER BY updated_at DESC;
+SELECT id, username, email, active FROM users ORDER BY updated_at DESC;
+SELECT id, service_id, active FROM service_clients ORDER BY updated_at DESC;
 ```
 
-#### 方式2：通过硬编码（开发用）
+### 2.3 常用日志级别
 
-在 `src/state.rs` 中修改 `AppState::new()`:
-
-```rust
-clients.insert("mobile".into(), "mobile-secret-123".into());
+```bash
+RUST_LOG=keylo=trace,axum=trace cargo run
+RUST_LOG=keylo=debug,sqlx=warn cargo run
 ```
 
-### 修改 Token 过期时间
+---
 
-编辑 `.env`:
+## 3. 常见开发任务
+
+### 3.1 修改环境配置
+
+优先修改 `.env` 中的环境变量，而不是硬编码到代码中。
+
+常用配置：
 
 ```env
-TOKEN_EXPIRY_SECONDS=3600  # 1小时
+DATABASE_URL=postgres://keylo_user:keylo_password@localhost:5432/keylo
+REDIS_URL=redis://localhost:6379
+ADMIN_CLIENT_ID=cli-admin-root
+ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
+TOKEN_EXPIRY_SECONDS=900
+DB_POOL_SIZE=20
 ```
 
-### 配置 RSA 密钥
+### 3.2 新增路由
 
-开发环境默认使用内置 RSA 密钥对；如果你想模拟生产环境，建议显式提供：
+推荐顺序：
 
-```env
-JWT_ISSUER=keylo
-JWT_KEY_ID=keylo-rs256-1
-JWT_PRIVATE_KEY_PATH=./keys/private.pem
-JWT_PUBLIC_KEY_PATH=./keys/public.pem
-```
+1. 在 `src/handlers/` 中新增 handler
+2. 在 `src/routes/` 中注册路由
+3. 在 `src/startup.rs` 中合并到对应公开/受保护路由树
+4. 如果需要鉴权，复用 `src/middleware/auth.rs` 中现有中间件
 
-### 修改 JWT Claims
+### 3.3 新增数据库结构
 
-编辑 `src/models/jwt.rs`:
+推荐顺序：
 
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String,
-    pub iss: String,
-    pub aud: String,
-    pub scope: Vec<String>,
-    pub exp: i64,
-    pub iat: i64,
-    pub jti: String,
-    // 添加新字段
-    pub custom_field: String,
-}
-```
-
-### 添加新的路由
-
-1. 在 `src/handlers/` 中创建 handler 函数
-2. 在 `src/routes/` 中定义路由
-3. 在 `src/startup.rs` 中注册路由
-
-```rust
-// src/handlers/custom.rs
-pub async fn custom_endpoint() -> String {
-    "Hello, World!".to_string()
-}
-
-// src/routes/mod.rs
-pub mod custom;
-
-// src/startup.rs
-.merge(routes::custom::router())
-```
+1. 在 `migrations/` 中追加新迁移，不修改已执行迁移
+2. 在 `src/db/` 下补充数据访问函数
+3. 在集成测试中补充验证
 
 ---
 
-## 性能优化
+## 4. 测试与质量检查
 
-### 使用 cargo's release profile
-
-```bash
-cargo run --release
-```
-
-### 分析编译时间
+### 4.1 一键运行
 
 ```bash
-cargo build -Z timings
-```
-
-### 生成火焰图
-
-```bash
-cargo install flamegraph
-cargo flamegraph --bin keylo
-```
-
----
-
-## 容器开发
-
-### 构建 Docker 镜像
-
-```bash
-docker build -t keylo:dev .
-```
-
-### 运行与调试
-
-```bash
-docker run -p 2345:2345 \
-  -e JWT_ISSUER="keylo" \
-  -e JWT_PRIVATE_KEY_PATH="/app/keys/private.pem" \
-  -e JWT_PUBLIC_KEY_PATH="/app/keys/public.pem" \
-  -e ENVIRONMENT="development" \
-  keylo:dev
-```
-
-### 查看容器日志
-
-```bash
-docker logs keylo
-docker logs -f keylo  # 实时查看
-```
-
----
-
-## 测试
-
-### 一键运行（推荐）
-
-```bash
-# Linux/macOS
 ./scripts/run_tests.sh
+```
 
-# Windows PowerShell
+Windows PowerShell：
+
+```powershell
 ./scripts/run_tests.ps1
 ```
 
-### 单元测试
+### 4.2 常用命令
 
 ```bash
-# 运行所有测试
-cargo test
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all
+cargo test --test integration_test -- --nocapture
+```
 
-# 运行特定测试
-cargo test test_index
+如需指定测试数据库：
 
-# 显示输出
-cargo test -- --nocapture
-
-# 单线程运行
-cargo test -- --test-threads=1
-
-# 指定测试数据库（推荐）
+```bash
 export TEST_DATABASE_URL="postgres://postgres:password@localhost:5432/keylo_test"
 ```
 
-### 集成测试
+---
 
-在 `tests/` 目录中创建集成测试：
+## 5. 常见问题
 
-```rust
-// tests/integration_test.rs
-#[tokio::test]
-async fn test_full_auth_flow() {
-    // 测试完整的认证流程
-}
-```
+### 5.1 `wrong_credentials` + `User not found: cli`
 
-### 覆盖率
+- 原因：把管理客户端拿去调用了 `/v1/auth/token`
+- 处理：管理客户端应调用 `/v1/admin/token`
 
-```bash
-cargo tarpaulin --out Html
-open tarpaulin-report.html
-```
+### 5.2 `No active admin client found ...`
+
+- 检查 `.env` 中是否配置了 `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`
+- 检查 `clients` 表中目标客户端是否 `active=true` 且 `is_admin_client=true`
+
+### 5.3 migration 校验失败
+
+- 不要修改已执行 migration
+- 如开发库可丢弃，重置数据库后重新执行迁移
 
 ---
 
-## 常见问题
+## 6. 进一步阅读
 
-### 数据库连接失败
-
-```bash
-# 检查容器状态
-docker ps
-
-# 查看容器日志
-docker logs keylo_postgres
-
-# 重启容器
-docker-compose restart postgres
-```
-
-### 端口已被占用
-
-```bash
-# 更改 .env 中的 SERVER_PORT
-SERVER_PORT=3000
-
-# 或者杀死占用端口的进程
-lsof -i :2345
-```
-
-### 编译失败
-
-```bash
-# 清理缓存
-cargo clean
-
-# 更新依赖
-cargo update
-
-# 重新编译
-cargo build
-```
-
----
-
-## 有用的命令
-
-| 命令 | 说明 |
-| ------ | ------ |
-| `cargo build` | 编译项目 |
-| `cargo run` | 运行项目 |
-| `cargo test` | 运行测试 |
-| `cargo check` | 检查代码（不产生二进制文件） |
-| `cargo fmt` | 格式化代码 |
-| `cargo clippy` | 代码检查工具 |
-| `cargo doc --open` | 生成并打开文档 |
-| `cargo tree` | 显示依赖树 |
-
----
-
-## IDE 配置
-
-### VS Code
-
-安装扩展：
-
-- Rust Analyzer
-- CodeLLDB (用于调试)
-
-`.vscode/launch.json`:
-
-```json
-{
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=keylo",
-                    "--package=keylo"
-                ],
-                "filter": {
-                    "name": "keylo",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}"
-        }
-    ]
-}
-```
-
-### IntelliJ IDEA
-
-安装 Rust 扩展已自动配置。
-
----
-
-## 文档
-
-生成并查看文档：
-
-```bash
-cargo doc --open
-```
-
----
-
-祝你开发愉快！如有问题，请创建 Issue。
+- [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)
+- [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
+- [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)
+- [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
