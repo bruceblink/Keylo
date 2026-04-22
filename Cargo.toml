@@ -30,7 +30,7 @@ dotenvy = "0.15"
 
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "migrate", "chrono"] }
 chrono = "0.4"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.23", features = ["v4"] }
 urlencoding = "2.1"
 bcrypt = "0.19"
 http-body-util = "0.1.0"
@@ -38,6 +38,8 @@ hyper-util = { version = "0.1", features = ["client", "http1", "client-legacy"] 
 mime = "0.3"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 redis = { version = "0.31", features = ["tokio-comp"] }
+# Force patched version of rustls-webpki to fix RUSTSEC-2026-0104
+rustls-webpki = "=0.103.13"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
