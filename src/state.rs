@@ -309,4 +309,78 @@ impl AppState {
         entries.push(now);
         true
     }
+
+    pub async fn allow_auth_request_pair(
+        &self,
+        principal_a: &str,
+        max_requests_a: u32,
+        principal_b: &str,
+        max_requests_b: u32,
+        window_seconds: i64,
+    ) -> bool {
+        if let Some(redis_client) = &self.redis_client {
+            if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
+                let now = chrono::Utc::now().timestamp();
+                let bucket = now / window_seconds.max(1);
+
+                let key_a = self.redis_key(&format!("auth:rate:{}:{}", principal_a, bucket));
+                let key_b = self.redis_key(&format!("auth:rate:{}:{}", principal_b, bucket));
+
+                let count_a = conn.incr::<_, _, i64>(&key_a, 1).await.unwrap_or(1);
+                if count_a == 1 {
+                    let _ = conn.expire::<_, bool>(&key_a, window_seconds).await;
+                }
+
+                let count_b = conn.incr::<_, _, i64>(&key_b, 1).await.unwrap_or(1);
+                if count_b == 1 {
+                    let _ = conn.expire::<_, bool>(&key_b, window_seconds).await;
+                }
+
+                return (count_a as u32) <= max_requests_a && (count_b as u32) <= max_requests_b;
+            }
+
+            // Redis client exists but connection failed in production:
+            // deny the request to prevent brute-force via Redis outage.
+            if self.config.is_production() {
+                tracing::warn!(
+                    "Rate limit Redis connection failed for '{}', '{}'; denying request in production",
+                    principal_a,
+                    principal_b
+                );
+                return false;
+            }
+        } else if self.config.is_production() {
+            // No Redis configured in production; deny to prevent bypass via in-memory fallback.
+            tracing::warn!(
+                "Rate limiting has no Redis in production for '{}', '{}'; denying request",
+                principal_a,
+                principal_b
+            );
+            return false;
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        let threshold = now - window_seconds;
+        let mut limits = self.auth_rate_limits.write().await;
+
+        let entries_a = limits.entry(principal_a.to_string()).or_default();
+        entries_a.retain(|ts| *ts > threshold);
+        let allowed_a = if entries_a.len() as u32 >= max_requests_a {
+            false
+        } else {
+            entries_a.push(now);
+            true
+        };
+
+        let entries_b = limits.entry(principal_b.to_string()).or_default();
+        entries_b.retain(|ts| *ts > threshold);
+        let allowed_b = if entries_b.len() as u32 >= max_requests_b {
+            false
+        } else {
+            entries_b.push(now);
+            true
+        };
+
+        allowed_a && allowed_b
+    }
 }

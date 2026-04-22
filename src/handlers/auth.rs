@@ -57,6 +57,29 @@ async fn audit_event(
     }
 }
 
+fn audit_event_background(
+    state: &AppState,
+    event_type: &str,
+    actor: Option<&str>,
+    detail: Option<&str>,
+) {
+    let Some(db) = state.db.as_ref().cloned() else {
+        return;
+    };
+
+    let event_type = event_type.to_string();
+    let actor = actor.map(|s| s.to_string());
+    let detail = detail.map(|s| s.to_string());
+
+    tokio::spawn(async move {
+        if let Err(err) =
+            crate::db::create_audit_log(&db, &event_type, actor.as_deref(), detail.as_deref()).await
+        {
+            tracing::warn!("Failed to write audit log: {}", err);
+        }
+    });
+}
+
 fn extract_client_ip(headers: &HeaderMap) -> String {
     // Only trust X-Forwarded-For / X-Real-IP in front of a reverse proxy.
     // Validate that the extracted value is a syntactically valid IP address
@@ -246,21 +269,12 @@ pub async fn admin_token(
     let global_rate_key = format!("global:{}", client_ip);
 
     if !state
-        .allow_auth_request(
+        .allow_auth_request_pair(
             &global_rate_key,
-            state.config.auth_rate_limit_window_seconds,
             state.config.auth_global_rate_limit_max_requests,
-        )
-        .await
-    {
-        return Err(AuthError::TooManyRequests);
-    }
-
-    if !state
-        .allow_auth_request(
             &scoped_rate_key,
-            state.config.auth_rate_limit_window_seconds,
             state.config.auth_rate_limit_max_requests,
+            state.config.auth_rate_limit_window_seconds,
         )
         .await
     {
@@ -300,24 +314,22 @@ pub async fn admin_token(
                 state.config.login_lockout_seconds,
             )
             .await;
-        audit_event(
+        audit_event_background(
             &state,
             "admin.token.failed",
             Some(&payload.client_id),
             Some("Wrong credentials"),
-        )
-        .await;
+        );
         return Err(AuthError::WrongCredentials);
     }
 
     if !is_admin_client {
-        audit_event(
+        audit_event_background(
             &state,
             "admin.token.forbidden",
             Some(&payload.client_id),
             Some("Client is not authorized for management token issuance"),
-        )
-        .await;
+        );
         return Err(AuthError::InsufficientRole);
     }
 
@@ -362,13 +374,12 @@ pub async fn admin_token(
     .await
     .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
 
-    audit_event(
+    audit_event_background(
         &state,
         "admin.token.success",
         Some(&payload.client_id),
         Some("Management access token issued"),
-    )
-    .await;
+    );
 
     Ok(Json(AuthBody::new(
         access_token,
