@@ -30,6 +30,13 @@ REDIS_URL=redis://redis:6379
 RUST_LOG=keylo=info,axum=info
 ```
 
+如果使用仓库内的 [docker-compose.yml](docker-compose.yml)，还需要保证：
+
+- 宿主机存在 RSA 密钥目录，并通过 `${JWT_KEYS_DIR:-./keys}` 挂载到容器 `/app/keys`
+- `SERVER_ADDR` 使用 `0.0.0.0`，避免容器内只监听回环地址
+- 不要删除 `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`，否则不会自动初始化管理客户端
+- 如需重装数据库，执行 `docker compose down -v --remove-orphans` 删除 PostgreSQL 数据卷后再重建
+
 说明：
 
 - 生产环境禁止使用内置开发密钥。
@@ -51,9 +58,36 @@ RUST_LOG=keylo=info,axum=info
 示例生成命令：
 
 ```bash
+mkdir -p keys
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
 openssl rsa -pubout -in private.pem -out public.pem
 ```
+
+推荐的服务器落地步骤：
+
+```bash
+mkdir -p /opt/keylo/keys
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /opt/keylo/keys/private.pem
+openssl rsa -pubout -in /opt/keylo/keys/private.pem -out /opt/keylo/keys/public.pem
+chmod 600 /opt/keylo/keys/private.pem
+chmod 644 /opt/keylo/keys/public.pem
+```
+
+如果使用仓库内的 Docker Compose，可将宿主机目录通过 `JWT_KEYS_DIR=/opt/keylo/keys` 暴露给容器。此时容器内配置建议为：
+
+```env
+JWT_PRIVATE_KEY_PATH=/app/keys/private.pem
+JWT_PUBLIC_KEY_PATH=/app/keys/public.pem
+```
+
+也可以不使用文件挂载，直接通过环境变量注入 PEM 内容：
+
+```env
+JWT_PRIVATE_KEY_PEM="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+JWT_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+```
+
+但生产环境更推荐使用文件挂载，而不是把完整私钥直接写进 Compose 或 Shell 历史。
 
 ## 启动前检查
 

@@ -1,34 +1,30 @@
-version: '3.8'
-
 services:
-  # PostgreSQL database
   postgres:
     image: postgres:17-alpine
     container_name: keylo-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: keylo_user
-      POSTGRES_PASSWORD: keylo_password
-      POSTGRES_DB: keylo
+      POSTGRES_USER: ${POSTGRES_USER:-keylo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-keylo_password}
+      POSTGRES_DB: ${POSTGRES_DB:-keylo}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U keylo_user -d keylo"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-keylo_user} -d ${POSTGRES_DB:-keylo}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - keylo_network
 
-  # Redis for session/token caching (optional)
   redis:
     image: redis:8.6.2-alpine
     container_name: keylo-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -39,8 +35,6 @@ services:
     networks:
       - keylo_network
 
-  # keylo
-  # ─────────────────────────────────────────
   keylo:
     build:
       context: .
@@ -50,16 +44,24 @@ services:
     restart: unless-stopped
     environment:
       TZ: UTC
-      ENVIRONMENT: production
-      DATABASE_URL: postgres://keylo_user:keylo_password@postgres:5432/keylo
-      SERVER_ADDR: 127.0.0.1
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      JWT_ISSUER: ${JWT_ISSUER:-keylo}
+      JWT_KEY_ID: ${JWT_KEY_ID:-keylo-rs256-1}
+      JWT_PRIVATE_KEY_PATH: ${JWT_PRIVATE_KEY_PATH:-/app/keys/private.pem}
+      JWT_PUBLIC_KEY_PATH: ${JWT_PUBLIC_KEY_PATH:-/app/keys/public.pem}
+      DATABASE_URL: ${DATABASE_URL:-postgres://keylo_user:keylo_password@postgres:5432/keylo}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      SERVER_ADDR: 0.0.0.0
       SERVER_PORT: ${SERVER_PORT:-2345}
+      ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID:-cli-admin-root}
+      ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET:-replace-with-strong-admin-secret}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-keylo}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-12345}
-      RUST_LOG: keylo=debug,axum=info
+      RUST_LOG: ${RUST_LOG:-keylo=info,axum=info}
     ports:
       - "${SERVER_PORT:-2345}:2345"
+    volumes:
+      - ${JWT_KEYS_DIR:-./keys}:/app/keys:ro
     networks:
       - keylo_network
     depends_on:
