@@ -649,6 +649,7 @@ pub async fn jit_register_user(
     let now = Utc::now().timestamp();
     let claims = Claims {
         sub: format!("user:{}", user.username),
+        uid: Some(user.id.clone()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: if is_admin {

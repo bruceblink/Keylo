@@ -129,6 +129,8 @@ impl AuthBody {
 #[derive(Serialize)]
 pub struct MeResponse {
     pub sub: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub scope: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

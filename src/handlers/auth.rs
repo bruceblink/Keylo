@@ -235,6 +235,7 @@ pub async fn auth_token(
     // Create access token claims
     let access_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
+        uid: user_id.clone(),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, is_admin_user),
@@ -339,6 +340,7 @@ pub async fn admin_token(
     let subject_prefix = "client";
     let access_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
+        uid: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, true),
@@ -351,6 +353,7 @@ pub async fn admin_token(
 
     let refresh_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
+        uid: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -717,6 +720,7 @@ pub async fn auth_update_client(
 pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
     Ok(Json(MeResponse {
         sub: claims.sub,
+        uid: claims.uid,
         scope: claims.scope,
         role: claims.role,
         aud: claims.aud,
@@ -808,6 +812,7 @@ pub async fn auth_refresh(
     // Create new access token claims
     let access_claims = Claims {
         sub: format!("client:{}", client_id),
+        uid: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope("client", is_admin_client),
@@ -821,6 +826,7 @@ pub async fn auth_refresh(
     // Create new refresh token claims
     let new_refresh_claims = Claims {
         sub: format!("client:{}", client_id),
+        uid: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],

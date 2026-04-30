@@ -464,6 +464,7 @@ async fn oauth_callback(
     let now = chrono::Utc::now().timestamp();
     let access_claims = crate::models::Claims {
         sub: user_id.clone(),
+        uid: Some(user_id.clone()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["read".into(), "write".into()],
@@ -515,7 +516,7 @@ async fn get_user_oauth_accounts_handler(
     State(state): State<AppState>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
-    let user_id = claims.sub;
+    let user_id = claims.uid.clone().unwrap_or(claims.sub);
 
     match get_user_oauth_accounts(db, &user_id).await {
         Ok(accounts) => Ok(Json(json!({
@@ -539,7 +540,7 @@ async fn link_oauth_account_handler(
     Json(req): Json<LinkOAuthAccountRequest>,
 ) -> ApiResponse {
     let actor = claims.sub.clone();
-    let user_id = claims.sub;
+    let user_id = claims.uid.clone().unwrap_or(claims.sub);
 
     // 获取OAuth提供商
     let db = require_db(&state)?;
@@ -666,7 +667,7 @@ async fn unlink_oauth_account_handler(
     Path(provider_name): Path<String>,
 ) -> ApiResponse {
     let actor = claims.sub.clone();
-    let user_id = claims.sub;
+    let user_id = claims.uid.clone().unwrap_or(claims.sub);
 
     // 获取提供商ID
     let db = require_db(&state)?;

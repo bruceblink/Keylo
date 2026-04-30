@@ -24,6 +24,10 @@ pub struct Claims {
     /// user:xxx | client:xxx
     pub sub: String,
 
+    /// User ID（users表主键）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+
     /// Issuer：签发方
     pub iss: String,
 

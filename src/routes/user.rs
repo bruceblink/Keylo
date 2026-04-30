@@ -351,9 +351,10 @@ async fn change_password_handler(
 ) -> ApiResponse {
     let db = require_db(&state)?;
 
-    // 从JWT claims中提取用户ID
-    // sub字段格式可能是 "user:username" 或 "client:username" 或直接的UUID
-    let user_id = if claims.sub.starts_with("user:") {
+    // 优先使用JWT中的uid（users表主键）
+    let user_id = if let Some(uid) = claims.uid.as_deref() {
+        uid.to_string()
+    } else if claims.sub.starts_with("user:") {
         // 如果是user格式，从数据库中通过用户名查找用户ID
         let username = &claims.sub[5..]; // 移除"user:"前缀
         tracing::debug!("Looking up user by username: {}", username);
@@ -414,7 +415,7 @@ async fn change_password_handler(
             }
         }
     } else {
-        // 直接使用sub作为用户ID（OAuth情况）
+        // 兼容旧token：直接使用sub作为用户ID（OAuth情况）
         tracing::debug!("Using sub directly as user_id: {}", claims.sub);
         claims.sub.clone()
     };
