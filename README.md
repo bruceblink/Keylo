@@ -1,4 +1,4 @@
-# Keylo v1.1.1
+# Keylo v1.2.1
 
 **Keylo** 是一个轻量、可扩展的 **统一认证与授权服务**（Auth Service），为你的多服务系统提供统一的 JWT 签发、Session 管理和 OAuth 支持。
 

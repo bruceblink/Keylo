@@ -112,7 +112,8 @@
 
 - **GET** `/v1/auth/me`
 - 鉴权：是（access）
-- 响应字段：`sub`、`scope[]`、`role[]`、`aud`、`exp`、`iss`、`jti`
+- 响应字段：`sub`、`uid`、`scope[]`、`role[]`、`aud`、`exp`、`iss`、`jti`
+- 字段说明：`uid` 为 `users` 表主键（稳定用户 ID），`sub` 为主体标识字符串。
 
 ### 3.5 退出登录
 
@@ -390,7 +391,8 @@
 
 Access token 关键字段：
 
-- `sub`：主体标识（Subject）。通常为 `user:<username>`、`client:<client_id>` 或特定主体 ID，用于后端识别请求发起方。
+- `sub`：主体标识（Subject）。通常为 `user:<username>`、`client:<client_id>` 或特定主体 ID，用于后端识别请求发起方，不建议作为用户表主键使用。
+- `uid`：用户主键 ID（`users.id`）。当 token 代表用户主体时应优先使用 `uid` 进行用户关联与数据查询。
 - `iss`：签发方（Issuer）。用于校验 token 来源是否可信，需与服务端配置的发行者一致。
 - `aud`：受众（Audience）。标识 token 目标服务（如 `admin-backend`）；后端应校验是否匹配当前资源服务。
 - `token_type`：令牌类型。当前常见为 `access`（访问令牌）或 `refresh`（刷新令牌）；受保护接口只接受 `access`。

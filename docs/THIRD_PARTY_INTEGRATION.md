@@ -72,6 +72,7 @@
 第三方系统建议消费以下字段：
 
 - `sub`
+- `uid`
 - `iss`
 - `aud`
 - `token_type`
@@ -81,7 +82,7 @@
 - `iat`
 - `jti`
 
-校验建议顺序：
+- `sub` 用于主体标识（如 `user:<username>`），`uid` 用于稳定用户主键关联（推荐优先使用）。
 
 1. 校验 Bearer Token 格式
 2. 验签并检查 `iss` / `exp`

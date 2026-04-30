@@ -66,9 +66,9 @@
 
 ## 4. Claims 消费约定
 
-当前建议消费字段：`sub`、`iss`、`aud`、`token_type`、`role[]`、`scope[]`、`exp`、`iat`、`jti`。
+当前建议消费字段：`sub`、`uid`、`iss`、`aud`、`token_type`、`role[]`、`scope[]`、`exp`、`iat`、`jti`。
 
-- `role` 当前输出为数组；服务端兼容历史单字符串。
+- `uid` 推荐作为用户主键进行业务关联，`sub` 保留用于主体标识与审计。
 - 后端必须作为最终安全边界，前端显示控制不等于授权。
 
 ### Refresh Token 说明（重要）
