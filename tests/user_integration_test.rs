@@ -25,6 +25,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_auth_me_returns_non_empty_uid() {
+        let Some(server) = setup_test_server().await else {
+            return;
+        };
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("auth_me_user_{}", timestamp);
+        let email = format!("auth_me_{}@example.com", timestamp);
+
+        let create_user_response = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "Password123!"
+            }))
+            .await;
+        assert_eq!(create_user_response.status_code(), 200);
+
+        let create_data: serde_json::Value = create_user_response.json::<serde_json::Value>();
+        let user_id = create_data["data"]["id"].as_str().unwrap().to_string();
+
+        let login_response = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": create_data["data"]["username"].as_str().unwrap(),
+                "client_secret": "Password123!"
+            }))
+            .await;
+        assert_eq!(login_response.status_code(), 200);
+
+        let login_data: serde_json::Value = login_response.json::<serde_json::Value>();
+        let access_token = login_data["access_token"].as_str().unwrap();
+
+        let me_response = server
+            .get("/v1/auth/me")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        assert_eq!(me_response.status_code(), 200);
+
+        let me_data: serde_json::Value = me_response.json::<serde_json::Value>();
+        assert_eq!(me_data["uid"].as_str().unwrap(), user_id);
+        assert!(!me_data["uid"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn test_change_password_success() {
         let Some(server) = setup_test_server().await else {
             return;
