@@ -1,12 +1,5 @@
 #!/usr/bin/env sh
 set -e
 
-echo "==> [pre-commit] Running cargo fmt --check..."
 cargo fmt --check
-echo "==> [pre-commit] cargo fmt passed."
-
-echo "==> [pre-commit] Running cargo clippy..."
 cargo clippy -- -D warnings
-echo "==> [pre-commit] cargo clippy passed."
-
-echo "==> [pre-commit] All checks passed. Proceeding with commit."
