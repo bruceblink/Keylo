@@ -44,6 +44,25 @@ async fn is_user_admin(db: &sqlx::PgPool, user_id: &str) -> bool {
             .unwrap_or(false)
 }
 
+fn require_admin_scope(claims: &Claims) -> Result<(), AuthError> {
+    if claims.has_scope("admin") {
+        Ok(())
+    } else {
+        Err(AuthError::Forbidden)
+    }
+}
+
+fn require_db(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {
+    state
+        .db
+        .as_deref()
+        .ok_or_else(|| db_error("Database not available"))
+}
+
+fn db_error(message: &str) -> AuthError {
+    AuthError::DatabaseError(message.to_string())
+}
+
 async fn audit_event(
     state: &AppState,
     event_type: &str,
@@ -56,7 +75,6 @@ async fn audit_event(
         }
     }
 }
-
 fn audit_event_background(
     state: &AppState,
     event_type: &str,
@@ -164,14 +182,7 @@ pub async fn auth_token(
         return Err(AuthError::TooManyRequests);
     }
 
-    let db = match &state.db {
-        Some(db) => db,
-        None => {
-            return Err(AuthError::DatabaseError(
-                "Database not available".to_string(),
-            ))
-        }
-    };
+    let db = require_db(&state)?;
 
     // First try to authenticate as a user
     let user_result = get_user_by_username(db, &payload.client_id).await;
@@ -289,7 +300,7 @@ pub async fn admin_token(
     let db = state
         .db
         .as_deref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+        .ok_or_else(|| db_error("Database not available"))?;
 
     let (stored_secret, is_admin_client) =
         match crate::db::get_client_auth_info(db, &payload.client_id).await {
@@ -396,10 +407,7 @@ pub async fn auth_blacklist_token(
     claims: Claims,
     Json(payload): Json<BlacklistTokenRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    // 只有管理员可以执行此操作
-    if !claims.has_scope("admin") {
-        return Err(AuthError::Forbidden);
-    }
+    require_admin_scope(&claims)?;
 
     if let Some(db) = &state.db {
         crate::db::blacklist_token(
@@ -428,10 +436,7 @@ pub async fn auth_get_blacklisted_tokens(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    // 只有管理员可以执行此操作
-    if !claims.has_scope("admin") {
-        return Err(AuthError::Forbidden);
-    }
+    require_admin_scope(&claims)?;
 
     if let Some(db) = &state.db {
         let tokens = crate::db::get_active_blacklisted_tokens(db)
@@ -542,7 +547,7 @@ pub async fn auth_rotate_client_secret(
     let db = state
         .db
         .as_deref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+        .ok_or_else(|| db_error("Database not available"))?;
 
     let new_secret = payload
         .new_secret
@@ -595,7 +600,7 @@ pub async fn auth_list_clients(
     let db = state
         .db
         .as_deref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+        .ok_or_else(|| db_error("Database not available"))?;
     let clients = crate::db::list_clients_for_admin(db)
         .await
         .map_err(|_| AuthError::DatabaseError("Failed to list clients".to_string()))?;
@@ -633,7 +638,7 @@ pub async fn auth_create_client(
     let db = state
         .db
         .as_deref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+        .ok_or_else(|| db_error("Database not available"))?;
     crate::db::create_management_client(
         db,
         &payload.client_id,
@@ -678,7 +683,7 @@ pub async fn auth_update_client(
     let db = state
         .db
         .as_deref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+        .ok_or_else(|| db_error("Database not available"))?;
     let updated = crate::db::update_management_client(
         db,
         &client_id,

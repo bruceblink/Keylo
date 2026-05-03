@@ -115,14 +115,16 @@ pub async fn service_introspect(
     }
 }
 
-// ─── 管理接口 ────────────────────────────────────────────────────────────────
+fn require_db(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {
+    state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))
+}
 
 /// GET /v1/admin/services
 pub async fn list_services(State(state): State<AppState>) -> Result<Json<Value>, AuthError> {
-    let db = state
-        .db
-        .as_ref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let db = require_db(&state)?;
 
     let services = svc_db::list_service_clients(db)
         .await
@@ -140,10 +142,7 @@ pub async fn register_service(
         return Err(AuthError::MissingCredentials);
     }
 
-    let db = state
-        .db
-        .as_ref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let db = require_db(&state)?;
 
     svc_db::create_service_client(
         db,
@@ -183,10 +182,7 @@ pub async fn update_service(
     Path(service_id): Path<String>,
     Json(payload): Json<UpdateServiceRequest>,
 ) -> Result<Json<Value>, AuthError> {
-    let db = state
-        .db
-        .as_ref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let db = require_db(&state)?;
 
     let updated = svc_db::update_service_client(
         db,
@@ -215,10 +211,7 @@ pub async fn rotate_service_secret(
     Path(service_id): Path<String>,
     Json(payload): Json<RotateServiceSecretRequest>,
 ) -> Result<Json<Value>, AuthError> {
-    let db = state
-        .db
-        .as_ref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let db = require_db(&state)?;
 
     let new_secret = payload
         .new_secret
@@ -245,10 +238,7 @@ pub async fn get_service(
     State(state): State<AppState>,
     Path(service_id): Path<String>,
 ) -> Result<Json<ServiceInfo>, AuthError> {
-    let db = state
-        .db
-        .as_ref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let db = require_db(&state)?;
 
     let service = svc_db::get_service_client(db, &service_id)
         .await

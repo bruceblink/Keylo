@@ -36,7 +36,7 @@ pub async fn require_permission(
     };
 
     // 检查用户是否有所需权限
-    match user_has_permission(db, &user_id, &required_permission).await {
+    match user_has_permission(db, user_id, &required_permission).await {
         Ok(true) => Ok(next.run(request).await),
         Ok(false) => {
             let body = Json(json!({

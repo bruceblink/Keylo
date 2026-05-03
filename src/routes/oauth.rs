@@ -44,6 +44,26 @@ pub fn oauth_public_routes() -> Router<AppState> {
         .route("/callback/{provider}", get(oauth_callback))
 }
 
+fn oauth_err(
+    status: StatusCode,
+    error: impl Into<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        status,
+        Json(json!({
+            "success": false,
+            "error": error.into()
+        })),
+    )
+}
+
+fn oauth_db_err(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
+    oauth_err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("Database error: {}", e),
+    )
+}
+
 async fn audit_event(state: &AppState, event_type: &str, actor: Option<&str>, detail: String) {
     if let Some(db) = &state.db {
         if let Err(err) = create_audit_log(db, event_type, actor, Some(&detail)).await {
@@ -242,22 +262,10 @@ async fn oauth_login(
     let provider = match get_oauth_provider_by_name(db, &provider_name).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": "OAuth provider not found"
-                })),
-            ));
+            return Err(oauth_err(StatusCode::NOT_FOUND, "OAuth provider not found"));
         }
         Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "success": false,
-                    "error": format!("Database error: {}", e)
-                })),
-            ));
+            return Err(oauth_db_err(e));
         }
     };
 
@@ -321,22 +329,10 @@ async fn oauth_callback(
     let provider = match get_oauth_provider_by_name(db, &provider_name).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": "OAuth provider not found"
-                })),
-            ));
+            return Err(oauth_err(StatusCode::NOT_FOUND, "OAuth provider not found"));
         }
         Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "success": false,
-                    "error": format!("Database error: {}", e)
-                })),
-            ));
+            return Err(oauth_db_err(e));
         }
     };
 
@@ -559,22 +555,10 @@ async fn link_oauth_account_handler(
     let provider = match get_oauth_provider_by_name(db, &req.provider).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": "OAuth provider not found"
-                })),
-            ));
+            return Err(oauth_err(StatusCode::NOT_FOUND, "OAuth provider not found"));
         }
         Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "success": false,
-                    "error": format!("Database error: {}", e)
-                })),
-            ));
+            return Err(oauth_db_err(e));
         }
     };
 
@@ -686,22 +670,10 @@ async fn unlink_oauth_account_handler(
     let provider = match get_oauth_provider_by_name(db, &provider_name).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "success": false,
-                    "error": "OAuth provider not found"
-                })),
-            ));
+            return Err(oauth_err(StatusCode::NOT_FOUND, "OAuth provider not found"));
         }
         Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "success": false,
-                    "error": format!("Database error: {}", e)
-                })),
-            ));
+            return Err(oauth_db_err(e));
         }
     };
 
