@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::utils::validate_password_complexity;
 use anyhow::Result;
 use bcrypt::{hash, DEFAULT_COST};
+use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use uuid::Uuid;
@@ -15,6 +16,12 @@ pub use oauth::*;
 pub use rbac::*;
 pub use service::*;
 pub use user::*;
+
+fn token_hash(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hex::encode(hasher.finalize())
+}
 
 /// 初始化数据库连接池
 pub async fn init_db_pool(database_url: &str) -> Result<PgPool> {
@@ -377,12 +384,14 @@ pub async fn create_session(
     token: &str,
     expires_at: i64,
 ) -> Result<()> {
+    let token_hash = token_hash(token);
     sqlx::query(
-        "INSERT INTO sessions (id, user_id, token, expires_at) VALUES ($1, $2, $3, to_timestamp($4))"
+        "INSERT INTO sessions (id, user_id, token, token_hash, expires_at) VALUES ($1, $2, $3, $4, to_timestamp($5))"
     )
     .bind(session_id)
     .bind(user_id)
     .bind(token)
+    .bind(token_hash)
     .bind(expires_at)
     .execute(pool)
     .await?;
@@ -401,17 +410,13 @@ pub async fn revoke_session(pool: &PgPool, session_id: &str) -> Result<()> {
 }
 
 /// 获取用户会话
-pub async fn get_user_sessions(pool: &PgPool, user_id: &str) -> Result<Vec<(String, String)>> {
-    let rows =
-        sqlx::query("SELECT id, token FROM sessions WHERE user_id = $1 AND expires_at > NOW()")
-            .bind(user_id)
-            .fetch_all(pool)
-            .await?;
+pub async fn get_user_sessions(pool: &PgPool, user_id: &str) -> Result<Vec<String>> {
+    let rows = sqlx::query("SELECT id FROM sessions WHERE user_id = $1 AND expires_at > NOW()")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| (row.get("id"), row.get("token")))
-        .collect())
+    Ok(rows.into_iter().map(|row| row.get("id")).collect())
 }
 
 /// 创建 Refresh Token
@@ -422,12 +427,14 @@ pub async fn create_refresh_token(
     token: &str,
     expires_at: i64,
 ) -> Result<()> {
+    let token_hash = token_hash(token);
     sqlx::query(
-        "INSERT INTO refresh_tokens (id, client_id, token, expires_at) VALUES ($1, $2, $3, to_timestamp($4))"
+        "INSERT INTO refresh_tokens (id, client_id, token, token_hash, expires_at) VALUES ($1, $2, $3, $4, to_timestamp($5))"
     )
     .bind(token_id)
     .bind(client_id)
     .bind(token)
+    .bind(token_hash)
     .bind(expires_at)
     .execute(pool)
     .await?;
@@ -440,11 +447,12 @@ pub async fn validate_refresh_token(
     pool: &PgPool,
     token: &str,
 ) -> Result<Option<(String, String)>> {
+    let token_hash = token_hash(token);
     let row = sqlx::query(
-        "SELECT id, client_id FROM refresh_tokens 
-         WHERE token = $1 AND expires_at > NOW() AND revoked = FALSE",
+        "SELECT id, client_id FROM refresh_tokens
+         WHERE token_hash = $1 AND expires_at > NOW() AND revoked = FALSE",
     )
-    .bind(token)
+    .bind(token_hash)
     .fetch_optional(pool)
     .await?;
 
@@ -489,13 +497,15 @@ pub async fn blacklist_token(
     reason: Option<&str>,
     expires_at: i64,
 ) -> Result<()> {
+    let token_hash = token_hash(token);
     sqlx::query(
-        "INSERT INTO blacklisted_tokens (id, token, reason, expires_at) 
-         VALUES ($1, $2, $3, to_timestamp($4))
-         ON CONFLICT (token) DO NOTHING",
+        "INSERT INTO blacklisted_tokens (id, token, token_hash, reason, expires_at)
+         VALUES ($1, $2, $3, $4, to_timestamp($5))
+         ON CONFLICT (token_hash) DO NOTHING",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(token)
+    .bind(token_hash)
     .bind(reason)
     .bind(expires_at)
     .execute(pool)
@@ -506,11 +516,12 @@ pub async fn blacklist_token(
 
 /// 检查 Token 是否在黑名单中
 pub async fn is_token_blacklisted(pool: &PgPool, token: &str) -> Result<bool> {
+    let token_hash = token_hash(token);
     let row = sqlx::query(
-        "SELECT 1 FROM blacklisted_tokens 
-         WHERE token = $1 AND expires_at > NOW() LIMIT 1",
+        "SELECT 1 FROM blacklisted_tokens
+         WHERE token_hash = $1 AND expires_at > NOW() LIMIT 1",
     )
-    .bind(token)
+    .bind(token_hash)
     .fetch_optional(pool)
     .await?;
 
@@ -527,11 +538,11 @@ pub async fn cleanup_expired_blacklisted_tokens(pool: &PgPool) -> Result<u64> {
 }
 
 /// 获取所有活跃的黑名单 Token
-pub async fn get_active_blacklisted_tokens(pool: &PgPool) -> Result<Vec<(String, String, i64)>> {
+pub async fn get_active_blacklisted_tokens(pool: &PgPool) -> Result<Vec<(String, i64)>> {
     let rows = sqlx::query(
-        "SELECT token, reason, extract(epoch from expires_at)::bigint as expires_at 
-         FROM blacklisted_tokens 
-         WHERE expires_at > NOW() 
+        "SELECT token_hash, extract(epoch from expires_at)::bigint as expires_at
+         FROM blacklisted_tokens
+         WHERE expires_at > NOW()
          ORDER BY blacklisted_at DESC",
     )
     .fetch_all(pool)
@@ -539,14 +550,7 @@ pub async fn get_active_blacklisted_tokens(pool: &PgPool) -> Result<Vec<(String,
 
     Ok(rows
         .into_iter()
-        .map(|row| {
-            (
-                row.get("token"),
-                row.get::<Option<String>, _>("reason")
-                    .unwrap_or_else(|| "No reason".to_string()),
-                row.get("expires_at"),
-            )
-        })
+        .map(|row| (row.get("token_hash"), row.get("expires_at")))
         .collect())
 }
 

@@ -157,10 +157,7 @@ pub async fn register_service(
     .await
     .map_err(|e| {
         if e.to_string().contains("duplicate key") {
-            AuthError::InternalServerError(format!(
-                "Service '{}' already exists",
-                payload.service_id
-            ))
+            AuthError::Conflict(format!("Service '{}' already exists", payload.service_id))
         } else {
             AuthError::DatabaseError(e.to_string())
         }
@@ -239,8 +236,7 @@ pub async fn rotate_service_secret(
 
     Ok(Json(json!({
         "service_id": service_id,
-        "new_secret": new_secret,
-        "message": "Service secret rotated successfully. Store the new secret securely."
+        "message": "Service secret rotated successfully"
     })))
 }
 

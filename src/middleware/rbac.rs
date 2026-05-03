@@ -7,7 +7,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::{db::user_has_permission, state::AppState};
+use crate::{db::user_has_permission, models::Claims, state::AppState};
 
 /// 权限检查中间件
 pub async fn require_permission(
@@ -16,14 +16,13 @@ pub async fn require_permission(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // 从请求扩展中获取用户信息
-    let user_id = request
+    let claims = request
         .extensions()
-        .get::<String>()
-        .ok_or(StatusCode::UNAUTHORIZED)?
-        .clone();
+        .get::<Claims>()
+        .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    // 获取数据库连接池
+    let user_id = claims.uid.as_deref().unwrap_or(&claims.sub);
+
     let db = match state.db.as_deref() {
         Some(db) => db,
         None => {

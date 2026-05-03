@@ -397,7 +397,7 @@ pub async fn auth_blacklist_token(
     Json(payload): Json<BlacklistTokenRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     // 只有管理员可以执行此操作
-    if !claims.scope.contains(&"admin".to_string()) {
+    if !claims.scope.iter().any(|s| s == "admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -429,7 +429,7 @@ pub async fn auth_get_blacklisted_tokens(
     claims: Claims,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     // 只有管理员可以执行此操作
-    if !claims.scope.contains(&"admin".to_string()) {
+    if !claims.scope.iter().any(|s| s == "admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -441,10 +441,9 @@ pub async fn auth_get_blacklisted_tokens(
             })?;
 
         Ok(Json(json!({
-            "blacklisted_tokens": tokens.into_iter().map(|(token, reason, expires_at)| {
+            "blacklisted_tokens": tokens.into_iter().map(|(token_hash, expires_at)| {
                 json!({
-                    "token": token,
-                    "reason": reason,
+                    "token_hash": token_hash,
                     "expires_at": expires_at,
                 })
             }).collect::<Vec<_>>()
@@ -461,7 +460,7 @@ pub async fn auth_get_audit_logs(
     claims: Claims,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.contains(&"admin".to_string()) {
+    if !claims.scope.iter().any(|s| s == "admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -504,7 +503,7 @@ pub async fn auth_cleanup_audit_logs(
     claims: Claims,
     Json(payload): Json<CleanupAuditLogsRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.contains(&"admin".to_string()) {
+    if !claims.scope.iter().any(|s| s == "admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -536,7 +535,7 @@ pub async fn auth_rotate_client_secret(
     Path(client_id): Path<String>,
     Json(payload): Json<RotateClientSecretRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.contains(&"admin".to_string()) {
+    if !claims.scope.iter().any(|s| s == "admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -581,7 +580,6 @@ pub async fn auth_rotate_client_secret(
     Ok(Json(json!({
         "success": true,
         "client_id": client_id,
-        "new_secret": new_secret,
         "revoke_refresh_tokens": revoke_refresh_tokens,
     })))
 }
@@ -590,7 +588,7 @@ pub async fn auth_list_clients(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.contains(&"admin".to_string()) {
+    if !claims.scope.iter().any(|s| s == "admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -621,7 +619,7 @@ pub async fn auth_create_client(
     claims: Claims,
     Json(payload): Json<CreateClientRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.contains(&"admin".to_string()) {
+    if !claims.scope.iter().any(|s| s == "admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -647,7 +645,7 @@ pub async fn auth_create_client(
     .await
     .map_err(|e| {
         if e.to_string().contains("duplicate key") {
-            AuthError::InternalServerError("Client already exists".to_string())
+            AuthError::Conflict("Client already exists".to_string())
         } else {
             AuthError::DatabaseError("Failed to create client".to_string())
         }
@@ -673,7 +671,7 @@ pub async fn auth_update_client(
     Path(client_id): Path<String>,
     Json(payload): Json<UpdateClientRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.contains(&"admin".to_string()) {
+    if !claims.scope.iter().any(|s| s == "admin") {
         return Err(AuthError::Forbidden);
     }
 
