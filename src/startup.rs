@@ -3,6 +3,7 @@ use crate::handlers::{healthz, index, protected, readyz};
 use crate::middleware::auth;
 use crate::routes;
 use crate::state::AppState;
+use axum::http::HeaderValue;
 use axum::middleware;
 use axum::routing::get;
 use axum::Router;
@@ -11,6 +12,24 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
+
+fn is_allowed_cors_origin(origin: &HeaderValue) -> bool {
+    let Ok(origin_str) = origin.to_str() else {
+        return false;
+    };
+    let Ok(uri) = origin_str.parse::<http::Uri>() else {
+        return false;
+    };
+
+    if uri.path_and_query().is_some() {
+        return false;
+    }
+
+    matches!(
+        (uri.scheme_str(), uri.host()),
+        (Some("https"), Some(_)) | (Some("http"), Some("localhost" | "127.0.0.1"))
+    )
+}
 
 pub fn init_app_router() -> Router {
     let app_state = AppState::new(Config::default(), None)
@@ -241,9 +260,7 @@ pub async fn init_app_router_with_db(
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin, _| {
-            // Only allow https origins (or localhost for dev)
-            let s = origin.as_bytes();
-            s.starts_with(b"https://") || s.starts_with(b"http://localhost")
+            is_allowed_cors_origin(origin)
         }))
         .allow_methods(AllowMethods::list([
             axum::http::Method::GET,
@@ -410,6 +427,35 @@ wwIDAQAB
         config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
         config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
         config
+    }
+
+    #[test]
+    fn cors_origin_validation_matrix() {
+        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
+            "https://example.com"
+        )));
+        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
+            "https://example.com:8443"
+        )));
+        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
+            "http://localhost:3000"
+        )));
+        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
+            "http://127.0.0.1:5173"
+        )));
+
+        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
+            "http://localhost.evil.com"
+        )));
+        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
+            "http://127.0.0.1.evil.com"
+        )));
+        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
+            "http://example.com"
+        )));
+        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
+            "https://example.com/path"
+        )));
     }
 
     #[tokio::test]
