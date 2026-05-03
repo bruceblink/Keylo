@@ -64,6 +64,27 @@ fn oauth_db_err(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Valu
     )
 }
 
+async fn require_valid_oauth_state(
+    state: &AppState,
+    state_value: Option<&str>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let callback_state = match state_value {
+        Some(value) => value,
+        None => {
+            return Err(oauth_err(StatusCode::BAD_REQUEST, "Missing OAuth state"));
+        }
+    };
+
+    if !state.consume_oauth_state(callback_state).await {
+        return Err(oauth_err(
+            StatusCode::BAD_REQUEST,
+            "Invalid or expired OAuth state",
+        ));
+    }
+
+    Ok(())
+}
+
 async fn audit_event(state: &AppState, event_type: &str, actor: Option<&str>, detail: String) {
     if let Some(db) = &state.db {
         if let Err(err) = create_audit_log(db, event_type, actor, Some(&detail)).await {
@@ -301,28 +322,7 @@ async fn oauth_callback(
     Path(provider_name): Path<String>,
     Query(query): Query<OAuthAuthorizeQuery>,
 ) -> Result<Json<OAuthLoginResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let callback_state = match query.state.as_deref() {
-        Some(value) => value,
-        None => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "success": false,
-                    "error": "Missing OAuth state",
-                })),
-            ));
-        }
-    };
-
-    if !state.consume_oauth_state(callback_state).await {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "success": false,
-                "error": "Invalid or expired OAuth state",
-            })),
-        ));
-    }
+    require_valid_oauth_state(&state, query.state.as_deref()).await?;
 
     let db = require_db(&state)?;
     // 获取OAuth提供商配置
@@ -548,6 +548,8 @@ async fn link_oauth_account_handler(
 ) -> ApiResponse {
     let actor = claims.sub.clone();
     let user_id = require_uid(&claims)?;
+
+    require_valid_oauth_state(&state, req.state.as_deref()).await?;
 
     // 获取OAuth提供商
     let db = require_db(&state)?;

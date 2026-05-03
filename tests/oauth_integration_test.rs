@@ -88,8 +88,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_oauth_login_redirect() {
-        // First create a provider
+    async fn test_link_oauth_account_requires_state() {
         let Some(server) = setup_test_server().await else {
             return;
         };
@@ -111,18 +110,18 @@ mod tests {
             }))
             .await;
 
-        // Test OAuth login redirect
         let response = server
-            .get(&format!("/v1/auth/oauth/login/{}", provider_name))
+            .post("/api/oauth/link")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "provider": provider_name,
+                "code": "dummy-code"
+            }))
             .await;
 
-        let status = response.status_code();
-        assert!(status == 302 || status == 303); // Redirect
-
-        let location = response.headers().get("location").unwrap();
-        assert!(location
-            .to_str()
-            .unwrap()
-            .contains("github.com/login/oauth/authorize"));
+        assert_eq!(response.status_code(), 400);
+        let body: serde_json::Value = response.json();
+        assert!(!body["success"].as_bool().unwrap_or(true));
+        assert_eq!(body["error"], "Missing OAuth state");
     }
 }
