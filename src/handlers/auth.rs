@@ -397,7 +397,7 @@ pub async fn auth_blacklist_token(
     Json(payload): Json<BlacklistTokenRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     // 只有管理员可以执行此操作
-    if !claims.scope.iter().any(|s| s == "admin") {
+    if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -429,7 +429,7 @@ pub async fn auth_get_blacklisted_tokens(
     claims: Claims,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     // 只有管理员可以执行此操作
-    if !claims.scope.iter().any(|s| s == "admin") {
+    if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -460,7 +460,7 @@ pub async fn auth_get_audit_logs(
     claims: Claims,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.iter().any(|s| s == "admin") {
+    if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -503,7 +503,7 @@ pub async fn auth_cleanup_audit_logs(
     claims: Claims,
     Json(payload): Json<CleanupAuditLogsRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.iter().any(|s| s == "admin") {
+    if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -535,7 +535,7 @@ pub async fn auth_rotate_client_secret(
     Path(client_id): Path<String>,
     Json(payload): Json<RotateClientSecretRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.iter().any(|s| s == "admin") {
+    if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -588,7 +588,7 @@ pub async fn auth_list_clients(
     State(state): State<AppState>,
     claims: Claims,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.iter().any(|s| s == "admin") {
+    if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -619,7 +619,7 @@ pub async fn auth_create_client(
     claims: Claims,
     Json(payload): Json<CreateClientRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.iter().any(|s| s == "admin") {
+    if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
     }
 
@@ -671,7 +671,7 @@ pub async fn auth_update_client(
     Path(client_id): Path<String>,
     Json(payload): Json<UpdateClientRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    if !claims.scope.iter().any(|s| s == "admin") {
+    if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
     }
 
