@@ -77,17 +77,38 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 async fn main() -> Result<(), anyhow::Error> {
     keylo::config::load_dotenv();
 
-    // Initialize logging
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "keylo=debug,axum=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
     // Load configuration
     let config = Config::from_env();
+
+    // Initialize logging
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "keylo=debug,axum=info".into());
+
+    let _log_guard = if config.log_to_file {
+        std::fs::create_dir_all(&config.log_dir).map_err(|e| {
+            anyhow::anyhow!("Failed to create log directory '{}': {}", config.log_dir, e)
+        })?;
+        let file_appender =
+            tracing_appender::rolling::daily(&config.log_dir, &config.log_file_prefix);
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(non_blocking),
+            )
+            .init();
+        Some(guard)
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+        None
+    };
+
     tracing::info!("Starting Keylo service");
     tracing::info!("Environment: {}", config.environment);
     tracing::info!("Server: {}", config.server_url());

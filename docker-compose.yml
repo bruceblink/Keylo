@@ -58,10 +58,14 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-keylo}
       RUST_LOG: ${RUST_LOG:-keylo=info,axum=info}
+      LOG_TO_FILE: ${LOG_TO_FILE:-true}
+      LOG_DIR: ${LOG_DIR:-/app/logs}
+      LOG_FILE_PREFIX: ${LOG_FILE_PREFIX:-keylo}
     ports:
       - "${SERVER_PORT:-2345}:2345"
     volumes:
       - ${JWT_KEYS_DIR:-./keys}:/app/keys:ro
+      - ${LOGS_DIR:-./logs}:/app/logs
     networks:
       - keylo_network
     depends_on:

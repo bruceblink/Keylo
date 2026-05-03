@@ -83,6 +83,12 @@ pub struct Config {
     pub super_admin_email: Option<String>,
     /// 超级管理员初始密码
     pub super_admin_password: Option<String>,
+    /// 是否同时输出日志到文件
+    pub log_to_file: bool,
+    /// 日志目录
+    pub log_dir: String,
+    /// 日志文件名前缀
+    pub log_file_prefix: String,
 }
 
 impl Default for Config {
@@ -177,6 +183,13 @@ impl Config {
         let super_admin_email = env::var("SUPER_ADMIN_EMAIL").ok();
         let super_admin_password = env::var("SUPER_ADMIN_PASSWORD").ok();
 
+        let log_to_file = env::var("LOG_TO_FILE")
+            .ok()
+            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(true);
+        let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "./logs".to_string());
+        let log_file_prefix = env::var("LOG_FILE_PREFIX").unwrap_or_else(|_| "keylo".to_string());
+
         Self {
             jwt_issuer,
             jwt_key_id,
@@ -203,6 +216,9 @@ impl Config {
             super_admin_username,
             super_admin_email,
             super_admin_password,
+            log_to_file,
+            log_dir,
+            log_file_prefix,
         }
     }
 

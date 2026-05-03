@@ -8,3 +8,4 @@
 .env
 /keys/
 .claude/
+/logs/
