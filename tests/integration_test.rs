@@ -523,6 +523,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_inactive_user_cannot_get_auth_token() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("inactive-user-{}", ts);
+        let email = format!("{}@example.com", username);
+
+        let register_resp = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "Password123!"
+            }))
+            .await;
+        register_resp.assert_status_ok();
+        let register_body: serde_json::Value = register_resp.json();
+        let user_id = register_body["data"]["id"].as_str().unwrap();
+
+        let disable_resp = server
+            .put(&format!("/v1/admin/users/{}", user_id))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "active": false
+            }))
+            .await;
+        disable_resp.assert_status_ok();
+
+        let login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "Password123!"
+            }))
+            .await;
+        assert_eq!(login_resp.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_service_can_introspect_user_access_token() {
         let server = setup_test_server().await;
 

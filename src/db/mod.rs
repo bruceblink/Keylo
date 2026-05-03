@@ -332,8 +332,8 @@ pub async fn create_management_client(
 ) -> Result<()> {
     let hashed = hash(client_secret, DEFAULT_COST)?;
     sqlx::query(
-        "INSERT INTO clients (id, secret, name, description, active)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO clients (id, secret, name, description, active, is_admin_client)
+         VALUES ($1, $2, $3, $4, $5, TRUE)",
     )
     .bind(client_id)
     .bind(&hashed)

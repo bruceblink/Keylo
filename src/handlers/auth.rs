@@ -187,8 +187,9 @@ pub async fn auth_token(
     let user_result = get_user_by_username(db, &payload.client_id).await;
     let (is_user_valid, user_id) = match user_result {
         Ok(Some(user)) => {
-            // Verify password
-            if let Some(ref password_hash) = user.password_hash {
+            if !user.active {
+                (false, None)
+            } else if let Some(ref password_hash) = user.password_hash {
                 let result = verify(&payload.client_secret, password_hash)
                     .map_err(|_| AuthError::WrongCredentials)?;
                 (result, Some(user.id))
