@@ -66,16 +66,6 @@ jobs:
           echo "publish_latest=${publish_latest}" >> "$GITHUB_OUTPUT"
           echo "publish_major_minor=${publish_major_minor}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
-      - name: Generate changelog
-        run: npx changelogithub@14.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Derive image coordinates
         id: image
         shell: bash
@@ -126,20 +116,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
-          body: |
-            ## Container Image
-
-            Pull the release image from GitHub Container Registry:
-
-            - `${{ steps.image.outputs.image }}:${{ steps.version.outputs.tag }}`
-            - `${{ steps.image.outputs.image }}:${{ steps.version.outputs.version }}`
-            - `${{ steps.version.outputs.publish_major_minor == 'true' && format('`{0}:{1}`', steps.image.outputs.image, steps.version.outputs.major_minor) || 'major.minor tag not published for this release' }}`
-            - `${{ steps.version.outputs.publish_latest == 'true' && format('`{0}:latest`', steps.image.outputs.image) || 'latest tag not published for this release' }}`
-
-            ## Quick Start
-
-            ```bash
-            docker pull ${{ steps.image.outputs.image }}:${{ steps.version.outputs.tag }}
-            ```
           prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Generate changelog
+        run: npx changelogithub@14.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
