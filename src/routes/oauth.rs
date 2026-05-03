@@ -510,13 +510,25 @@ async fn oauth_callback(
     Ok(Json(response))
 }
 
+fn require_uid(claims: &Claims) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    claims.uid.clone().ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "success": false,
+                "error": "Missing uid in token"
+            })),
+        )
+    })
+}
+
 /// 获取用户的OAuth账户
 async fn get_user_oauth_accounts_handler(
     claims: crate::models::Claims,
     State(state): State<AppState>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
-    let user_id = claims.uid.clone().unwrap_or(claims.sub);
+    let user_id = require_uid(&claims)?;
 
     match get_user_oauth_accounts(db, &user_id).await {
         Ok(accounts) => Ok(Json(json!({
@@ -540,7 +552,7 @@ async fn link_oauth_account_handler(
     Json(req): Json<LinkOAuthAccountRequest>,
 ) -> ApiResponse {
     let actor = claims.sub.clone();
-    let user_id = claims.uid.clone().unwrap_or(claims.sub);
+    let user_id = require_uid(&claims)?;
 
     // 获取OAuth提供商
     let db = require_db(&state)?;
@@ -667,7 +679,7 @@ async fn unlink_oauth_account_handler(
     Path(provider_name): Path<String>,
 ) -> ApiResponse {
     let actor = claims.sub.clone();
-    let user_id = claims.uid.clone().unwrap_or(claims.sub);
+    let user_id = require_uid(&claims)?;
 
     // 获取提供商ID
     let db = require_db(&state)?;

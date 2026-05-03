@@ -415,9 +415,13 @@ async fn change_password_handler(
             }
         }
     } else {
-        // 兼容旧token：直接使用sub作为用户ID（OAuth情况）
-        tracing::debug!("Using sub directly as user_id: {}", claims.sub);
-        claims.sub.clone()
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "success": false,
+                "error": "Missing uid in token",
+            })),
+        ));
     };
 
     // 验证新密码复杂度

@@ -131,7 +131,6 @@ mod tests {
 
         let login_data: serde_json::Value = login_response.json::<serde_json::Value>();
         let access_token = login_data["access_token"].as_str().unwrap();
-        println!("Access token: {}", access_token);
 
         // 更改密码
         let change_response = server
