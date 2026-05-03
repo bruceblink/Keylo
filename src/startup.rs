@@ -30,8 +30,10 @@ fn is_allowed_cors_origin(origin: &HeaderValue) -> bool {
         return false;
     };
 
-    if uri.path_and_query().is_some() {
-        return false;
+    if let Some(path_and_query) = uri.path_and_query() {
+        if path_and_query.as_str() != "/" {
+            return false;
+        }
     }
 
     matches!(
