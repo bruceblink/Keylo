@@ -386,11 +386,10 @@ pub async fn create_session(
 ) -> Result<()> {
     let token_hash = token_hash(token);
     sqlx::query(
-        "INSERT INTO sessions (id, user_id, token, token_hash, expires_at) VALUES ($1, $2, $3, $4, to_timestamp($5))"
+        "INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, to_timestamp($4))"
     )
     .bind(session_id)
     .bind(user_id)
-    .bind(token)
     .bind(token_hash)
     .bind(expires_at)
     .execute(pool)
@@ -429,11 +428,10 @@ pub async fn create_refresh_token(
 ) -> Result<()> {
     let token_hash = token_hash(token);
     sqlx::query(
-        "INSERT INTO refresh_tokens (id, client_id, token, token_hash, expires_at) VALUES ($1, $2, $3, $4, to_timestamp($5))"
+        "INSERT INTO refresh_tokens (id, client_id, token_hash, expires_at) VALUES ($1, $2, $3, to_timestamp($4))"
     )
     .bind(token_id)
     .bind(client_id)
-    .bind(token)
     .bind(token_hash)
     .bind(expires_at)
     .execute(pool)
@@ -499,12 +497,11 @@ pub async fn blacklist_token(
 ) -> Result<()> {
     let token_hash = token_hash(token);
     sqlx::query(
-        "INSERT INTO blacklisted_tokens (id, token, token_hash, reason, expires_at)
-         VALUES ($1, $2, $3, $4, to_timestamp($5))
+        "INSERT INTO blacklisted_tokens (id, token_hash, reason, expires_at)
+         VALUES ($1, $2, $3, to_timestamp($4))
          ON CONFLICT (token_hash) DO NOTHING",
     )
     .bind(Uuid::new_v4().to_string())
-    .bind(token)
     .bind(token_hash)
     .bind(reason)
     .bind(expires_at)

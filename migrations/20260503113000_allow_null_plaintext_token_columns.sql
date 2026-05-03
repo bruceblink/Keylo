@@ -1,0 +1,3 @@
+ALTER TABLE sessions ALTER COLUMN token DROP NOT NULL;
+ALTER TABLE refresh_tokens ALTER COLUMN token DROP NOT NULL;
+ALTER TABLE blacklisted_tokens ALTER COLUMN token DROP NOT NULL;
