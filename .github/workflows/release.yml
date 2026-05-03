@@ -72,7 +72,7 @@ jobs:
           node-version: lts/*
 
       - name: Generate changelog
-        run: npx changelogithub@0.17.0
+        run: npx changelogithub@14.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
