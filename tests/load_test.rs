@@ -49,10 +49,11 @@ mod load_tests {
     use super::*;
 
     fn test_config() -> Config {
-        let mut config = Config::default();
-        config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
-        config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
-        config
+        Config {
+            jwt_private_key_pem: TEST_JWT_PRIVATE_KEY_PEM.to_string(),
+            jwt_public_key_pem: TEST_JWT_PUBLIC_KEY_PEM.to_string(),
+            ..Default::default()
+        }
     }
 
     /// 创建测试服务器
