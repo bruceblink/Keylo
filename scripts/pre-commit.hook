@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 set -e
 
-cargo fmt --check
-cargo clippy -- -D warnings
+echo "[pre-commit] Running format check..."
+cargo fmt --all -- --check
+
+echo "[pre-commit] Running clippy..."
+cargo clippy --workspace --all-targets --all-features -- -D warnings
