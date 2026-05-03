@@ -402,7 +402,6 @@ async fn oauth_callback(
         account.user_id
     } else {
         // 创建新用户
-        let new_user_id = Uuid::new_v4().to_string();
         let username = user_info
             .login
             .clone()
@@ -415,7 +414,7 @@ async fn oauth_callback(
         // 创建用户记录
         // create_user 参数为 (username, email, password)
         // OAuth 首次登录场景不设置本地密码
-        crate::db::create_user(db, &username, &email, None)
+        let created_user = crate::db::create_user(db, &username, &email, None)
             .await
             .map_err(|e| {
                 (
@@ -430,7 +429,7 @@ async fn oauth_callback(
         // 关联OAuth账户
         link_oauth_account(
             db,
-            &new_user_id,
+            &created_user.id,
             &provider.id,
             &user_info.id,
             user_info.login.as_deref(),
@@ -452,7 +451,7 @@ async fn oauth_callback(
             )
         })?;
 
-        new_user_id
+        created_user.id
     };
 
     // 生成JWT token
