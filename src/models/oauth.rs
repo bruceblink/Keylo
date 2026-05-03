@@ -7,6 +7,7 @@ pub struct OAuthProvider {
     pub id: String,
     pub name: String,
     pub client_id: String,
+    #[serde(skip_serializing)]
     pub client_secret: String,
     pub authorization_url: String,
     pub token_url: String,
