@@ -65,6 +65,8 @@ pub struct Config {
     pub auth_rate_limit_max_requests: u32,
     /// 全局认证接口限流窗口内最大请求数
     pub auth_global_rate_limit_max_requests: u32,
+    /// 是否信任代理转发头（X-Forwarded-For/X-Real-IP）
+    pub trust_proxy_headers: bool,
     /// Redis URL（可选，配置后用于分布式状态存储）
     pub redis_url: Option<String>,
     /// Redis key 前缀（用于多环境隔离）
@@ -148,6 +150,11 @@ impl Config {
             .parse::<u32>()
             .unwrap_or(300);
 
+        let trust_proxy_headers = env::var("TRUST_PROXY_HEADERS")
+            .ok()
+            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+
         let redis_url = env::var("REDIS_URL").ok();
         let redis_key_prefix = env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "keylo".into());
 
@@ -187,6 +194,7 @@ impl Config {
             auth_rate_limit_window_seconds,
             auth_rate_limit_max_requests,
             auth_global_rate_limit_max_requests,
+            trust_proxy_headers,
             redis_url,
             redis_key_prefix,
             audit_log_retention_days,

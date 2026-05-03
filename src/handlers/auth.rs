@@ -98,23 +98,22 @@ fn audit_event_background(
     });
 }
 
-fn extract_client_ip(headers: &HeaderMap) -> String {
-    // Only trust X-Forwarded-For / X-Real-IP in front of a reverse proxy.
-    // Validate that the extracted value is a syntactically valid IP address
-    // to prevent header-injection attacks on rate-limiting and audit logs.
-    if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = value.split(',').next() {
-            let ip = first.trim();
+fn extract_client_ip(headers: &HeaderMap, trust_proxy_headers: bool) -> String {
+    if trust_proxy_headers {
+        if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(first) = value.split(',').next() {
+                let ip = first.trim();
+                if !ip.is_empty() && ip.parse::<std::net::IpAddr>().is_ok() {
+                    return ip.to_string();
+                }
+            }
+        }
+
+        if let Some(value) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+            let ip = value.trim();
             if !ip.is_empty() && ip.parse::<std::net::IpAddr>().is_ok() {
                 return ip.to_string();
             }
-        }
-    }
-
-    if let Some(value) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        let ip = value.trim();
-        if !ip.is_empty() && ip.parse::<std::net::IpAddr>().is_ok() {
-            return ip.to_string();
         }
     }
 
@@ -131,7 +130,7 @@ pub async fn auth_token(
         return Err(AuthError::MissingCredentials);
     }
 
-    let client_ip = extract_client_ip(&headers);
+    let client_ip = extract_client_ip(&headers, state.config.trust_proxy_headers);
     let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
     let global_rate_key = format!("global:{}", client_ip);
 
@@ -276,7 +275,7 @@ pub async fn admin_token(
         return Err(AuthError::MissingCredentials);
     }
 
-    let client_ip = extract_client_ip(&headers);
+    let client_ip = extract_client_ip(&headers, state.config.trust_proxy_headers);
     let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
     let global_rate_key = format!("global:{}", client_ip);
 
@@ -739,7 +738,7 @@ pub async fn auth_introspect(
     Json(payload): Json<IntrospectTokenRequest>,
 ) -> Json<TokenIntrospectResponse> {
     // Rate-limit per IP: 60 introspect calls per 60 seconds
-    let client_ip = extract_client_ip(&headers);
+    let client_ip = extract_client_ip(&headers, state.config.trust_proxy_headers);
     if !state
         .allow_auth_request(&format!("introspect:{}", client_ip), 60, 60)
         .await
@@ -767,7 +766,6 @@ pub async fn auth_introspect(
         Err(_) => Json(TokenIntrospectResponse::inactive()),
     }
 }
-
 pub async fn auth_jwks(State(state): State<AppState>) -> Json<crate::models::JwksDocument> {
     Json(state.jwt_keys.jwks())
 }
@@ -898,4 +896,38 @@ pub async fn auth_logout(
         "message": "Successfully logged out",
         "sub": claims.sub,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_client_ip_ignores_forwarded_headers_when_untrusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.7".parse().unwrap());
+        headers.insert("x-real-ip", "203.0.113.8".parse().unwrap());
+
+        assert_eq!(extract_client_ip(&headers, false), "unknown");
+    }
+
+    #[test]
+    fn extract_client_ip_uses_forwarded_headers_when_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.7, 198.51.100.42".parse().unwrap(),
+        );
+
+        assert_eq!(extract_client_ip(&headers, true), "203.0.113.7");
+    }
+
+    #[test]
+    fn extract_client_ip_rejects_invalid_forwarded_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
+        headers.insert("x-real-ip", "also-bad".parse().unwrap());
+
+        assert_eq!(extract_client_ip(&headers, true), "unknown");
+    }
 }
