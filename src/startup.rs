@@ -13,6 +13,15 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 
+fn redact_dsn(input: &str) -> String {
+    if let Some((scheme, rest)) = input.split_once("://") {
+        if let Some((_, tail)) = rest.split_once('@') {
+            return format!("{}://***@{}", scheme, tail);
+        }
+    }
+    input.to_string()
+}
+
 fn is_allowed_cors_origin(origin: &HeaderValue) -> bool {
     let Ok(origin_str) = origin.to_str() else {
         return false;
@@ -90,8 +99,9 @@ pub async fn init_app_router_with_db(
 
     if config.is_production() {
         let redis_url = config.redis_url.as_deref().unwrap_or_default();
+        let redis_url_log = redact_dsn(redis_url);
         let redis_client = redis::Client::open(redis_url)
-            .map_err(|e| anyhow::anyhow!("Invalid REDIS_URL '{}': {}", redis_url, e))?;
+            .map_err(|e| anyhow::anyhow!("Invalid REDIS_URL '{}': {}", redis_url_log, e))?;
 
         let mut redis_ready = false;
         let mut last_redis_err: Option<String> = None;
@@ -114,7 +124,7 @@ pub async fn init_app_router_with_db(
             tracing::warn!(
                 "Redis not ready (attempt {}/30, url={}): {}",
                 attempt,
-                redis_url,
+                redis_url_log,
                 last_redis_err.as_deref().unwrap_or("unknown error")
             );
             sleep(Duration::from_secs(1)).await;
@@ -123,7 +133,7 @@ pub async fn init_app_router_with_db(
         if !redis_ready {
             anyhow::bail!(
                 "Redis connection failed after 30 attempts (url={}): {}",
-                redis_url,
+                redis_url_log,
                 last_redis_err.as_deref().unwrap_or("unknown error")
             );
         }
@@ -132,6 +142,7 @@ pub async fn init_app_router_with_db(
     let db = {
         let mut connected: Option<sqlx::PgPool> = None;
         let mut last_db_err: Option<String> = None;
+        let database_url_log = redact_dsn(database_url);
 
         for attempt in 1..=30 {
             match crate::db::init_db_pool(database_url).await {
@@ -144,7 +155,7 @@ pub async fn init_app_router_with_db(
                     tracing::warn!(
                         "Postgres not ready (attempt {}/30, url={}): {}",
                         attempt,
-                        database_url,
+                        database_url_log,
                         last_db_err.as_deref().unwrap_or("unknown error")
                     );
                     sleep(Duration::from_secs(1)).await;
@@ -155,7 +166,7 @@ pub async fn init_app_router_with_db(
         connected.ok_or_else(|| {
             anyhow::anyhow!(
                 "Postgres connection failed after 30 attempts (url={}): {}",
-                database_url,
+                database_url_log,
                 last_db_err.as_deref().unwrap_or("unknown error")
             )
         })?
