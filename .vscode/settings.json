@@ -2,5 +2,11 @@
     "cSpell.words": [
         "flamegraph",
         "psql"
-    ]
+    ],
+    "terminal.integrated.profiles.windows": {
+        "Nushell": {
+            "path": "C:\\Program Files\\nu\\bin\\nu.exe"
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "Nushell"
 }
