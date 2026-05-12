@@ -180,6 +180,53 @@ mod database_tests {
     }
 
     #[tokio::test]
+    async fn test_consume_refresh_token_is_one_time_use() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_consume_refresh_token_is_one_time_use: {}",
+                    msg
+                );
+                return;
+            }
+        };
+
+        let token_id = "test-consume-jti";
+        let client_id = "test-client";
+        let token = "test.consume.jwt.token";
+        let expires_at = chrono::Utc::now().timestamp() + 3600;
+
+        db::create_client(
+            &pool,
+            client_id,
+            "test-secret",
+            "Test Client",
+            Some("Test client"),
+        )
+        .await
+        .expect("Failed to create client");
+
+        db::create_refresh_token(&pool, token_id, client_id, token, expires_at)
+            .await
+            .expect("Failed to create refresh token");
+
+        let consumed = db::consume_refresh_token(&pool, token)
+            .await
+            .expect("Failed to consume refresh token");
+        assert_eq!(
+            consumed,
+            Some((token_id.to_string(), client_id.to_string()))
+        );
+
+        let replay = db::consume_refresh_token(&pool, token)
+            .await
+            .expect("Failed to check consumed refresh token");
+        assert_eq!(replay, None);
+    }
+
+    #[tokio::test]
     async fn test_blacklist_operations() {
         let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {

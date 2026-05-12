@@ -50,13 +50,20 @@ wwIDAQAB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::time::sleep;
+
+    static TEST_PREFIX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn test_config() -> Config {
         Config {
             jwt_private_key_pem: TEST_JWT_PRIVATE_KEY_PEM.to_string(),
             jwt_public_key_pem: TEST_JWT_PUBLIC_KEY_PEM.to_string(),
+            environment: "test".to_string(),
+            redis_url: None,
+            auth_rate_limit_max_requests: 1000,
+            auth_global_rate_limit_max_requests: 10_000,
             ..Default::default()
         }
     }
@@ -69,12 +76,19 @@ mod tests {
     async fn setup_test_server_with_config(mut config: Config) -> TestServer {
         config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
         config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
+        config.environment = "test".to_string();
+        config.redis_url = None;
+        config.redis_key_prefix = format!(
+            "keylo-test-{}-{}",
+            std::process::id(),
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
         let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
             "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
         });
 
         match startup::init_app_router_with_db_and_admin(
-            config,
+            config.clone(),
             &database_url,
             INTEGRATION_ADMIN_CLIENT_ID,
             INTEGRATION_ADMIN_CLIENT_SECRET,
@@ -83,7 +97,7 @@ mod tests {
         {
             Ok(app) => TestServer::new(app),
             Err(_) => {
-                let app = startup::init_app_router_with_config(test_config());
+                let app = startup::init_app_router_with_config(config);
                 TestServer::new(app)
             }
         }
@@ -256,7 +270,7 @@ mod tests {
             auth_rate_limit_max_requests: 3,
             auth_global_rate_limit_max_requests: 100,
             auth_rate_limit_window_seconds: 60,
-            ..Config::default()
+            ..test_config()
         };
         let server = setup_test_server_with_config(config).await;
 
@@ -338,8 +352,14 @@ mod tests {
         let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
             "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
         });
+        let mut config = test_config();
+        config.redis_key_prefix = format!(
+            "keylo-test-{}-rotate-{}",
+            std::process::id(),
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
         let router = match startup::init_app_router_with_db_and_admin(
-            Config::default(),
+            config,
             &database_url,
             &rotate_client_id,
             rotate_client_secret,
@@ -376,6 +396,7 @@ mod tests {
             .await;
         rotate_resp.assert_status_ok();
         let rotate_body: serde_json::Value = rotate_resp.json();
+        assert_eq!(rotate_body["secret_generated"], true);
         let new_secret = rotate_body["new_secret"].as_str().unwrap();
         assert_ne!(new_secret, rotate_client_secret);
 
@@ -404,6 +425,54 @@ mod tests {
             }))
             .await;
         assert_eq!(refresh_resp.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_admin_rotate_client_secret_with_supplied_secret_does_not_echo_secret() {
+        let server = setup_test_server().await;
+        let login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        login_resp.assert_status_ok();
+        let login_body: serde_json::Value = login_resp.json();
+        let access_token = login_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let client_id = format!("managed-rotate-{}", ts);
+        let supplied_secret = format!("ManagedRotate#{}!", ts);
+
+        let create_resp = server
+            .post("/v1/admin/clients")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .json(&json!({
+                "client_id": client_id,
+                "client_secret": "ManagedRotate#Old1",
+                "name": "Managed Rotate Client"
+            }))
+            .await;
+        create_resp.assert_status_ok();
+
+        let rotate_resp = server
+            .post(&format!("/v1/admin/clients/{}/rotate-secret", client_id))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .json(&json!({
+                "new_secret": supplied_secret
+            }))
+            .await;
+        rotate_resp.assert_status_ok();
+        let rotate_body: serde_json::Value = rotate_resp.json();
+        assert_eq!(rotate_body["secret_generated"], false);
+        assert!(rotate_body.get("new_secret").is_none());
     }
 
     #[tokio::test]
@@ -670,6 +739,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_service_rotate_secret_with_supplied_secret_does_not_echo_secret() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let service_id = format!("rotate-service-{}", ts);
+        let supplied_secret = format!("RotateSvc#{}!", ts);
+
+        let create_service_resp = server
+            .post("/v1/admin/services")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "RotateSvc#Old1",
+                "name": "Rotate Service",
+                "allowed_scopes": ["read"],
+                "allowed_audiences": ["admin-backend"]
+            }))
+            .await;
+        create_service_resp.assert_status_ok();
+
+        let rotate_resp = server
+            .post(&format!("/v1/admin/services/{}/rotate-secret", service_id))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "new_secret": supplied_secret
+            }))
+            .await;
+        rotate_resp.assert_status_ok();
+        let rotate_body: serde_json::Value = rotate_resp.json();
+        assert_eq!(rotate_body["secret_generated"], false);
+        assert!(rotate_body.get("new_secret").is_none());
+    }
+
+    #[tokio::test]
     async fn test_untrusted_management_client_cannot_use_user_or_admin_token_flow() {
         let server = setup_test_server().await;
         let admin_login_resp = server
@@ -763,7 +883,7 @@ mod tests {
             super_admin_username: Some("root_bootstrap".to_string()),
             super_admin_email: Some("root_bootstrap@example.com".to_string()),
             super_admin_password: Some("RootBootstrap#123".to_string()),
-            ..Config::default()
+            ..test_config()
         };
 
         let server = setup_test_server_with_config(config).await;
