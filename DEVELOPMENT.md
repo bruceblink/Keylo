@@ -165,6 +165,7 @@ export TEST_DATABASE_URL="postgres://postgres:password@localhost:5432/keylo_test
 ### 5.2 `No active admin client found ...`
 
 - 检查 `.env` 中是否配置了 `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`
+- Keylo 启动时会先加载 `.env` 到 `Config`，再用 `Config.admin_client_id` / `Config.admin_client_secret` 初始化管理客户端
 - 检查 `clients` 表中目标客户端是否 `active=true` 且 `is_admin_client=true`
 
 ### 5.3 migration 校验失败

@@ -85,9 +85,7 @@ pub async fn init_app_router_with_db(
                 "JWT_PRIVATE_KEY_PEM/JWT_PUBLIC_KEY_PEM or corresponding *_PATH values must be set in production"
             );
         }
-        let has_admin_id = std::env::var("ADMIN_CLIENT_ID").ok().is_some();
-        let has_admin_secret = std::env::var("ADMIN_CLIENT_SECRET").ok().is_some();
-        if !has_admin_id || !has_admin_secret {
+        if config.admin_client_id.is_none() || config.admin_client_secret.is_none() {
             anyhow::bail!("ADMIN_CLIENT_ID and ADMIN_CLIENT_SECRET must be set in production");
         }
         if config.redis_url.is_none() {
@@ -179,7 +177,7 @@ pub async fn init_app_router_with_db(
     tracing::info!("Database migrations completed");
 
     // Seed default clients
-    crate::db::seed_default_clients(&db).await?;
+    crate::db::seed_default_clients(&db, &config).await?;
     tracing::info!("Default clients seeded");
 
     // Optional super admin bootstrap
@@ -440,6 +438,20 @@ wwIDAQAB
         config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
         config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
         config
+    }
+
+    #[test]
+    fn config_loads_admin_client_credentials_from_environment() {
+        std::env::set_var("ADMIN_CLIENT_ID", "env-admin-client");
+        std::env::set_var("ADMIN_CLIENT_SECRET", "env-admin-secret");
+
+        let config = Config::from_env();
+
+        assert_eq!(config.admin_client_id.as_deref(), Some("env-admin-client"));
+        assert_eq!(
+            config.admin_client_secret.as_deref(),
+            Some("env-admin-secret")
+        );
     }
 
     #[test]
