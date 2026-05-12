@@ -79,6 +79,7 @@
 - `POST /v1/auth/token`：当前仅返回 `access_token`
 
 即 `POST /v1/auth/refresh` 使用的 `refresh_token`，主要来源于管理客户端登录流程。
+每次刷新会原子消费旧 `refresh_token`，调用方必须保存响应中的新 `refresh_token`，旧值不可重复或并发复用。
 
 ---
 

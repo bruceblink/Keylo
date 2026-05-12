@@ -7,7 +7,7 @@
 1. 密钥治理（移除硬编码开发密钥回退路径）
 2. Token 存储加固（明文改哈希）
 3. RBAC 中间件一致性修复
-4. 密钥轮换接口降敏（不再返回明文 secret）
+4. 密钥轮换接口降敏（显式传入不回显，自动生成时一次性返回）
 5. 权限判断与错误语义收敛
 6. 高风险路径补测与回归
 
@@ -30,7 +30,7 @@
 
 ### P1: 轮换接口降敏
 - 影响文件：`src/handlers/auth.rs`, `src/handlers/service.rs`, `src/models/*`
-- 目标：移除轮换接口中的 `new_secret` 明文返回。
+- 目标：调用方传入 `new_secret` 时不回显明文；服务端自动生成密钥时仅在响应中一次性返回。
 - 验收：响应体与日志不暴露新密钥。
 
 ### P2: 权限判断与错误码收敛
@@ -65,3 +65,10 @@
   - `/api/rbac/*` 权限矩阵
   - `/v1/admin/*/rotate-secret` 响应脱敏验证
 - 发布前：确认 API 响应与日志中无明文 secret/token。
+
+## 已同步的当前策略
+
+- Refresh Token 刷新采用数据库原子消费，旧 refresh token 不能重复或并发复用。
+- `/v1/admin/*/rotate-secret` 在调用方显式传入 `new_secret` 时不回显明文；省略 `new_secret` 时由服务端生成，并在响应中一次性返回。
+- 启动默认 fail-fast；无数据库路由仅限非生产环境显式设置 `ALLOW_IN_MEMORY_FALLBACK=true`。
+- 限流默认使用连接 peer IP；只有 `TRUST_PROXY_HEADERS=true` 时信任 `X-Forwarded-For` / `X-Real-IP`。

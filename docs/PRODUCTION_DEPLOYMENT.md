@@ -27,6 +27,7 @@ DB_POOL_SIZE=20
 ADMIN_CLIENT_ID=cli-admin-root
 ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
 REDIS_URL=redis://redis:6379
+TRUST_PROXY_HEADERS=false
 RUST_LOG=keylo=info,axum=info
 ```
 
@@ -42,8 +43,11 @@ RUST_LOG=keylo=info,axum=info
 - 生产环境禁止使用内置开发密钥。
 - 生产环境要求显式提供管理客户端。
 - **1.1.0 起生产环境 Redis 为强制依赖**：若 Redis 不可用，限流中间件将拒绝请求，服务不会降级为内存限流。
-- `DB_POOL_SIZE` 控制数据库连接池大小，生产环境建议根据并发量设置（默认 5）。
+- `DB_POOL_SIZE` 控制数据库连接池大小，生产环境建议根据并发量设置（默认 5；README 示例表按推荐值写为 10）。
 - 如果数据库初始化失败，服务会直接失败启动，不再回退到内存模式。
+- 非生产环境默认也会在数据库初始化失败时失败启动；只有显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 才允许无数据库路由。
+- 登录和内省限流默认使用连接 peer IP；只有反向代理可信且正确覆盖真实客户端地址时才应设置 `TRUST_PROXY_HEADERS=true`。
+- Refresh Token 刷新会原子消费旧 token，旧 refresh token 不可并发复用。
 - 客户端密钥（`client_secret`）存储为 bcrypt 哈希；从 1.0.x 升级时需重置所有客户端密钥。
 
 ## RSA 密钥要求
@@ -127,4 +131,5 @@ JWT_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
 - 使用内置开发 RSA 密钥
 - 将 JWT 私钥分发给第三方系统
 - 在生产环境使用数据库失败后的内存回退模式
+- 在不可信网络边界直接信任 `X-Forwarded-For` / `X-Real-IP`
 - 跳过管理员客户端配置

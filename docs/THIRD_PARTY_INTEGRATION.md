@@ -41,6 +41,7 @@
 - **Service Access Token**：服务调用内省等接口使用的 `token_type=service_access`
 
 注意：`role` 在当前实现中以数组形式输出，例如 `role: ["admin"]`、`role: ["user"]`。
+Refresh Token 每次刷新都会被原子消费，第三方系统必须用刷新响应中的新 `refresh_token` 替换旧值。
 
 ---
 
@@ -111,6 +112,8 @@
 - `PUT /v1/admin/services/{service_id}`
 - `POST /v1/admin/services/{service_id}/rotate-secret`
 
+密钥轮换接口支持两种模式：请求体提供 `new_secret` 时响应不回显明文；省略 `new_secret` 时由 Keylo 自动生成并在响应中一次性返回 `new_secret`。
+
 ---
 
 ## 6. 最小联调路径
@@ -134,6 +137,7 @@
 - 把管理客户端拿去调用 `/v1/auth/token`
 - 认为前端隐藏按钮等于授权
 - 在生产环境继续使用内置开发密钥
+- 在不可信代理链路上启用 `TRUST_PROXY_HEADERS`
 - 修改已执行 migration 导致部署库校验失败
 - 忽略 `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET` 导致管理客户端未初始化
 

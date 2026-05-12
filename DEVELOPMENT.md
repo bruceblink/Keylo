@@ -59,6 +59,8 @@ curl http://127.0.0.1:2345/readyz
 curl http://127.0.0.1:2345/.well-known/jwks.json
 ```
 
+`/readyz` 默认要求数据库可用。非生产环境只有显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时，数据库缺失才会以 `disabled` 状态通过 readiness；该模式仅用于本地临时调试。
+
 ### 2.2 查看数据库
 
 ```bash
@@ -98,6 +100,10 @@ ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
 TOKEN_EXPIRY_SECONDS=900
 DB_POOL_SIZE=20
 ```
+
+登录、管理 token 和内省接口的限流默认使用连接 peer IP。只有在反向代理可信且正确传递真实客户端地址时，才设置 `TRUST_PROXY_HEADERS=true`。
+
+Refresh Token 刷新会原子消费旧 token；轮换客户端或服务 secret 时，只有省略 `new_secret` 并由服务端生成时，响应才一次性返回明文 `new_secret`。
 
 ### 3.2 新增路由
 

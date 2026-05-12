@@ -43,6 +43,7 @@ REDIS_URL=redis://localhost:6379
 JWT_KEY_ID=keylo-rs256-1
 JWT_PRIVATE_KEY_PATH=./keys/private.pem
 JWT_PUBLIC_KEY_PATH=./keys/public.pem
+ALLOW_IN_MEMORY_FALLBACK=false
 
 # 管理客户端（用于 /v1/admin/token）
 ADMIN_CLIENT_ID=cli-admin-root
@@ -86,6 +87,8 @@ cargo run
 docker compose up -d --build
 docker compose logs -f keylo-service
 ```
+
+Keylo 默认在数据库或密钥初始化失败时直接启动失败。只有本地临时调试且明确接受认证/管理接口不可用时，才设置 `ALLOW_IN_MEMORY_FALLBACK=true`。
 
 ### 1.5 启动后检查
 
@@ -144,6 +147,8 @@ curl -s -X POST http://127.0.0.1:2345/v1/auth/refresh \
   -d '{"refresh_token":"'"${ADMIN_REFRESH_TOKEN}"'"}'
 ```
 
+刷新成功后旧 `ADMIN_REFRESH_TOKEN` 会被原子消费，不能再次使用。请用响应中的新 `refresh_token` 替换本地保存值。
+
 ---
 
 ## 3. 管理客户端的维护方式
@@ -178,6 +183,8 @@ curl -s -X POST http://127.0.0.1:2345/v1/admin/clients/ops-console/rotate-secret
   -H "Content-Type: application/json" \
   -d '{"new_secret":"OpsConsole#456"}'
 ```
+
+如果省略 `new_secret`，Keylo 会生成新密钥并在响应的 `new_secret` 字段中一次性返回；如果请求体提供了 `new_secret`，响应不会回显明文。
 
 ---
 
@@ -364,6 +371,8 @@ curl -s -X POST http://127.0.0.1:2345/v1/admin/services/agileboot-admin/rotate-s
   -H "Content-Type: application/json" \
   -d '{"new_secret":"AgileBootSvc#456"}'
 ```
+
+服务密钥轮换同样遵循一次性返回规则：只有省略 `new_secret` 且由服务端生成时，响应才包含明文 `new_secret`。
 
 ### 7.3 申请服务 Token
 

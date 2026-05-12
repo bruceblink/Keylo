@@ -107,6 +107,7 @@
 - `POST /v1/auth/refresh` 的 `refresh_token` 来源说明：
   - 通过 `POST /v1/admin/token` 获取（该接口会返回 `refresh_token`）
   - `POST /v1/auth/token` 当前仅返回 `access_token`，不返回 `refresh_token`
+- 刷新时旧 `refresh_token` 会被数据库原子消费；并发或重复使用同一个 refresh token 只允许一个请求成功。
 
 ### 3.4 当前用户信息
 
@@ -169,6 +170,12 @@
 | POST | `/v1/admin/clients` | 创建管理客户端 |
 | PUT | `/v1/admin/clients/{client_id}` | 更新管理客户端 |
 | POST | `/v1/admin/clients/{client_id}/rotate-secret` | 轮换管理客户端密钥 |
+
+`POST /v1/admin/clients/{client_id}/rotate-secret`：
+
+- 请求体可选 `new_secret`。传入时服务端只保存 bcrypt hash，响应不会回显明文。
+- 省略 `new_secret` 时服务端会生成新密钥，并在响应的 `new_secret` 字段中一次性返回；调用方必须立即保存。
+- 响应包含 `secret_generated`，用于区分是否由服务端生成。
 
 ---
 
@@ -349,6 +356,17 @@
 | GET | `/v1/admin/services/{service_id}` | 服务详情 |
 | PUT | `/v1/admin/services/{service_id}` | 更新服务 |
 | POST | `/v1/admin/services/{service_id}/rotate-secret` | 轮换服务密钥 |
+
+`POST /v1/admin/services/{service_id}/rotate-secret`：
+
+- 请求体可选 `new_secret`。传入时响应不会回显明文。
+- 省略 `new_secret` 时服务端生成新密钥，并在响应的 `new_secret` 字段中一次性返回。
+- 响应包含 `secret_generated`。
+
+## 8.4 运行时安全约定
+
+- 登录和内省接口按客户端 IP 限流。默认使用 TCP peer IP；只有 `TRUST_PROXY_HEADERS=true` 时才信任 `X-Forwarded-For` / `X-Real-IP`。
+- `/readyz` 默认要求数据库可用；无数据库路由只应在非生产环境显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时使用。
 
 ---
 
