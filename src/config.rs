@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io;
 use std::sync::Once;
 
 static DOTENV_INIT: Once = Once::new();
@@ -26,8 +27,37 @@ fn read_env_or_file(value_key: &str, path_key: &str) -> Option<String> {
 
 pub fn load_dotenv() {
     DOTENV_INIT.call_once(|| {
-        let _ = dotenvy::dotenv();
+        if let Err(err) = dotenvy::dotenv() {
+            match &err {
+                dotenvy::Error::Io(io_err) if io_err.kind() == io::ErrorKind::NotFound => {}
+                _ => panic!("Failed to load .env: {err}"),
+            }
+        }
     });
+}
+
+fn dotenv_value(key: &str) -> Option<String> {
+    let iter = match dotenvy::dotenv_iter() {
+        Ok(iter) => iter,
+        Err(dotenvy::Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => return None,
+        Err(err) => panic!("Failed to read .env: {err}"),
+    };
+
+    for item in iter {
+        let (dotenv_key, value) = item.unwrap_or_else(|err| panic!("Failed to parse .env: {err}"));
+        if dotenv_key == key {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn env_non_empty_or_dotenv(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| dotenv_value(key).filter(|value| !value.trim().is_empty()))
 }
 
 /// 应用配置
@@ -167,12 +197,8 @@ impl Config {
             .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
 
-        let admin_client_id = env::var("ADMIN_CLIENT_ID")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
-        let admin_client_secret = env::var("ADMIN_CLIENT_SECRET")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
+        let admin_client_id = env_non_empty_or_dotenv("ADMIN_CLIENT_ID");
+        let admin_client_secret = env_non_empty_or_dotenv("ADMIN_CLIENT_SECRET");
 
         let redis_url = env::var("REDIS_URL").ok();
         let redis_key_prefix = env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "keylo".into());

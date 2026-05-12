@@ -101,6 +101,8 @@ TOKEN_EXPIRY_SECONDS=900
 DB_POOL_SIZE=20
 ```
 
+`.env` 行内注释必须和配置值之间保留空格，例如 `TOKEN_EXPIRY_SECONDS=900 # 15 minutes`。不要写成 `TOKEN_EXPIRY_SECONDS=900# 15 minutes`，否则 dotenv 解析会失败，后续变量可能不会加载。
+
 登录、管理 token 和内省接口的限流默认使用连接 peer IP。只有在反向代理可信且正确传递真实客户端地址时，才设置 `TRUST_PROXY_HEADERS=true`。
 
 Refresh Token 刷新会原子消费旧 token；轮换客户端或服务 secret 时，只有省略 `new_secret` 并由服务端生成时，响应才一次性返回明文 `new_secret`。
