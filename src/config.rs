@@ -89,6 +89,8 @@ pub struct Config {
     pub log_dir: String,
     /// 日志文件名前缀
     pub log_file_prefix: String,
+    /// Allow non-production startup to fall back to a no-database router.
+    pub allow_in_memory_fallback: bool,
 }
 
 impl Default for Config {
@@ -189,6 +191,10 @@ impl Config {
             .unwrap_or(true);
         let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "./logs".to_string());
         let log_file_prefix = env::var("LOG_FILE_PREFIX").unwrap_or_else(|_| "keylo".to_string());
+        let allow_in_memory_fallback = env::var("ALLOW_IN_MEMORY_FALLBACK")
+            .ok()
+            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
 
         Self {
             jwt_issuer,
@@ -219,6 +225,7 @@ impl Config {
             log_to_file,
             log_dir,
             log_file_prefix,
+            allow_in_memory_fallback,
         }
     }
 

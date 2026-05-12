@@ -457,6 +457,22 @@ pub async fn validate_refresh_token(
     Ok(row.map(|r| (r.get("id"), r.get("client_id"))))
 }
 
+/// Atomically validate and revoke a refresh token before issuing a replacement.
+pub async fn consume_refresh_token(pool: &PgPool, token: &str) -> Result<Option<(String, String)>> {
+    let token_hash = token_hash(token);
+    let row = sqlx::query(
+        "UPDATE refresh_tokens
+         SET revoked = TRUE, revoked_at = NOW()
+         WHERE token_hash = $1 AND expires_at > NOW() AND revoked = FALSE
+         RETURNING id, client_id",
+    )
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| (r.get("id"), r.get("client_id"))))
+}
+
 /// 撤销 Refresh Token
 pub async fn revoke_refresh_token(pool: &PgPool, token_id: &str) -> Result<()> {
     sqlx::query("UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE id = $1")

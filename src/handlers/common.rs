@@ -28,7 +28,7 @@ pub async fn healthz() -> Json<Value> {
 
 pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let mut checks = json!({
-        "database": "disabled",
+        "database": if state.config.allow_in_memory_fallback { "disabled" } else { "missing" },
         "redis": "disabled"
     });
 
@@ -50,6 +50,18 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                 );
             }
         }
+    }
+
+    if state.db.is_none() && !state.config.allow_in_memory_fallback {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "error",
+                "service": "keylo",
+                "checks": checks,
+                "error": "database not configured"
+            })),
+        );
     }
 
     if state.config.redis_url.is_some() {

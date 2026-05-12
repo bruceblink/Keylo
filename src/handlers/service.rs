@@ -213,8 +213,13 @@ pub async fn rotate_service_secret(
 ) -> Result<Json<Value>, AuthError> {
     let db = require_db(&state)?;
 
-    let new_secret = payload
+    let provided_secret = payload
         .new_secret
+        .as_deref()
+        .filter(|secret| !secret.trim().is_empty());
+    let generated_secret = provided_secret.is_none();
+    let new_secret = provided_secret
+        .map(str::to_string)
         .unwrap_or_else(svc_db::generate_service_secret);
 
     let rotated = svc_db::rotate_service_secret(db, &service_id, &new_secret)
@@ -227,10 +232,16 @@ pub async fn rotate_service_secret(
 
     audit_service_event(&state, "service.secret.rotated", Some(&service_id), None).await;
 
-    Ok(Json(json!({
+    let mut response = json!({
         "service_id": service_id,
-        "message": "Service secret rotated successfully"
-    })))
+        "message": "Service secret rotated successfully",
+        "secret_generated": generated_secret
+    });
+    if generated_secret {
+        response["new_secret"] = json!(new_secret);
+    }
+
+    Ok(Json(response))
 }
 
 /// GET /v1/admin/services/{service_id}

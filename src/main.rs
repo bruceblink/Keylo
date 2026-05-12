@@ -121,12 +121,9 @@ async fn main() -> Result<(), anyhow::Error> {
             app
         }
         Err(e) => {
-            if config.is_production() {
-                tracing::error!("Failed to initialize Keylo in production: {}", e);
-                return Err(anyhow::anyhow!(
-                    "Failed to initialize Keylo in production: {}",
-                    e
-                ));
+            if config.is_production() || !config.allow_in_memory_fallback {
+                tracing::error!("Failed to initialize Keylo: {}", e);
+                return Err(anyhow::anyhow!("Failed to initialize Keylo: {}", e));
             }
 
             tracing::warn!(
@@ -152,7 +149,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     tracing::info!("🚀 Server listening on {}", addr);
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| anyhow::anyhow!("Server error: {}", e))
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("Server error: {}", e))
 }

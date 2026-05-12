@@ -486,6 +486,43 @@ wwIDAQAB
     }
 
     #[tokio::test]
+    async fn readiness_fails_without_database_unless_fallback_is_explicit() {
+        let app = init_app_router_with_config(test_config());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn readiness_allows_disabled_database_when_fallback_is_explicit() {
+        let mut config = test_config();
+        config.allow_in_memory_fallback = true;
+        config.redis_url = None;
+        let app = init_app_router_with_config(config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn the_real_deal() {
         let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();

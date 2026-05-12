@@ -7,7 +7,7 @@ use crate::models::{
 };
 use crate::state::AppState;
 use crate::utils;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use axum_extra::headers::authorization::Bearer;
@@ -15,14 +15,35 @@ use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
 use bcrypt::verify;
 use chrono::Utc;
+use http::request::Parts;
 use serde_json::json;
 use std::collections::HashMap;
+use std::convert::Infallible;
+use std::net::{IpAddr, SocketAddr};
 
 fn access_scope(_subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
     if is_admin_client {
         vec!["read".into(), "write".into(), "admin".into()]
     } else {
         vec!["read".into(), "write".into()]
+    }
+}
+
+pub struct PeerAddr(Option<SocketAddr>);
+
+impl<S> axum::extract::FromRequestParts<S> for PeerAddr
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ConnectInfo(addr)| *addr),
+        ))
     }
 }
 
@@ -98,7 +119,11 @@ fn audit_event_background(
     });
 }
 
-fn extract_client_ip(headers: &HeaderMap, trust_proxy_headers: bool) -> String {
+fn extract_client_ip(
+    headers: &HeaderMap,
+    peer_addr: Option<SocketAddr>,
+    trust_proxy_headers: bool,
+) -> String {
     if trust_proxy_headers {
         if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
             if let Some(first) = value.split(',').next() {
@@ -117,11 +142,24 @@ fn extract_client_ip(headers: &HeaderMap, trust_proxy_headers: bool) -> String {
         }
     }
 
-    "unknown".to_string()
+    peer_addr
+        .map(|addr| normalize_ip(addr.ip()).to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(value) => value
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(value)),
+        IpAddr::V4(value) => IpAddr::V4(value),
+    }
 }
 
 pub async fn auth_token(
     State(state): State<AppState>,
+    PeerAddr(peer_addr): PeerAddr,
     headers: HeaderMap,
     Json(payload): Json<AuthPayload>,
 ) -> Result<Json<AuthBody>, AuthError> {
@@ -130,7 +168,7 @@ pub async fn auth_token(
         return Err(AuthError::MissingCredentials);
     }
 
-    let client_ip = extract_client_ip(&headers, state.config.trust_proxy_headers);
+    let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
     let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
     let global_rate_key = format!("global:{}", client_ip);
 
@@ -269,6 +307,7 @@ pub async fn auth_token(
 
 pub async fn admin_token(
     State(state): State<AppState>,
+    PeerAddr(peer_addr): PeerAddr,
     headers: HeaderMap,
     Json(payload): Json<AuthPayload>,
 ) -> Result<Json<AuthBody>, AuthError> {
@@ -276,7 +315,7 @@ pub async fn admin_token(
         return Err(AuthError::MissingCredentials);
     }
 
-    let client_ip = extract_client_ip(&headers, state.config.trust_proxy_headers);
+    let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
     let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
     let global_rate_key = format!("global:{}", client_ip);
 
@@ -549,9 +588,13 @@ pub async fn auth_rotate_client_secret(
         .as_deref()
         .ok_or_else(|| db_error("Database not available"))?;
 
-    let new_secret = payload
+    let provided_secret = payload
         .new_secret
-        .filter(|secret| !secret.trim().is_empty())
+        .as_deref()
+        .filter(|secret| !secret.trim().is_empty());
+    let generated_secret = provided_secret.is_none();
+    let new_secret = provided_secret
+        .map(str::to_string)
         .unwrap_or_else(|| format!("rot_{}", utils::generate_jti()));
 
     let updated = crate::db::rotate_client_secret(db, &client_id, &new_secret)
@@ -582,11 +625,17 @@ pub async fn auth_rotate_client_secret(
     )
     .await;
 
-    Ok(Json(json!({
+    let mut response = json!({
         "success": true,
         "client_id": client_id,
         "revoke_refresh_tokens": revoke_refresh_tokens,
-    })))
+        "secret_generated": generated_secret,
+    });
+    if generated_secret {
+        response["new_secret"] = json!(new_secret);
+    }
+
+    Ok(Json(response))
 }
 
 pub async fn auth_list_clients(
@@ -735,11 +784,12 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
 
 pub async fn auth_introspect(
     State(state): State<AppState>,
+    PeerAddr(peer_addr): PeerAddr,
     headers: HeaderMap,
     Json(payload): Json<IntrospectTokenRequest>,
 ) -> Json<TokenIntrospectResponse> {
     // Rate-limit per IP: 60 introspect calls per 60 seconds
-    let client_ip = extract_client_ip(&headers, state.config.trust_proxy_headers);
+    let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
     if !state
         .allow_auth_request(&format!("introspect:{}", client_ip), 60, 60)
         .await
@@ -785,9 +835,9 @@ pub async fn auth_refresh(
     }
 
     // Check if refresh token exists and is not revoked
-    let (token_id, client_id) = if let Some(db) = &state.db {
-        match crate::db::validate_refresh_token(db, &payload.refresh_token).await {
-            Ok(Some((id, client_id))) => (id, client_id),
+    let client_id = if let Some(db) = &state.db {
+        match crate::db::consume_refresh_token(db, &payload.refresh_token).await {
+            Ok(Some((_id, client_id))) => client_id,
             _ => return Err(AuthError::InvalidToken),
         }
     } else {
@@ -843,13 +893,6 @@ pub async fn auth_refresh(
     let access_token = state.jwt_keys.sign_token(&access_claims)?;
 
     let new_refresh_token = state.jwt_keys.sign_token(&new_refresh_claims)?;
-
-    // Revoke old refresh token
-    if let Some(db) = &state.db {
-        crate::db::revoke_refresh_token(db, &token_id)
-            .await
-            .map_err(|_| AuthError::DatabaseError("Failed to revoke refresh token".to_string()))?;
-    }
 
     // Store new refresh token
     if let Some(db) = &state.db {
@@ -909,7 +952,14 @@ mod tests {
         headers.insert("x-forwarded-for", "203.0.113.7".parse().unwrap());
         headers.insert("x-real-ip", "203.0.113.8".parse().unwrap());
 
-        assert_eq!(extract_client_ip(&headers, false), "unknown");
+        assert_eq!(
+            extract_client_ip(
+                &headers,
+                Some(SocketAddr::from(([192, 0, 2, 10], 3000))),
+                false
+            ),
+            "192.0.2.10"
+        );
     }
 
     #[test]
@@ -920,7 +970,7 @@ mod tests {
             "203.0.113.7, 198.51.100.42".parse().unwrap(),
         );
 
-        assert_eq!(extract_client_ip(&headers, true), "203.0.113.7");
+        assert_eq!(extract_client_ip(&headers, None, true), "203.0.113.7");
     }
 
     #[test]
@@ -929,6 +979,21 @@ mod tests {
         headers.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
         headers.insert("x-real-ip", "also-bad".parse().unwrap());
 
-        assert_eq!(extract_client_ip(&headers, true), "unknown");
+        assert_eq!(
+            extract_client_ip(
+                &headers,
+                Some(SocketAddr::from(([192, 0, 2, 10], 3000))),
+                true
+            ),
+            "192.0.2.10"
+        );
+    }
+
+    #[test]
+    fn extract_client_ip_normalizes_ipv4_mapped_peer_addr() {
+        let headers = HeaderMap::new();
+        let peer = SocketAddr::new("::ffff:192.0.2.44".parse().unwrap(), 3000);
+
+        assert_eq!(extract_client_ip(&headers, Some(peer), false), "192.0.2.44");
     }
 }
