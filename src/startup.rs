@@ -47,6 +47,7 @@ pub fn init_app_router() -> Router {
         .expect("Default Config must always produce valid JWT keys");
     Router::new()
         .merge(routes::auth::public_router())
+        .merge(routes::service::service_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/", get(index))
@@ -60,6 +61,7 @@ pub fn init_app_router_with_config(config: Config) -> Router {
         .expect("Failed to initialize AppState: invalid JWT key configuration");
     Router::new()
         .merge(routes::auth::public_router())
+        .merge(routes::service::service_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes())
@@ -532,6 +534,27 @@ wwIDAQAB
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn in_memory_router_includes_service_token_route() {
+        let app = init_app_router_with_config(test_config());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/service/token")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"service_id":"","service_secret":"","audience":"admin-backend","scope":"read"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
