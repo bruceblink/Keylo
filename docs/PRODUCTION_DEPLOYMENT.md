@@ -22,7 +22,9 @@ JWT_ISSUER=keylo
 JWT_KEY_ID=keylo-rs256-1
 JWT_PRIVATE_KEY_PATH=/app/keys/private.pem
 JWT_PUBLIC_KEY_PATH=/app/keys/public.pem
-DATABASE_URL=postgres://keylo_user:keylo_password@postgres:5432/keylo
+DATABASE_URL=postgres://keylo_user@postgres:5432/keylo
+DATABASE_PASSWORD_ENC_FILE=/run/secrets/postgres_password_enc
+DATABASE_PASSWORD_KEY_FILE=/run/secrets/database_password_key
 DB_POOL_SIZE=20
 ADMIN_CLIENT_ID=cli-admin-root
 ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
@@ -34,6 +36,8 @@ RUST_LOG=keylo=info,axum=info
 如果使用仓库内的 [docker-compose.yml](docker-compose.yml)，还需要保证：
 
 - 宿主机存在 RSA 密钥目录，并通过 `${JWT_KEYS_DIR:-./keys}` 挂载到容器 `/app/keys`
+- 宿主机存在 PostgreSQL 初始化明文密码文件 `${POSTGRES_PASSWORD_FILE:-./secrets/postgres_password}`，该文件只提供给 PostgreSQL 初始化
+- 宿主机存在 Keylo 运行期数据库密文 `${DATABASE_PASSWORD_ENC_FILE:-./secrets/postgres_password.enc}` 和解密密钥 `${DATABASE_PASSWORD_KEY_FILE:-./secrets/database_password.key}`，Keylo 不读取明文数据库密码文件
 - `SERVER_ADDR` 使用 `0.0.0.0`，避免容器内只监听回环地址
 - 不要删除 `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`，否则启动会直接失败
 - 如需重装数据库，执行 `docker compose down -v --remove-orphans` 删除 PostgreSQL 数据卷后再重建
@@ -103,6 +107,38 @@ JWT_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
 4. `/v1/auth/introspect` 与 `/v1/service/introspect` 可正常工作。
 5. 管理员客户端已配置，并可获取带 `admin` scope 的 token。
 6. 第三方系统已切换到 RS256 + JWKS 或内省模式，不再依赖共享密钥。
+
+## 数据库密码密文化流程
+
+Docker Compose 首次初始化 PostgreSQL 时，PostgreSQL 仍需要读取一次明文密码文件。Keylo 不应读取该明文文件；Keylo 运行期只读取数据库密码密文和解密密钥。
+
+推荐在宿主机准备以下文件：
+
+```bash
+mkdir -p /opt/keylo/secrets
+openssl rand -base64 32 > /opt/keylo/secrets/postgres_password
+openssl rand -base64 32 > /opt/keylo/secrets/database_password.key
+
+DATABASE_PASSWORD_FILE=/opt/keylo/secrets/postgres_password \
+DATABASE_PASSWORD_KEY_FILE=/opt/keylo/secrets/database_password.key \
+  cargo run --quiet --bin keylo-encrypt-db-password \
+  > /opt/keylo/secrets/postgres_password.enc
+
+chmod 600 /opt/keylo/secrets/postgres_password \
+  /opt/keylo/secrets/postgres_password.enc \
+  /opt/keylo/secrets/database_password.key
+```
+
+随后启动 Compose 时指定 secret 文件位置：
+
+```bash
+POSTGRES_PASSWORD_FILE=/opt/keylo/secrets/postgres_password \
+DATABASE_PASSWORD_ENC_FILE=/opt/keylo/secrets/postgres_password.enc \
+DATABASE_PASSWORD_KEY_FILE=/opt/keylo/secrets/database_password.key \
+  docker compose up -d --build
+```
+
+生产环境中不要配置 `DATABASE_PASSWORD`、`DATABASE_PASSWORD_FILE`，也不要把密码写入 `DATABASE_URL`。这些情况会触发 Keylo 启动校验失败。
 
 ## 推荐上线流程
 

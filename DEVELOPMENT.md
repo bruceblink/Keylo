@@ -29,6 +29,12 @@ openssl rsa -pubout -in keys/private.pem -out keys/public.pem
 ### 1.2 启动依赖
 
 ```bash
+mkdir -p secrets
+openssl rand -base64 32 > secrets/postgres_password
+openssl rand -base64 32 > secrets/database_password.key
+DATABASE_PASSWORD_FILE=./secrets/postgres_password \
+DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key \
+  cargo run --quiet --bin keylo-encrypt-db-password > secrets/postgres_password.enc
 docker compose up -d postgres redis
 docker compose ps
 ```
@@ -93,7 +99,9 @@ RUST_LOG=keylo=debug,sqlx=warn cargo run
 常用配置：
 
 ```env
-DATABASE_URL=postgres://keylo_user:keylo_password@localhost:5432/keylo
+DATABASE_URL=postgres://keylo_user@localhost:5432/keylo
+DATABASE_PASSWORD_ENC_FILE=./secrets/postgres_password.enc
+DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key
 REDIS_URL=redis://localhost:6379
 ADMIN_CLIENT_ID=cli-admin-root
 ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
@@ -152,7 +160,9 @@ cargo test --test integration_test -- --nocapture
 如需指定测试数据库：
 
 ```bash
-export TEST_DATABASE_URL="postgres://postgres:password@localhost:5432/keylo_test"
+export TEST_DATABASE_URL="postgres://postgres@localhost:5432/keylo_test"
+export DATABASE_PASSWORD_ENC_FILE="./secrets/postgres_password.enc"
+export DATABASE_PASSWORD_KEY_FILE="./secrets/database_password.key"
 ```
 
 ---

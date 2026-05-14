@@ -38,7 +38,9 @@ Copy-Item .env.example .env
 确保以下关键配置可用（示例）：
 
 ```env
-DATABASE_URL=postgres://keylo_user:keylo_password@localhost:5432/keylo
+DATABASE_URL=postgres://keylo_user@localhost:5432/keylo
+DATABASE_PASSWORD_ENC_FILE=./secrets/postgres_password.enc
+DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key
 REDIS_URL=redis://localhost:6379
 JWT_KEY_ID=keylo-rs256-1
 JWT_PRIVATE_KEY_PATH=./keys/private.pem
@@ -70,6 +72,12 @@ chmod 644 keys/public.pem
 ### 1.3 启动依赖
 
 ```bash
+mkdir -p secrets
+openssl rand -base64 32 > secrets/postgres_password
+openssl rand -base64 32 > secrets/database_password.key
+DATABASE_PASSWORD_FILE=./secrets/postgres_password \
+DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key \
+  cargo run --quiet --bin keylo-encrypt-db-password > secrets/postgres_password.enc
 docker compose up -d postgres redis
 ```
 
