@@ -3,7 +3,7 @@
 //! Run with:
 //! ```not_rust
 //! JWT_PRIVATE_KEY_PATH=./keys/private.pem JWT_PUBLIC_KEY_PATH=./keys/public.pem cargo run
-//! DATABASE_URL=postgres://user:password@localhost/keylo cargo run
+//! DATABASE_URL=postgres://user@localhost/keylo DATABASE_PASSWORD_ENC_FILE=./secrets/postgres_password.enc DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key cargo run
 //! ```
 //!
 //! Quick instructions:

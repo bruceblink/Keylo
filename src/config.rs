@@ -1,7 +1,12 @@
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use std::env;
 use std::fs;
 use std::io;
 use std::sync::Once;
+use urlencoding::encode;
 
 static DOTENV_INIT: Once = Once::new();
 
@@ -58,6 +63,115 @@ fn env_non_empty_or_dotenv(key: &str) -> Option<String> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| dotenv_value(key).filter(|value| !value.trim().is_empty()))
+}
+
+pub fn build_database_url(base_url: String, password: Option<String>) -> String {
+    let Some(password) = password else {
+        return base_url;
+    };
+
+    let password = password.trim();
+    if password.is_empty() {
+        return base_url;
+    }
+
+    let Some((scheme, rest)) = base_url.split_once("://") else {
+        return base_url;
+    };
+    let Some((userinfo, host_and_path)) = rest.split_once('@') else {
+        return base_url;
+    };
+    if userinfo.contains(':') {
+        return base_url;
+    }
+
+    format!(
+        "{}://{}:{}@{}",
+        scheme,
+        userinfo,
+        encode(password),
+        host_and_path
+    )
+}
+
+pub fn database_password_from_env_result() -> Result<Option<String>, String> {
+    let encrypted_password =
+        read_env_or_file("DATABASE_PASSWORD_ENC", "DATABASE_PASSWORD_ENC_FILE");
+    if let Some(encrypted_password) = encrypted_password {
+        let key = read_env_or_file("DATABASE_PASSWORD_KEY", "DATABASE_PASSWORD_KEY_FILE")
+            .ok_or_else(|| {
+                "DATABASE_PASSWORD_KEY or DATABASE_PASSWORD_KEY_FILE must be set when using encrypted database password"
+                    .to_string()
+            })?;
+        return decrypt_database_password(&encrypted_password, &key).map(Some);
+    }
+
+    Ok(read_env_or_file(
+        "DATABASE_PASSWORD",
+        "DATABASE_PASSWORD_FILE",
+    ))
+}
+
+pub fn database_password_source_is_plaintext() -> bool {
+    env_value_is_non_empty("DATABASE_PASSWORD") || env_value_is_non_empty("DATABASE_PASSWORD_FILE")
+}
+
+pub fn database_password_source_is_encrypted() -> bool {
+    env_value_is_non_empty("DATABASE_PASSWORD_ENC")
+        || env_value_is_non_empty("DATABASE_PASSWORD_ENC_FILE")
+}
+
+pub fn configured_database_url_contains_password() -> bool {
+    env::var("DATABASE_URL")
+        .ok()
+        .is_some_and(|url| database_url_contains_password(&url))
+}
+
+pub fn decrypt_database_password(encrypted: &str, key: &str) -> Result<String, String> {
+    let encrypted = encrypted.trim();
+    let parts = encrypted.split(':').collect::<Vec<_>>();
+    if parts.len() != 4 || parts[0] != "keylo" || parts[1] != "v1" {
+        return Err(
+            "DATABASE_PASSWORD_ENC must use format keylo:v1:<nonce_base64>:<ciphertext_base64>"
+                .to_string(),
+        );
+    }
+
+    let nonce = BASE64
+        .decode(parts[2])
+        .map_err(|err| format!("Invalid DATABASE_PASSWORD_ENC nonce: {err}"))?;
+    if nonce.len() != 12 {
+        return Err("DATABASE_PASSWORD_ENC nonce must decode to 12 bytes".to_string());
+    }
+
+    let ciphertext = BASE64
+        .decode(parts[3])
+        .map_err(|err| format!("Invalid DATABASE_PASSWORD_ENC ciphertext: {err}"))?;
+    let key = decode_database_password_key(key)?;
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|_| "DATABASE_PASSWORD_KEY must decode to 32 bytes".to_string())?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| "Failed to decrypt DATABASE_PASSWORD_ENC".to_string())?;
+
+    String::from_utf8(plaintext)
+        .map_err(|_| "DATABASE_PASSWORD_ENC decrypted to non-UTF-8 data".to_string())
+}
+
+fn decode_database_password_key(key: &str) -> Result<Vec<u8>, String> {
+    let key = key.trim();
+    if let Ok(decoded) = BASE64.decode(key) {
+        if decoded.len() == 32 {
+            return Ok(decoded);
+        }
+    }
+
+    let raw = key.as_bytes().to_vec();
+    if raw.len() == 32 {
+        return Ok(raw);
+    }
+
+    Err("DATABASE_PASSWORD_KEY must be 32 bytes or base64-encoded 32 bytes".to_string())
 }
 
 /// 应用配置
@@ -289,6 +403,25 @@ impl Config {
             );
         }
 
+        if self.is_production() {
+            if database_password_source_is_plaintext() {
+                errors.push(
+                    "DATABASE_PASSWORD/DATABASE_PASSWORD_FILE cannot be used in production; use DATABASE_PASSWORD_ENC or DATABASE_PASSWORD_ENC_FILE"
+                        .to_string(),
+                );
+            }
+
+            if configured_database_url_contains_password()
+                || (!database_password_source_is_encrypted()
+                    && database_url_contains_password(&self.database_url))
+            {
+                errors.push(
+                    "DATABASE_URL must not contain a plaintext password in production; use DATABASE_PASSWORD_ENC or DATABASE_PASSWORD_ENC_FILE"
+                        .to_string(),
+                );
+            }
+        }
+
         if self.is_production() && option_is_blank(self.redis_url.as_deref()) {
             errors.push("REDIS_URL must be set in production".to_string());
         }
@@ -414,6 +547,23 @@ impl Config {
     }
 }
 
+fn database_url_contains_password(database_url: &str) -> bool {
+    let Some((_, rest)) = database_url.split_once("://") else {
+        return false;
+    };
+    let Some((userinfo, _)) = rest.split_once('@') else {
+        return false;
+    };
+    userinfo.contains(':')
+}
+
+fn env_value_is_non_empty(key: &str) -> bool {
+    env::var(key)
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+        || dotenv_value(key).is_some_and(|value| !value.trim().is_empty())
+}
+
 fn require_non_empty(errors: &mut Vec<String>, name: &str, value: &str) {
     if value.trim().is_empty() {
         errors.push(format!("{name} must not be empty"));
@@ -452,7 +602,7 @@ mod tests {
             jwt_private_key_pem: "private-key".to_string(),
             jwt_public_key_pem: "public-key".to_string(),
             jwt_using_default_dev_keys: false,
-            database_url: "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string(),
+            database_url: "postgres://keylo_user@localhost:5432/keylo".to_string(),
             server_addr: "127.0.0.1".to_string(),
             server_port: 2345,
             environment: "development".to_string(),
@@ -479,6 +629,89 @@ mod tests {
             log_file_prefix: "keylo".to_string(),
             allow_in_memory_fallback: false,
         }
+    }
+
+    #[test]
+    fn database_password_file_can_complete_passwordless_url() {
+        let url = build_database_url(
+            "postgres://keylo_user@postgres:5432/keylo".to_string(),
+            Some("<encoded-secret>".to_string()),
+        );
+
+        assert!(url.starts_with("postgres://keylo_user:"));
+        assert!(url.contains("%3Cencoded-secret%3E"));
+        assert!(url.ends_with("@postgres:5432/keylo"));
+    }
+
+    #[test]
+    fn explicit_database_url_password_is_preserved() {
+        let url_with_password = format!(
+            "{}{}{}",
+            "postgres://keylo_user:", "<existing-secret>", "@postgres:5432/keylo"
+        );
+        let url = build_database_url(url_with_password.clone(), Some("ignored".to_string()));
+
+        assert_eq!(url, url_with_password);
+    }
+
+    #[test]
+    fn encrypted_database_password_can_be_decrypted() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let nonce = b"123456789012";
+        let cipher = Aes256Gcm::new_from_slice(key.as_bytes()).unwrap();
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(nonce), b"db-secret".as_ref())
+            .unwrap();
+        let encrypted = format!(
+            "keylo:v1:{}:{}",
+            BASE64.encode(nonce),
+            BASE64.encode(ciphertext)
+        );
+
+        let password = decrypt_database_password(&encrypted, key).unwrap();
+
+        assert_eq!(password, "db-secret");
+    }
+
+    #[test]
+    fn production_database_startup_rejects_plaintext_password_source() {
+        std::env::set_var("DATABASE_PASSWORD", "plain-secret");
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.redis_url = Some("redis://localhost:6379".to_string());
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        std::env::remove_var("DATABASE_PASSWORD");
+        assert!(err.contains("DATABASE_PASSWORD/DATABASE_PASSWORD_FILE cannot be used"));
+    }
+
+    #[test]
+    fn production_database_startup_rejects_plaintext_password_file_config() {
+        std::env::set_var("DATABASE_PASSWORD_FILE", "./secrets/postgres_password");
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.redis_url = Some("redis://localhost:6379".to_string());
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        std::env::remove_var("DATABASE_PASSWORD_FILE");
+        assert!(err.contains("DATABASE_PASSWORD/DATABASE_PASSWORD_FILE cannot be used"));
+    }
+
+    #[test]
+    fn production_database_startup_rejects_password_in_database_url() {
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.redis_url = Some("redis://localhost:6379".to_string());
+        config.database_url = format!(
+            "{}{}{}",
+            "postgres://keylo_user:", "<plain-secret>", "@localhost:5432/keylo"
+        );
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        assert!(err.contains("DATABASE_URL must not contain a plaintext password"));
     }
 
     #[test]

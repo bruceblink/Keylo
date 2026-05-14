@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{build_database_url, database_password_from_env_result, Config};
 use crate::handlers::{healthz, index, protected, readyz};
 use crate::middleware::auth;
 use crate::routes;
@@ -75,8 +75,12 @@ pub async fn init_app_router_with_db(
     config: Config,
     database_url: &str,
 ) -> Result<Router, anyhow::Error> {
+    let database_url = build_database_url(
+        database_url.to_string(),
+        database_password_from_env_result().map_err(anyhow::Error::msg)?,
+    );
     let mut startup_config = config.clone();
-    startup_config.database_url = database_url.to_string();
+    startup_config.database_url = database_url.clone();
     startup_config
         .validate_for_database_startup()
         .map_err(anyhow::Error::msg)?;
@@ -138,10 +142,10 @@ pub async fn init_app_router_with_db(
     let db = {
         let mut connected: Option<sqlx::PgPool> = None;
         let mut last_db_err: Option<String> = None;
-        let database_url_log = redact_dsn(database_url);
+        let database_url_log = redact_dsn(&database_url);
 
         for attempt in 1..=30 {
-            match crate::db::init_db_pool(database_url).await {
+            match crate::db::init_db_pool(&database_url).await {
                 Ok(pool) => {
                     connected = Some(pool);
                     break;
@@ -297,7 +301,11 @@ pub async fn init_app_router_with_db_and_admin(
 ) -> Result<Router, anyhow::Error> {
     validate_test_database_startup_config(&config)?;
 
-    let db = crate::db::init_db_pool(database_url).await?;
+    let database_url = build_database_url(
+        database_url.to_string(),
+        database_password_from_env_result().map_err(anyhow::Error::msg)?,
+    );
+    let db = crate::db::init_db_pool(&database_url).await?;
     crate::db::run_migrations(&db).await?;
     crate::db::seed_default_clients_with_admin(
         &db,
@@ -384,8 +392,7 @@ fn validate_test_database_startup_config(config: &Config) -> Result<(), anyhow::
     validation_config.admin_client_id = Some("test-admin-client".to_string());
     validation_config.admin_client_secret = Some("test-admin-secret".to_string());
     if validation_config.database_url.trim().is_empty() {
-        validation_config.database_url =
-            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string();
+        validation_config.database_url = "postgres://keylo_user@localhost:5432/keylo".to_string();
     }
     validation_config
         .validate_for_database_startup()
