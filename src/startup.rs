@@ -75,23 +75,17 @@ pub async fn init_app_router_with_db(
     config: Config,
     database_url: &str,
 ) -> Result<Router, anyhow::Error> {
-    if config.jwt_private_key_pem.trim().is_empty() || config.jwt_public_key_pem.trim().is_empty() {
-        anyhow::bail!(
-            "JWT_PRIVATE_KEY_PEM/JWT_PUBLIC_KEY_PEM or corresponding *_PATH values must be set"
-        );
-    }
+    let mut startup_config = config.clone();
+    startup_config.database_url = database_url.to_string();
+    startup_config
+        .validate_for_database_startup()
+        .map_err(anyhow::Error::msg)?;
 
     if config.is_production() {
         if config.jwt_using_default_dev_keys {
             anyhow::bail!(
                 "JWT_PRIVATE_KEY_PEM/JWT_PUBLIC_KEY_PEM or corresponding *_PATH values must be set in production"
             );
-        }
-        if config.admin_client_id.is_none() || config.admin_client_secret.is_none() {
-            anyhow::bail!("ADMIN_CLIENT_ID and ADMIN_CLIENT_SECRET must be set in production");
-        }
-        if config.redis_url.is_none() {
-            anyhow::bail!("REDIS_URL must be set in production");
         }
     } else if config.jwt_using_default_dev_keys {
         tracing::warn!("⚠️  SECURITY WARNING: Using hardcoded development JWT keys. \
@@ -301,6 +295,8 @@ pub async fn init_app_router_with_db_and_admin(
     admin_client_id: &str,
     admin_client_secret: &str,
 ) -> Result<Router, anyhow::Error> {
+    validate_test_database_startup_config(&config)?;
+
     let db = crate::db::init_db_pool(database_url).await?;
     crate::db::run_migrations(&db).await?;
     crate::db::seed_default_clients_with_admin(
@@ -381,6 +377,19 @@ pub async fn init_app_router_with_db_and_admin(
         .merge(service_protected_routes)
         .merge(protected_routes)
         .with_state(app_state))
+}
+
+fn validate_test_database_startup_config(config: &Config) -> Result<(), anyhow::Error> {
+    let mut validation_config = config.clone();
+    validation_config.admin_client_id = Some("test-admin-client".to_string());
+    validation_config.admin_client_secret = Some("test-admin-secret".to_string());
+    if validation_config.database_url.trim().is_empty() {
+        validation_config.database_url =
+            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string();
+    }
+    validation_config
+        .validate_for_database_startup()
+        .map_err(anyhow::Error::msg)
 }
 
 #[cfg(test)]

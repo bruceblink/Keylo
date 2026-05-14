@@ -113,6 +113,16 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("Environment: {}", config.environment);
     tracing::info!("Server: {}", config.server_url());
 
+    if config.allow_in_memory_fallback {
+        config
+            .validate_for_in_memory_startup()
+            .map_err(anyhow::Error::msg)?;
+    } else {
+        config
+            .validate_for_database_startup()
+            .map_err(anyhow::Error::msg)?;
+    }
+
     // Try to initialize the app with database. In development we can fall back to in-memory mode,
     // but production must fail fast if startup requirements are not satisfied.
     let app = match startup::init_app_router_with_db(config.clone(), &config.database_url).await {

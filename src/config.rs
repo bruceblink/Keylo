@@ -145,8 +145,7 @@ impl Config {
             read_env_or_file("JWT_PUBLIC_KEY_PEM", "JWT_PUBLIC_KEY_PATH").unwrap_or_default();
         let jwt_using_default_dev_keys = false;
 
-        let database_url = env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://user:password@localhost:5432/keylo".to_string());
+        let database_url = env::var("DATABASE_URL").unwrap_or_default();
 
         let server_addr = env::var("SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
 
@@ -276,5 +275,269 @@ impl Config {
     /// 判断是否生产环境
     pub fn is_production(&self) -> bool {
         self.environment.to_lowercase() == "production"
+    }
+
+    pub fn validate_for_database_startup(&self) -> Result<(), String> {
+        let mut errors = Vec::new();
+
+        self.validate_common(&mut errors);
+        self.validate_management_client(&mut errors);
+
+        if self.database_url.trim().is_empty() {
+            errors.push(
+                "DATABASE_URL must be set when starting Keylo with database support".to_string(),
+            );
+        }
+
+        if self.is_production() && option_is_blank(self.redis_url.as_deref()) {
+            errors.push("REDIS_URL must be set in production".to_string());
+        }
+
+        config_result(errors)
+    }
+
+    pub fn validate_for_in_memory_startup(&self) -> Result<(), String> {
+        let mut errors = Vec::new();
+
+        self.validate_common(&mut errors);
+        self.validate_management_client(&mut errors);
+
+        if self.is_production() {
+            errors.push("ALLOW_IN_MEMORY_FALLBACK cannot be used in production".to_string());
+        }
+
+        if !self.allow_in_memory_fallback {
+            errors.push(
+                "ALLOW_IN_MEMORY_FALLBACK=true is required to start without database support"
+                    .to_string(),
+            );
+        }
+
+        config_result(errors)
+    }
+
+    fn validate_management_client(&self, errors: &mut Vec<String>) {
+        if option_is_blank(self.admin_client_id.as_deref()) {
+            errors.push("ADMIN_CLIENT_ID must be set to seed the management client".to_string());
+        }
+
+        if option_is_blank(self.admin_client_secret.as_deref()) {
+            errors
+                .push("ADMIN_CLIENT_SECRET must be set to seed the management client".to_string());
+        }
+    }
+
+    fn validate_common(&self, errors: &mut Vec<String>) {
+        require_non_empty(errors, "JWT_ISSUER", &self.jwt_issuer);
+        require_non_empty(errors, "JWT_KEY_ID", &self.jwt_key_id);
+
+        if self.jwt_private_key_pem.trim().is_empty() {
+            errors.push(
+                "JWT_PRIVATE_KEY_PEM or JWT_PRIVATE_KEY_PATH must be set to an RSA private key"
+                    .to_string(),
+            );
+        }
+
+        if self.jwt_public_key_pem.trim().is_empty() {
+            errors.push(
+                "JWT_PUBLIC_KEY_PEM or JWT_PUBLIC_KEY_PATH must be set to an RSA public key"
+                    .to_string(),
+            );
+        }
+
+        require_non_empty(errors, "ENVIRONMENT", &self.environment);
+        require_non_empty(errors, "SERVER_ADDR", &self.server_addr);
+        require_positive(errors, "SERVER_PORT", self.server_port as i64);
+        require_positive(errors, "TOKEN_EXPIRY_SECONDS", self.token_expiry_seconds);
+        require_positive(
+            errors,
+            "REFRESH_TOKEN_EXPIRY_SECONDS",
+            self.refresh_token_expiry_seconds,
+        );
+        require_positive(
+            errors,
+            "MAX_FAILED_LOGIN_ATTEMPTS",
+            self.max_failed_login_attempts as i64,
+        );
+        require_positive(errors, "LOGIN_LOCKOUT_SECONDS", self.login_lockout_seconds);
+        require_positive(
+            errors,
+            "AUTH_RATE_LIMIT_WINDOW_SECONDS",
+            self.auth_rate_limit_window_seconds,
+        );
+        require_positive(
+            errors,
+            "AUTH_RATE_LIMIT_MAX_REQUESTS",
+            self.auth_rate_limit_max_requests as i64,
+        );
+        require_positive(
+            errors,
+            "AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS",
+            self.auth_global_rate_limit_max_requests as i64,
+        );
+        require_positive(
+            errors,
+            "SERVICE_TOKEN_EXPIRY_SECONDS",
+            self.service_token_expiry_seconds,
+        );
+        require_positive(
+            errors,
+            "AUDIT_LOG_RETENTION_DAYS",
+            self.audit_log_retention_days,
+        );
+
+        if self.enable_super_admin_bootstrap {
+            if option_is_blank(self.super_admin_username.as_deref()) {
+                errors.push(
+                    "SUPER_ADMIN_USERNAME must be set when ENABLE_SUPER_ADMIN_BOOTSTRAP=true"
+                        .to_string(),
+                );
+            }
+            if option_is_blank(self.super_admin_email.as_deref()) {
+                errors.push(
+                    "SUPER_ADMIN_EMAIL must be set when ENABLE_SUPER_ADMIN_BOOTSTRAP=true"
+                        .to_string(),
+                );
+            }
+            if option_is_blank(self.super_admin_password.as_deref()) {
+                errors.push(
+                    "SUPER_ADMIN_PASSWORD must be set when ENABLE_SUPER_ADMIN_BOOTSTRAP=true"
+                        .to_string(),
+                );
+            }
+        }
+
+        if self.log_to_file {
+            require_non_empty(errors, "LOG_DIR", &self.log_dir);
+            require_non_empty(errors, "LOG_FILE_PREFIX", &self.log_file_prefix);
+        }
+    }
+}
+
+fn require_non_empty(errors: &mut Vec<String>, name: &str, value: &str) {
+    if value.trim().is_empty() {
+        errors.push(format!("{name} must not be empty"));
+    }
+}
+
+fn require_positive(errors: &mut Vec<String>, name: &str, value: i64) {
+    if value <= 0 {
+        errors.push(format!("{name} must be greater than 0"));
+    }
+}
+
+fn option_is_blank(value: Option<&str>) -> bool {
+    value.is_none_or(|value| value.trim().is_empty())
+}
+
+fn config_result(errors: Vec<String>) -> Result<(), String> {
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Invalid startup configuration:\n- {}",
+            errors.join("\n- ")
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_config() -> Config {
+        Config {
+            jwt_issuer: "keylo".to_string(),
+            jwt_key_id: "keylo-rs256-1".to_string(),
+            jwt_private_key_pem: "private-key".to_string(),
+            jwt_public_key_pem: "public-key".to_string(),
+            jwt_using_default_dev_keys: false,
+            database_url: "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string(),
+            server_addr: "127.0.0.1".to_string(),
+            server_port: 2345,
+            environment: "development".to_string(),
+            token_expiry_seconds: 900,
+            refresh_token_expiry_seconds: 2_592_000,
+            max_failed_login_attempts: 5,
+            login_lockout_seconds: 300,
+            auth_rate_limit_window_seconds: 60,
+            auth_rate_limit_max_requests: 30,
+            auth_global_rate_limit_max_requests: 300,
+            trust_proxy_headers: false,
+            admin_client_id: Some("cli-admin-root".to_string()),
+            admin_client_secret: Some("strong-admin-secret".to_string()),
+            redis_url: None,
+            redis_key_prefix: "keylo".to_string(),
+            audit_log_retention_days: 30,
+            service_token_expiry_seconds: 3600,
+            enable_super_admin_bootstrap: false,
+            super_admin_username: None,
+            super_admin_email: None,
+            super_admin_password: None,
+            log_to_file: false,
+            log_dir: "./logs".to_string(),
+            log_file_prefix: "keylo".to_string(),
+            allow_in_memory_fallback: false,
+        }
+    }
+
+    #[test]
+    fn database_startup_requires_admin_client_credentials() {
+        let mut config = valid_config();
+        config.admin_client_id = None;
+        config.admin_client_secret = None;
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        assert!(err.contains("ADMIN_CLIENT_ID"));
+        assert!(err.contains("ADMIN_CLIENT_SECRET"));
+    }
+
+    #[test]
+    fn database_startup_requires_jwt_keys() {
+        let mut config = valid_config();
+        config.jwt_private_key_pem.clear();
+        config.jwt_public_key_pem.clear();
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        assert!(err.contains("JWT_PRIVATE_KEY_PEM or JWT_PRIVATE_KEY_PATH"));
+        assert!(err.contains("JWT_PUBLIC_KEY_PEM or JWT_PUBLIC_KEY_PATH"));
+    }
+
+    #[test]
+    fn production_database_startup_requires_redis() {
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.redis_url = None;
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        assert!(err.contains("REDIS_URL"));
+    }
+
+    #[test]
+    fn in_memory_startup_requires_admin_client_credentials() {
+        let mut config = valid_config();
+        config.allow_in_memory_fallback = true;
+        config.admin_client_id = None;
+        config.admin_client_secret = None;
+        config.database_url.clear();
+
+        let err = config.validate_for_in_memory_startup().unwrap_err();
+
+        assert!(err.contains("ADMIN_CLIENT_ID"));
+        assert!(err.contains("ADMIN_CLIENT_SECRET"));
+    }
+
+    #[test]
+    fn in_memory_startup_is_forbidden_in_production() {
+        let mut config = valid_config();
+        config.allow_in_memory_fallback = true;
+        config.environment = "production".to_string();
+
+        let err = config.validate_for_in_memory_startup().unwrap_err();
+
+        assert!(err.contains("cannot be used in production"));
     }
 }
