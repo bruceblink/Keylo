@@ -36,7 +36,7 @@ Keylo 支持：
 
 - `DATABASE_PASSWORD_ENC` / `DATABASE_PASSWORD_ENC_FILE`?????? `./secrets/postgres_password.enc`?`/run/secrets/postgres_password_enc`
 - `DATABASE_PASSWORD_KEY` / `DATABASE_PASSWORD_KEY_FILE`?????? `./secrets/database_password.key`?`/run/secrets/database_password_key`
-- `keylo:v1:<nonce_base64>:<ciphertext_base64>` 密文格式
+- `secret:v1:aes-256-gcm:<nonce_base64>:<ciphertext_base64>` 跨语言统一密文格式
 - AES-256-GCM 解密
 
 生产环境会拒绝：
@@ -49,8 +49,11 @@ Keylo 支持：
 
 ```bash
 DATABASE_PASSWORD_FILE=./secrets/postgres_password \
-DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key \
-  cargo run --quiet --bin keylo-encrypt-db-password > ./secrets/postgres_password.enc
+python -m pip install cryptography
+python scripts/secret_tool.py encrypt \
+  --text-file ./secrets/postgres_password \
+  --key-file ./secrets/database_password.key \
+  --out ./secrets/postgres_password.enc
 ```
 
 ### 重复资源错误提示优化

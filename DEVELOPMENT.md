@@ -32,9 +32,11 @@ openssl rsa -pubout -in keys/private.pem -out keys/public.pem
 mkdir -p secrets
 openssl rand -base64 32 > secrets/postgres_password
 openssl rand -base64 32 > secrets/database_password.key
-DATABASE_PASSWORD_FILE=./secrets/postgres_password \
-DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key \
-  cargo run --quiet --bin keylo-encrypt-db-password > secrets/postgres_password.enc
+python -m pip install cryptography
+python scripts/secret_tool.py encrypt \
+  --text-file secrets/postgres_password \
+  --key-file secrets/database_password.key \
+  --out secrets/postgres_password.enc
 docker compose up -d postgres redis
 docker compose ps
 ```
