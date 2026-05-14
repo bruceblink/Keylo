@@ -5,6 +5,7 @@
 - [README.md](README.md)：项目概览、部署入口、环境变量说明
 - [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)：从初始化到管理客户端、用户、RBAC、服务客户端的完整操作步骤
 - [docs/API_REFERENCE.md](docs/API_REFERENCE.md)：完整接口清单与鉴权规则
+- [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)：统一密文配置格式与多语言解密说明
 
 ---
 
@@ -31,8 +32,8 @@ openssl rsa -pubout -in keys/private.pem -out keys/public.pem
 ```bash
 mkdir -p secrets
 openssl rand -base64 32 > secrets/postgres_password
-openssl rand -base64 32 > secrets/database_password.key
 python -m pip install cryptography
+python scripts/secret_tool.py generate-key --out secrets/database_password.key
 python scripts/secret_tool.py encrypt \
   --text-file secrets/postgres_password \
   --key-file secrets/database_password.key \
@@ -195,3 +196,4 @@ export DATABASE_PASSWORD_KEY_FILE="./secrets/database_password.key"
 - [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
 - [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)
 - [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
+- [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)

@@ -39,6 +39,8 @@ Keylo 支持：
 - `secret:v1:aes-256-gcm:<nonce_base64>:<ciphertext_base64>` 跨语言统一密文格式
 - AES-256-GCM 解密
 
+格式设计和 Rust/Python/Java/.NET/C++ 解密示例见 [SECRET_ENCRYPTION.md](SECRET_ENCRYPTION.md)。
+
 生产环境会拒绝：
 
 - `DATABASE_PASSWORD`

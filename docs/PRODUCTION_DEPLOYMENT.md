@@ -106,14 +106,17 @@ JWT_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
 
 Docker Compose 首次初始化 PostgreSQL 时，PostgreSQL 仍需要读取一次明文密码文件。Keylo 不应读取该明文文件；Keylo 运行期只读取数据库密码密文和解密密钥。
 
+密文格式统一为 `secret:v1:aes-256-gcm:<nonce_base64>:<ciphertext_base64>`。完整格式约定和 Rust/Python/Java/.NET/C++ 解密示例见 [SECRET_ENCRYPTION.md](SECRET_ENCRYPTION.md)。
+
 推荐在宿主机准备以下文件：
 
 ```bash
 mkdir -p /opt/keylo/secrets
 openssl rand -base64 32 > /opt/keylo/secrets/postgres_password
-openssl rand -base64 32 > /opt/keylo/secrets/database_password.key
 
 python -m pip install cryptography
+python scripts/secret_tool.py generate-key \
+  --out /opt/keylo/secrets/database_password.key
 python scripts/secret_tool.py encrypt \
   --text-file /opt/keylo/secrets/postgres_password \
   --key-file /opt/keylo/secrets/database_password.key \

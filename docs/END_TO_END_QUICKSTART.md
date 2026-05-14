@@ -16,6 +16,7 @@
 - 这份文档负责“怎么一步步用起来”
 - [API_REFERENCE.md](API_REFERENCE.md) 负责完整接口定义
 - [MULTI_CLIENT_RBAC_INTEGRATION.md](MULTI_CLIENT_RBAC_INTEGRATION.md) 负责多客户端权限建模建议
+- [SECRET_ENCRYPTION.md](SECRET_ENCRYPTION.md) 负责统一密文配置格式和多语言解密说明
 
 ---
 
@@ -74,8 +75,8 @@ chmod 644 keys/public.pem
 ```bash
 mkdir -p secrets
 openssl rand -base64 32 > secrets/postgres_password
-openssl rand -base64 32 > secrets/database_password.key
 python -m pip install cryptography
+python scripts/secret_tool.py generate-key --out secrets/database_password.key
 python scripts/secret_tool.py encrypt \
   --text-file secrets/postgres_password \
   --key-file secrets/database_password.key \
