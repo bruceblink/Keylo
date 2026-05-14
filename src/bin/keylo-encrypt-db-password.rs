@@ -56,7 +56,7 @@ fn main() -> Result<(), String> {
         .map_err(|_| "Failed to encrypt database password".to_string())?;
 
     println!(
-        "keylo:v1:{}:{}",
+        "secret:v1:aes-256-gcm:{}:{}",
         BASE64.encode(nonce),
         BASE64.encode(ciphertext)
     );

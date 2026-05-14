@@ -177,22 +177,22 @@ pub fn configured_database_url_contains_password() -> bool {
 pub fn decrypt_database_password(encrypted: &str, key: &str) -> Result<String, String> {
     let encrypted = encrypted.trim();
     let parts = encrypted.split(':').collect::<Vec<_>>();
-    if parts.len() != 4 || parts[0] != "keylo" || parts[1] != "v1" {
+    if parts.len() != 5 || parts[0] != "secret" || parts[1] != "v1" || parts[2] != "aes-256-gcm" {
         return Err(
-            "DATABASE_PASSWORD_ENC must use format keylo:v1:<nonce_base64>:<ciphertext_base64>"
+            "DATABASE_PASSWORD_ENC must use format secret:v1:aes-256-gcm:<nonce_base64>:<ciphertext_base64>"
                 .to_string(),
         );
     }
 
     let nonce = BASE64
-        .decode(parts[2])
+        .decode(parts[3])
         .map_err(|err| format!("Invalid DATABASE_PASSWORD_ENC nonce: {err}"))?;
     if nonce.len() != 12 {
         return Err("DATABASE_PASSWORD_ENC nonce must decode to 12 bytes".to_string());
     }
 
     let ciphertext = BASE64
-        .decode(parts[3])
+        .decode(parts[4])
         .map_err(|err| format!("Invalid DATABASE_PASSWORD_ENC ciphertext: {err}"))?;
     let key = decode_database_password_key(key)?;
     let cipher = Aes256Gcm::new_from_slice(&key)
@@ -719,7 +719,7 @@ mod tests {
             .encrypt(Nonce::from_slice(nonce), b"db-secret".as_ref())
             .unwrap();
         let encrypted = format!(
-            "keylo:v1:{}:{}",
+            "secret:v1:aes-256-gcm:{}:{}",
             BASE64.encode(nonce),
             BASE64.encode(ciphertext)
         );
@@ -727,6 +727,30 @@ mod tests {
         let password = decrypt_database_password(&encrypted, key).unwrap();
 
         assert_eq!(password, "db-secret");
+    }
+
+    #[test]
+    fn encrypted_database_password_rejects_legacy_keylo_format() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let encrypted = format!(
+            "keylo:v1:{}:{}",
+            BASE64.encode(b"123456789012"),
+            BASE64.encode(b"ciphertext")
+        );
+
+        let err = decrypt_database_password(&encrypted, key).unwrap_err();
+
+        assert!(err.contains("secret:v1:aes-256-gcm"));
+    }
+
+    #[test]
+    fn encrypted_database_password_accepts_python_secret_tool_vector() {
+        let key = "oN06GRBVOr2G8lFxKisSmnONozK0Ru8z9Og2q7Bsbww=";
+        let encrypted = "secret:v1:aes-256-gcm:Mq+2ogeNoFKYIQYe:ZXSfffeenjQZTYXIRWJpH2xaBZgiRBAiuv4qVpzIZMrZy/B/rw==";
+
+        let password = decrypt_database_password(encrypted, key).unwrap();
+
+        assert_eq!(password, "python-rust-db-secret");
     }
 
     #[test]
