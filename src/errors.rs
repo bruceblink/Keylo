@@ -4,6 +4,15 @@ use http::StatusCode;
 use serde::Serialize;
 use std::fmt;
 
+pub fn is_unique_violation(err: &(dyn std::error::Error + 'static)) -> bool {
+    err.downcast_ref::<sqlx::Error>()
+        .and_then(|sqlx_err| match sqlx_err {
+            sqlx::Error::Database(db_err) => Some(db_err.as_ref()),
+            _ => None,
+        })
+        .is_some_and(|db_err| db_err.code().as_deref() == Some("23505"))
+}
+
 #[derive(Debug)]
 pub enum AuthError {
     WrongCredentials,
@@ -71,119 +80,144 @@ impl IntoResponse for AuthError {
                 StatusCode::UNAUTHORIZED,
                 1001,
                 "wrong_credentials",
-                "Wrong credentials",
+                "Wrong credentials".to_string(),
             ),
             AuthError::MissingCredentials => (
                 StatusCode::BAD_REQUEST,
                 1002,
                 "missing_credentials",
-                "Missing credentials",
+                "Missing credentials".to_string(),
             ),
             AuthError::TokenCreation => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 1003,
                 "token_creation_error",
-                "Token creation error",
+                "Token creation error".to_string(),
             ),
             AuthError::InvalidToken => (
                 StatusCode::UNAUTHORIZED,
                 1004,
                 "invalid_token",
-                "Invalid token",
+                "Invalid token".to_string(),
             ),
             AuthError::ExpiredToken => (
                 StatusCode::UNAUTHORIZED,
                 1005,
                 "expired_token",
-                "Token expired",
+                "Token expired".to_string(),
             ),
             AuthError::DatabaseError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 1006,
                 "database_error",
-                "Database error",
+                "Database error".to_string(),
             ),
             AuthError::NotFound => (
                 StatusCode::NOT_FOUND,
                 1007,
                 "not_found",
-                "Resource not found",
+                "Resource not found".to_string(),
             ),
             AuthError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 1008,
                 "unauthorized",
-                "Unauthorized",
+                "Unauthorized".to_string(),
             ),
-            AuthError::Forbidden => (StatusCode::FORBIDDEN, 1009, "forbidden", "Forbidden"),
+            AuthError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                1009,
+                "forbidden",
+                "Forbidden".to_string(),
+            ),
             AuthError::InsufficientScope => (
                 StatusCode::FORBIDDEN,
                 1012,
                 "insufficient_scope",
-                "Insufficient scope",
+                "Insufficient scope".to_string(),
             ),
             AuthError::InsufficientAudience => (
                 StatusCode::FORBIDDEN,
                 1013,
                 "invalid_audience",
-                "Invalid audience",
+                "Invalid audience".to_string(),
             ),
             AuthError::InsufficientRole => (
                 StatusCode::FORBIDDEN,
                 1014,
                 "insufficient_role",
-                "Insufficient role",
+                "Insufficient role".to_string(),
             ),
             AuthError::InvalidAudience => (
                 StatusCode::FORBIDDEN,
                 1016,
                 "invalid_audience",
-                "Invalid audience",
+                "Invalid audience".to_string(),
             ),
             AuthError::TokenTypeInvalid => (
                 StatusCode::FORBIDDEN,
                 1017,
                 "token_type_invalid",
-                "Token type invalid",
+                "Token type invalid".to_string(),
             ),
             AuthError::PermissionNotBound => (
                 StatusCode::NOT_FOUND,
                 1018,
                 "permission_not_bound",
-                "Permission not bound",
+                "Permission not bound".to_string(),
             ),
             AuthError::RoleNotBound => (
                 StatusCode::NOT_FOUND,
                 1019,
                 "role_not_bound",
-                "Role not bound",
+                "Role not bound".to_string(),
             ),
             AuthError::ServiceClientNotAuthorized => (
                 StatusCode::FORBIDDEN,
                 1015,
                 "service_client_not_authorized",
-                "Service client not authorized",
+                "Service client not authorized".to_string(),
             ),
             AuthError::TooManyRequests => (
                 StatusCode::TOO_MANY_REQUESTS,
                 1011,
                 "too_many_requests",
-                "Too many requests",
+                "Too many requests".to_string(),
             ),
-            AuthError::Conflict(_) => (StatusCode::CONFLICT, 1020, "conflict", "Conflict"),
+            AuthError::Conflict(message) => (StatusCode::CONFLICT, 1020, "conflict", message),
             AuthError::InternalServerError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 1010,
                 "internal_server_error",
-                "Internal server error",
+                "Internal server error".to_string(),
             ),
         };
 
         let body = Json(ErrorResponse {
             code,
             error,
-            message: message.to_string(),
+            message,
         });
         (status, body).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    #[tokio::test]
+    async fn conflict_response_includes_specific_message() {
+        let message = "Service client 'billing' already exists".to_string();
+        let response = AuthError::Conflict(message.clone()).into_response();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["error"], "conflict");
+        assert_eq!(json["message"], message);
     }
 }
