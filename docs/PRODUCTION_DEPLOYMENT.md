@@ -35,7 +35,7 @@ RUST_LOG=keylo=info,axum=info
 
 - 宿主机存在 RSA 密钥目录，并通过 `${JWT_KEYS_DIR:-./keys}` 挂载到容器 `/app/keys`
 - `SERVER_ADDR` 使用 `0.0.0.0`，避免容器内只监听回环地址
-- 不要删除 `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`，否则不会自动初始化管理客户端
+- 不要删除 `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`，否则启动会直接失败
 - 如需重装数据库，执行 `docker compose down -v --remove-orphans` 删除 PostgreSQL 数据卷后再重建
 
 说明：
@@ -45,7 +45,7 @@ RUST_LOG=keylo=info,axum=info
 - **1.1.0 起生产环境 Redis 为强制依赖**：若 Redis 不可用，限流中间件将拒绝请求，服务不会降级为内存限流。
 - `DB_POOL_SIZE` 控制数据库连接池大小，生产环境建议根据并发量设置（默认 5；README 示例表按推荐值写为 10）。
 - 如果数据库初始化失败，服务会直接失败启动，不再回退到内存模式。
-- 非生产环境默认也会在数据库初始化失败时失败启动；只有显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 才允许无数据库路由。
+- 非生产环境默认也会在数据库初始化失败时失败启动；只有显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 才允许无数据库路由。该模式仍会校验 RSA 密钥、管理员客户端和其他基础配置。
 - 登录和内省限流默认使用连接 peer IP；只有反向代理可信且正确覆盖真实客户端地址时才应设置 `TRUST_PROXY_HEADERS=true`。
 - Refresh Token 刷新会原子消费旧 token，旧 refresh token 不可并发复用。
 - 客户端密钥（`client_secret`）存储为 bcrypt 哈希；从 1.0.x 升级时需重置所有客户端密钥。

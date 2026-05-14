@@ -279,7 +279,7 @@ Cargo.toml           # 项目依赖配置
 | `JWT_PUBLIC_KEY_PATH` | `` | RSA 公钥文件路径，生产推荐 |
 | `JWT_PRIVATE_KEY_PEM` | `` | RSA 私钥 PEM 内容，可替代路径 |
 | `JWT_PUBLIC_KEY_PEM` | `` | RSA 公钥 PEM 内容，可替代路径 |
-| `DATABASE_URL` | `postgres://user:password@localhost:5432/keylo` | 数据库连接字符串 |
+| `DATABASE_URL` | `` | 数据库连接字符串（数据库模式必填） |
 | `SERVER_ADDR` | `127.0.0.1` | 服务器监听地址 |
 | `SERVER_PORT` | `2345` | 服务器监听端口 |
 | `ENVIRONMENT` | `development` | 运行环境 |
@@ -291,8 +291,8 @@ Cargo.toml           # 项目依赖配置
 | `AUTH_RATE_LIMIT_MAX_REQUESTS` | `30` | 限流窗口内单主体最大请求数 |
 | `AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS` | `300` | 限流窗口内全局最大请求数 |
 | `TRUST_PROXY_HEADERS` | `false` | 是否信任 `X-Forwarded-For` / `X-Real-IP`；关闭时使用连接 peer IP |
-| `ADMIN_CLIENT_ID` | `` | 管理员客户端 ID（建议生产配置） |
-| `ADMIN_CLIENT_SECRET` | `` | 管理员客户端密钥（建议生产配置） |
+| `ADMIN_CLIENT_ID` | `` | 管理员客户端 ID（启动必填） |
+| `ADMIN_CLIENT_SECRET` | `` | 管理员客户端密钥（启动必填） |
 | `REDIS_URL` | `` | Redis 地址（配置后启用分布式状态存储） |
 | `REDIS_KEY_PREFIX` | `keylo` | Redis key 前缀（多环境隔离） |
 | `DB_POOL_SIZE` | `10` | 数据库连接池最大连接数 |
@@ -462,8 +462,9 @@ docker compose logs -f keylo-service
 ### 4. 运维与安全基线
 
 * 启动时自动执行 SQLx 迁移
-* 生产环境强制要求显式 RSA 密钥、管理员客户端和 Redis
-* 非生产环境默认同样对数据库初始化 fail-fast；仅在显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时允许无数据库模式
+* 启动会提前校验 RSA 密钥、管理员客户端、数据库 URL、Token 时长等关键配置；缺失时直接退出
+* 生产环境额外强制要求 Redis
+* 非生产环境默认同样对数据库初始化 fail-fast；仅在显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时允许无数据库模式，且仍要求 RSA 密钥和管理员客户端配置
 * Refresh Token 轮换会原子消费旧 token，旧 refresh token 不能再次使用
 * 支持审计日志、限流、登录锁定和 OAuth state 管理
 
