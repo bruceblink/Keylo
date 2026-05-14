@@ -5,8 +5,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-keylo_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-keylo_password}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-keylo}
+    secrets:
+      - postgres_password
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -49,7 +51,9 @@ services:
       JWT_KEY_ID: ${JWT_KEY_ID:-keylo-rs256-1}
       JWT_PRIVATE_KEY_PATH: ${JWT_PRIVATE_KEY_PATH:-/app/keys/private.pem}
       JWT_PUBLIC_KEY_PATH: ${JWT_PUBLIC_KEY_PATH:-/app/keys/public.pem}
-      DATABASE_URL: ${DATABASE_URL:-postgres://keylo_user:keylo_password@postgres:5432/keylo}
+      DATABASE_URL: ${DATABASE_URL:-postgres://keylo_user@postgres:5432/keylo}
+      DATABASE_PASSWORD_ENC_FILE: /run/secrets/postgres_password_enc
+      DATABASE_PASSWORD_KEY_FILE: /run/secrets/database_password_key
       DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
       SERVER_ADDR: 0.0.0.0
       SERVER_PORT: ${SERVER_PORT:-2345}
@@ -66,6 +70,9 @@ services:
     volumes:
       - ${JWT_KEYS_DIR:-./keys}:/app/keys:ro
       - ${LOGS_DIR:-./logs}:/app/logs
+    secrets:
+      - postgres_password_enc
+      - database_password_key
     networks:
       - keylo_network
     depends_on:
@@ -77,6 +84,14 @@ services:
 volumes:
   postgres_data:
   redis_data:
+
+secrets:
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_FILE:-./secrets/postgres_password}
+  postgres_password_enc:
+    file: ${DATABASE_PASSWORD_ENC_FILE:-./secrets/postgres_password.enc}
+  database_password_key:
+    file: ${DATABASE_PASSWORD_KEY_FILE:-./secrets/database_password.key}
 
 networks:
   keylo_network:
