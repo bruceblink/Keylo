@@ -1,5 +1,5 @@
 use crate::db::service as svc_db;
-use crate::errors::AuthError;
+use crate::errors::{is_unique_violation, AuthError};
 use crate::models::service::{
     IntrospectRequest, IntrospectResponse, RegisterServiceRequest, RotateServiceSecretRequest,
     ServiceClaims, ServiceInfo, ServiceTokenRequest, ServiceTokenResponse, UpdateServiceRequest,
@@ -17,7 +17,7 @@ pub async fn service_token(
     State(state): State<AppState>,
     Json(payload): Json<ServiceTokenRequest>,
 ) -> Result<Json<ServiceTokenResponse>, AuthError> {
-    if payload.service_id.is_empty() || payload.service_secret.is_empty() {
+    if payload.service_id.trim().is_empty() || payload.service_secret.trim().is_empty() {
         return Err(AuthError::MissingCredentials);
     }
 
@@ -138,7 +138,10 @@ pub async fn register_service(
     State(state): State<AppState>,
     Json(payload): Json<RegisterServiceRequest>,
 ) -> Result<Json<Value>, AuthError> {
-    if payload.service_id.is_empty() || payload.service_secret.is_empty() {
+    if payload.service_id.trim().is_empty()
+        || payload.service_secret.trim().is_empty()
+        || payload.name.trim().is_empty()
+    {
         return Err(AuthError::MissingCredentials);
     }
 
@@ -155,8 +158,11 @@ pub async fn register_service(
     )
     .await
     .map_err(|e| {
-        if e.to_string().contains("duplicate key") {
-            AuthError::Conflict(format!("Service '{}' already exists", payload.service_id))
+        if is_unique_violation(e.as_ref()) {
+            AuthError::Conflict(format!(
+                "Service client '{}' already exists; choose a different service_id or update the existing service.",
+                payload.service_id
+            ))
         } else {
             AuthError::DatabaseError(e.to_string())
         }

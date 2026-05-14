@@ -1,5 +1,5 @@
 use crate::db::user::get_user_by_username;
-use crate::errors::AuthError;
+use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
     AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest,
     CreateClientRequest, IntrospectTokenRequest, MeResponse, RefreshTokenRequest,
@@ -698,8 +698,11 @@ pub async fn auth_create_client(
     )
     .await
     .map_err(|e| {
-        if e.to_string().contains("duplicate key") {
-            AuthError::Conflict("Client already exists".to_string())
+        if is_unique_violation(e.as_ref()) {
+            AuthError::Conflict(format!(
+                "Client '{}' already exists; choose a different client_id or update the existing client.",
+                payload.client_id
+            ))
         } else {
             AuthError::DatabaseError("Failed to create client".to_string())
         }

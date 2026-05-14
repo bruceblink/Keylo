@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use crate::{
     db::*,
+    errors::is_unique_violation,
     models::{Claims, *},
     state::AppState,
     utils::{require_db, ApiResponse},
@@ -136,7 +137,7 @@ async fn create_role_handler(
             })))
         }
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({
@@ -231,7 +232,7 @@ async fn update_role_handler(
             })),
         )),
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({
@@ -340,7 +341,7 @@ async fn create_permission_handler(
             })))
         }
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({
@@ -427,7 +428,7 @@ async fn update_permission_handler(
             })),
         )),
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({

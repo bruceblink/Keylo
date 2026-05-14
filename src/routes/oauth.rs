@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     db::*,
+    errors::is_unique_violation,
     models::{Claims, *},
     state::AppState,
     utils::{require_db, ApiResponse},
@@ -137,7 +138,7 @@ async fn create_oauth_provider_handler(
             "data": provider
         }))),
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({
@@ -222,7 +223,7 @@ async fn update_oauth_provider_handler(
             })),
         )),
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({

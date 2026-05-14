@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use crate::{
     db::*,
+    errors::is_unique_violation,
     handlers::user::{
         get_third_party_import_job_status, import_third_party_users, start_third_party_import_job,
     },
@@ -100,7 +101,7 @@ async fn create_user_handler(
             "data": user,
         }))),
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({
@@ -164,7 +165,7 @@ async fn provision_user_handler(
         }
         Err(e) => {
             let message = e.to_string();
-            if message.contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({

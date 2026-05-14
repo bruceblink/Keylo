@@ -11,6 +11,7 @@ use crate::db::user::{
     set_user_active, upsert_external_user_mapping,
 };
 use crate::db::{assign_role_to_user, create_audit_log, get_role_by_name, update_user};
+use crate::errors::is_unique_violation;
 use crate::models::{
     Claims, CreateUserRequest, MigrationBatchJob, MigrationErrorCode, MigrationJobStatus,
     ThirdPartyJitRegisterRequest, ThirdPartyUserImportItem, ThirdPartyUserImportOutput,
@@ -56,7 +57,7 @@ pub async fn register_user(
             "data": user,
         }))),
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            if is_unique_violation(e.as_ref()) {
                 Err((
                     StatusCode::CONFLICT,
                     Json(json!({
