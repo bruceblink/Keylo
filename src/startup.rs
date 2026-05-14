@@ -470,6 +470,9 @@ wwIDAQAB
             config.admin_client_secret.as_deref(),
             Some("env-admin-secret")
         );
+
+        std::env::remove_var("ADMIN_CLIENT_ID");
+        std::env::remove_var("ADMIN_CLIENT_SECRET");
     }
 
     #[test]

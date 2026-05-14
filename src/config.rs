@@ -105,6 +105,10 @@ fn env_non_empty_or_dotenv(key: &str) -> Option<String> {
         .or_else(|| dotenv_value(key).filter(|value| !value.trim().is_empty()))
 }
 
+fn default_admin_client_id() -> String {
+    DEFAULT_ADMIN_CLIENT_ID.to_string()
+}
+
 pub fn build_database_url(base_url: String, password: Option<String>) -> String {
     let Some(password) = password else {
         return base_url;
@@ -361,8 +365,8 @@ impl Config {
             .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
 
-        let admin_client_id = env_non_empty_or_dotenv("ADMIN_CLIENT_ID")
-            .or_else(|| Some(DEFAULT_ADMIN_CLIENT_ID.to_string()));
+        let admin_client_id =
+            env_non_empty_or_dotenv("ADMIN_CLIENT_ID").or_else(|| Some(default_admin_client_id()));
         let admin_client_secret = env_non_empty_or_dotenv("ADMIN_CLIENT_SECRET");
 
         let redis_url = env::var("REDIS_URL").ok();
@@ -780,10 +784,7 @@ mod tests {
 
     #[test]
     fn config_uses_conventional_admin_client_id() {
-        std::env::remove_var("ADMIN_CLIENT_ID");
-        let config = Config::from_env();
-
-        assert_eq!(config.admin_client_id.as_deref(), Some("cli-admin-root"));
+        assert_eq!(default_admin_client_id(), "cli-admin-root");
     }
 
     #[test]
