@@ -4,9 +4,9 @@ services:
     container_name: keylo-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-keylo_user}
+      POSTGRES_USER: keylo_user
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      POSTGRES_DB: ${POSTGRES_DB:-keylo}
+      POSTGRES_DB: keylo
     secrets:
       - postgres_password
     ports:
@@ -14,7 +14,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-keylo_user} -d ${POSTGRES_DB:-keylo}"]
+      test: ["CMD-SHELL", "pg_isready -U keylo_user -d keylo"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -47,15 +47,16 @@ services:
     environment:
       TZ: UTC
       DATABASE_URL: postgres://keylo_user@postgres:5432/keylo
-      SERVER_PORT: ${SERVER_PORT:-2345}
-      ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET:?ADMIN_CLIENT_SECRET is required}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      LOG_DIR: ${LOG_DIR:-/app/logs}
+      SERVER_PORT: 2345
+      ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID}
+      ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET}
+      REDIS_URL: redis://redis:6379
+      LOG_DIR: /app/logs
     ports:
       - "${SERVER_PORT:-2345}:2345"
     volumes:
-      - ${JWT_KEYS_DIR:-./keys}:/app/keys:ro
-      - ${LOGS_DIR:-./logs}:/app/logs
+      - ./keys:/app/keys:ro
+      - ./logs:/app/logs
     secrets:
       - postgres_password_enc
       - database_password_key
@@ -73,11 +74,11 @@ volumes:
 
 secrets:
   postgres_password:
-    file: ${POSTGRES_PASSWORD_FILE:-./secrets/postgres_password}
+    file: ./secrets/postgres_password
   postgres_password_enc:
-    file: ${DATABASE_PASSWORD_ENC_FILE:-./secrets/postgres_password.enc}
+    file: ./secrets/postgres_password.enc
   database_password_key:
-    file: ${DATABASE_PASSWORD_KEY_FILE:-./secrets/database_password.key}
+    file: ./secrets/database_password.key
 
 networks:
   keylo_network:
