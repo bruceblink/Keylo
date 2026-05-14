@@ -55,9 +55,8 @@ wwIDAQAB
             environment: "test".to_string(),
             ..Default::default()
         };
-        let db_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
-        });
+        let db_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
 
         match init_app_router_with_db(config, &db_url).await {
             Ok(router) => Some(TestServer::new(router)),

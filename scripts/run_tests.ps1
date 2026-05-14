@@ -14,7 +14,25 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Info "Starting PostgreSQL test database..."
-docker run -d --name keylo-test-db -e POSTGRES_PASSWORD=password -e POSTGRES_DB=keylo_test -p 5432:5432 postgres:15 *> $null
+New-Item -ItemType Directory -Force -Path "secrets" *> $null
+$testPasswordFile = (Resolve-Path "secrets").Path + "\test_postgres_password"
+$testPasswordEncFile = (Resolve-Path "secrets").Path + "\test_postgres_password.enc"
+$testPasswordKeyFile = (Resolve-Path "secrets").Path + "\test_database_password.key"
+if (!(Test-Path $testPasswordFile) -or ((Get-Item $testPasswordFile).Length -eq 0)) {
+    [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) | Set-Content -NoNewline $testPasswordFile
+}
+if (!(Test-Path $testPasswordKeyFile) -or ((Get-Item $testPasswordKeyFile).Length -eq 0)) {
+    [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) | Set-Content -NoNewline $testPasswordKeyFile
+}
+$env:DATABASE_PASSWORD_FILE = $testPasswordFile
+$env:DATABASE_PASSWORD_KEY_FILE = $testPasswordKeyFile
+cargo run --quiet --bin keylo-encrypt-db-password | Set-Content -NoNewline $testPasswordEncFile
+Remove-Item Env:DATABASE_PASSWORD_FILE
+docker run -d --name keylo-test-db `
+    -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password `
+    -e POSTGRES_DB=keylo_test `
+    -v "${testPasswordFile}:/run/secrets/postgres_password:ro" `
+    -p 5432:5432 postgres:15 *> $null
 if ($LASTEXITCODE -eq 0) {
     Success "PostgreSQL test database started"
 } else {
@@ -34,7 +52,10 @@ if ($i -eq 30) {
     Fail "Database failed to start within 30 seconds"
 }
 
-$env:TEST_DATABASE_URL = "postgres://postgres:password@localhost:5432/keylo_test"
+$testDbPassword = (Get-Content -Raw $testPasswordFile).Trim()
+$env:TEST_DATABASE_URL = "postgres://postgres:${testDbPassword}@localhost:5432/keylo_test"
+$env:DATABASE_PASSWORD_ENC_FILE = $testPasswordEncFile
+$env:DATABASE_PASSWORD_KEY_FILE = $testPasswordKeyFile
 $env:RUST_LOG = "debug"
 
 Info "Running formatting checks..."

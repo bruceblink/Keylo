@@ -11,9 +11,8 @@ mod database_tests {
 
     /// 设置测试数据库
     async fn setup_test_db() -> Result<PgPool, &'static str> {
-        let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
-        });
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
 
         let pool = match db::init_db_pool(&database_url).await {
             Ok(pool) => pool,

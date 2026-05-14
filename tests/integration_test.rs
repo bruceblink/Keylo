@@ -83,9 +83,8 @@ mod tests {
             std::process::id(),
             TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
-        let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
-        });
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
 
         match startup::init_app_router_with_db_and_admin(
             config.clone(),
@@ -349,9 +348,8 @@ mod tests {
         let rotate_client_id = format!("cli-rotate-test-{}", ts);
         let rotate_client_secret = "RotateTest123!";
 
-        let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
-        });
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
         let mut config = test_config();
         config.redis_key_prefix = format!(
             "keylo-test-{}-rotate-{}",

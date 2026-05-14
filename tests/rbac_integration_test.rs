@@ -11,9 +11,8 @@ mod tests {
 
     async fn setup_test_server() -> Option<TestServer> {
         let config = Config::default();
-        let db_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://keylo_user:keylo_password@localhost:5432/keylo".to_string()
-        });
+        let db_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
 
         match init_app_router_with_db_and_admin(
             config,
