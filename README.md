@@ -1,4 +1,4 @@
-# Keylo v1.3.0
+# Keylo v1.3.1
 
 **Keylo** 是一个轻量、可扩展的 **统一认证与授权服务**（Auth Service），为你的多服务系统提供统一的 JWT 签发、Session 管理和 OAuth 支持。
 
@@ -7,7 +7,7 @@
 * 完整使用步骤见 [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)
 * 完整接口定义见 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 * 多客户端权限建模见 [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
-* 发布说明见 [docs/RELEASE_1_3.md](docs/RELEASE_1_3.md)
+* 发布说明见 [docs/RELEASE_1_3_1.md](docs/RELEASE_1_3_1.md)
 
 ---
 
@@ -137,6 +137,8 @@ cargo tarpaulin --out Html
 Keylo 的生产部署要求、发布能力边界和密钥轮换建议见以下文档：
 
 * [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
+* [docs/RELEASE_1_3_1.md](docs/RELEASE_1_3_1.md)
+* [docs/RELEASE_1_3.md](docs/RELEASE_1_3.md)
 * [docs/RELEASE_1_1.md](docs/RELEASE_1_1.md)
 * [docs/RELEASE_1_0.md](docs/RELEASE_1_0.md)
 * [docs/KEY_ROTATION.md](docs/KEY_ROTATION.md)
@@ -402,7 +404,7 @@ curl http://127.0.0.1:2345/readyz
 ### 使用 GitHub Container Registry 镜像
 
 ```bash
-docker pull ghcr.io/bruceblink/keylo:v1.1.1
+docker pull ghcr.io/bruceblink/keylo:v1.3.1
 ```
 
 ### 运行容器
@@ -422,7 +424,7 @@ docker run --rm -p 2345:2345 \
   -e ADMIN_CLIENT_ID="cli-admin-root" \
   -e ADMIN_CLIENT_SECRET="replace-with-strong-admin-secret" \
   -e REDIS_URL="redis://redis:6379" \
-  ghcr.io/bruceblink/keylo:v1.1.1
+  ghcr.io/bruceblink/keylo:v1.3.1
 ```
 
 ### 本地构建镜像
@@ -561,4 +563,4 @@ MIT License - 查看 [LICENSE](LICENSE) 文件
 
 ---
 
-**Last Updated**: 2026年04月17日
+**Last Updated**: 2026年05月14日
