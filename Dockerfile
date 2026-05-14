@@ -32,7 +32,9 @@ COPY --from=builder /app/target/release/keylo /app/keylo
 
 # Set environment variables
 ENV APP_ENV=production
-ENV RUST_LOG=info
+ENV ENVIRONMENT=production
+ENV SERVER_ADDR=0.0.0.0
+ENV RUST_LOG=keylo=info,axum=info
 
 # Expose the port your app listens on
 EXPOSE 2345

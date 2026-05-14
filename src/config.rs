@@ -10,6 +10,22 @@ use urlencoding::encode;
 
 static DOTENV_INIT: Once = Once::new();
 
+const DEFAULT_JWT_ISSUER: &str = "keylo";
+const DEFAULT_JWT_KEY_ID: &str = "keylo-rs256-1";
+const DEFAULT_ADMIN_CLIENT_ID: &str = "cli-admin-root";
+const DEFAULT_JWT_PRIVATE_KEY_PATH: &str = "./keys/private.pem";
+const DEFAULT_JWT_PUBLIC_KEY_PATH: &str = "./keys/public.pem";
+const DEFAULT_DATABASE_PASSWORD_ENC_PATHS: [&str; 3] = [
+    "./secrets/postgres_password.enc",
+    "/run/secrets/postgres_password_enc",
+    "/run/secrets/postgres_password.enc",
+];
+const DEFAULT_DATABASE_PASSWORD_KEY_PATHS: [&str; 3] = [
+    "./secrets/database_password.key",
+    "/run/secrets/database_password_key",
+    "/run/secrets/database_password.key",
+];
+
 fn read_env_or_file(value_key: &str, path_key: &str) -> Option<String> {
     if let Ok(value) = env::var(value_key) {
         if !value.trim().is_empty() {
@@ -28,6 +44,30 @@ fn read_env_or_file(value_key: &str, path_key: &str) -> Option<String> {
     }
 
     None
+}
+
+fn read_first_existing_file(paths: &[&str]) -> Option<String> {
+    paths.iter().find_map(|path| {
+        fs::read_to_string(path)
+            .ok()
+            .filter(|contents| !contents.trim().is_empty())
+    })
+}
+
+fn any_default_file_exists(paths: &[&str]) -> bool {
+    paths.iter().any(|path| {
+        fs::metadata(path)
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false)
+    })
+}
+
+fn read_env_or_file_with_default_path(
+    value_key: &str,
+    path_key: &str,
+    default_path: &str,
+) -> Option<String> {
+    read_env_or_file(value_key, path_key).or_else(|| read_first_existing_file(&[default_path]))
 }
 
 pub fn load_dotenv() {
@@ -96,9 +136,11 @@ pub fn build_database_url(base_url: String, password: Option<String>) -> String 
 
 pub fn database_password_from_env_result() -> Result<Option<String>, String> {
     let encrypted_password =
-        read_env_or_file("DATABASE_PASSWORD_ENC", "DATABASE_PASSWORD_ENC_FILE");
+        read_env_or_file("DATABASE_PASSWORD_ENC", "DATABASE_PASSWORD_ENC_FILE")
+            .or_else(|| read_first_existing_file(&DEFAULT_DATABASE_PASSWORD_ENC_PATHS));
     if let Some(encrypted_password) = encrypted_password {
         let key = read_env_or_file("DATABASE_PASSWORD_KEY", "DATABASE_PASSWORD_KEY_FILE")
+            .or_else(|| read_first_existing_file(&DEFAULT_DATABASE_PASSWORD_KEY_PATHS))
             .ok_or_else(|| {
                 "DATABASE_PASSWORD_KEY or DATABASE_PASSWORD_KEY_FILE must be set when using encrypted database password"
                     .to_string()
@@ -119,6 +161,7 @@ pub fn database_password_source_is_plaintext() -> bool {
 pub fn database_password_source_is_encrypted() -> bool {
     env_value_is_non_empty("DATABASE_PASSWORD_ENC")
         || env_value_is_non_empty("DATABASE_PASSWORD_ENC_FILE")
+        || any_default_file_exists(&DEFAULT_DATABASE_PASSWORD_ENC_PATHS)
 }
 
 pub fn configured_database_url_contains_password() -> bool {
@@ -251,12 +294,20 @@ impl Config {
     pub fn from_env() -> Self {
         load_dotenv();
 
-        let jwt_issuer = env::var("JWT_ISSUER").unwrap_or_else(|_| "keylo".to_string());
-        let jwt_key_id = env::var("JWT_KEY_ID").unwrap_or_else(|_| "keylo-rs256-1".to_string());
-        let jwt_private_key_pem =
-            read_env_or_file("JWT_PRIVATE_KEY_PEM", "JWT_PRIVATE_KEY_PATH").unwrap_or_default();
-        let jwt_public_key_pem =
-            read_env_or_file("JWT_PUBLIC_KEY_PEM", "JWT_PUBLIC_KEY_PATH").unwrap_or_default();
+        let jwt_issuer = env::var("JWT_ISSUER").unwrap_or_else(|_| DEFAULT_JWT_ISSUER.to_string());
+        let jwt_key_id = env::var("JWT_KEY_ID").unwrap_or_else(|_| DEFAULT_JWT_KEY_ID.to_string());
+        let jwt_private_key_pem = read_env_or_file_with_default_path(
+            "JWT_PRIVATE_KEY_PEM",
+            "JWT_PRIVATE_KEY_PATH",
+            DEFAULT_JWT_PRIVATE_KEY_PATH,
+        )
+        .unwrap_or_default();
+        let jwt_public_key_pem = read_env_or_file_with_default_path(
+            "JWT_PUBLIC_KEY_PEM",
+            "JWT_PUBLIC_KEY_PATH",
+            DEFAULT_JWT_PUBLIC_KEY_PATH,
+        )
+        .unwrap_or_default();
         let jwt_using_default_dev_keys = false;
 
         let database_url = env::var("DATABASE_URL").unwrap_or_default();
@@ -310,7 +361,8 @@ impl Config {
             .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
 
-        let admin_client_id = env_non_empty_or_dotenv("ADMIN_CLIENT_ID");
+        let admin_client_id = env_non_empty_or_dotenv("ADMIN_CLIENT_ID")
+            .or_else(|| Some(DEFAULT_ADMIN_CLIENT_ID.to_string()));
         let admin_client_secret = env_non_empty_or_dotenv("ADMIN_CLIENT_SECRET");
 
         let redis_url = env::var("REDIS_URL").ok();
@@ -451,7 +503,7 @@ impl Config {
 
     fn validate_management_client(&self, errors: &mut Vec<String>) {
         if option_is_blank(self.admin_client_id.as_deref()) {
-            errors.push("ADMIN_CLIENT_ID must be set to seed the management client".to_string());
+            errors.push("ADMIN_CLIENT_ID must not be empty".to_string());
         }
 
         if option_is_blank(self.admin_client_secret.as_deref()) {
@@ -717,13 +769,21 @@ mod tests {
     #[test]
     fn database_startup_requires_admin_client_credentials() {
         let mut config = valid_config();
-        config.admin_client_id = None;
+        config.admin_client_id = Some("".to_string());
         config.admin_client_secret = None;
 
         let err = config.validate_for_database_startup().unwrap_err();
 
         assert!(err.contains("ADMIN_CLIENT_ID"));
         assert!(err.contains("ADMIN_CLIENT_SECRET"));
+    }
+
+    #[test]
+    fn config_uses_conventional_admin_client_id() {
+        std::env::remove_var("ADMIN_CLIENT_ID");
+        let config = Config::from_env();
+
+        assert_eq!(config.admin_client_id.as_deref(), Some("cli-admin-root"));
     }
 
     #[test]
@@ -753,7 +813,7 @@ mod tests {
     fn in_memory_startup_requires_admin_client_credentials() {
         let mut config = valid_config();
         config.allow_in_memory_fallback = true;
-        config.admin_client_id = None;
+        config.admin_client_id = Some("".to_string());
         config.admin_client_secret = None;
         config.database_url.clear();
 

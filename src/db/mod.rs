@@ -28,7 +28,7 @@ pub async fn init_db_pool(database_url: &str) -> Result<PgPool> {
     let max_connections: u32 = std::env::var("DB_POOL_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(5);
+        .unwrap_or(10);
 
     let pool = PgPoolOptions::new()
         .max_connections(max_connections)

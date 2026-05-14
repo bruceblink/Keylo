@@ -34,8 +34,8 @@ Docker Compose 场景下，PostgreSQL 首次初始化仍可读取明文密码 se
 
 Keylo 支持：
 
-- `DATABASE_PASSWORD_ENC` / `DATABASE_PASSWORD_ENC_FILE`
-- `DATABASE_PASSWORD_KEY` / `DATABASE_PASSWORD_KEY_FILE`
+- `DATABASE_PASSWORD_ENC` / `DATABASE_PASSWORD_ENC_FILE`?????? `./secrets/postgres_password.enc`?`/run/secrets/postgres_password_enc`
+- `DATABASE_PASSWORD_KEY` / `DATABASE_PASSWORD_KEY_FILE`?????? `./secrets/database_password.key`?`/run/secrets/database_password_key`
 - `keylo:v1:<nonce_base64>:<ciphertext_base64>` 密文格式
 - AES-256-GCM 解密
 

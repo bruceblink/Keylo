@@ -46,25 +46,11 @@ services:
     restart: unless-stopped
     environment:
       TZ: UTC
-      ENVIRONMENT: ${ENVIRONMENT:-production}
-      JWT_ISSUER: ${JWT_ISSUER:-keylo}
-      JWT_KEY_ID: ${JWT_KEY_ID:-keylo-rs256-1}
-      JWT_PRIVATE_KEY_PATH: ${JWT_PRIVATE_KEY_PATH:-/app/keys/private.pem}
-      JWT_PUBLIC_KEY_PATH: ${JWT_PUBLIC_KEY_PATH:-/app/keys/public.pem}
-      DATABASE_URL: ${DATABASE_URL:-postgres://keylo_user@postgres:5432/keylo}
-      DATABASE_PASSWORD_ENC_FILE: /run/secrets/postgres_password_enc
-      DATABASE_PASSWORD_KEY_FILE: /run/secrets/database_password_key
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
-      SERVER_ADDR: 0.0.0.0
+      DATABASE_URL: postgres://keylo_user@postgres:5432/keylo
       SERVER_PORT: ${SERVER_PORT:-2345}
-      ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID:-cli-admin-root}
-      ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET:-replace-with-strong-admin-secret}
+      ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET:?ADMIN_CLIENT_SECRET is required}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-keylo}
-      RUST_LOG: ${RUST_LOG:-keylo=info,axum=info}
-      LOG_TO_FILE: ${LOG_TO_FILE:-true}
       LOG_DIR: ${LOG_DIR:-/app/logs}
-      LOG_FILE_PREFIX: ${LOG_FILE_PREFIX:-keylo}
     ports:
       - "${SERVER_PORT:-2345}:2345"
     volumes:

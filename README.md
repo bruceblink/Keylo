@@ -293,13 +293,13 @@ Cargo.toml           # 项目依赖配置
 | 变量 | 默认值 | 说明 |
 | ------ | -------- | ------ |
 | `JWT_ISSUER` | `keylo` | JWT 签发方 |
-| `JWT_KEY_ID` | `keylo-dev-rs256-1` | JWKS 中公开的当前密钥 ID |
-| `JWT_PRIVATE_KEY_PATH` | `` | RSA 私钥文件路径，生产推荐 |
-| `JWT_PUBLIC_KEY_PATH` | `` | RSA 公钥文件路径，生产推荐 |
+| `JWT_KEY_ID` | `keylo-rs256-1` | JWKS 中公开的当前密钥 ID |
+| `JWT_PRIVATE_KEY_PATH` | `./keys/private.pem` | RSA 私钥文件路径 |
+| `JWT_PUBLIC_KEY_PATH` | `./keys/public.pem` | RSA 公钥文件路径 |
 | `JWT_PRIVATE_KEY_PEM` | `` | RSA 私钥 PEM 内容，可替代路径 |
 | `JWT_PUBLIC_KEY_PEM` | `` | RSA 公钥 PEM 内容，可替代路径 |
 | `DATABASE_URL` | `` | 数据库连接字符串（数据库模式必填） |
-| `SERVER_ADDR` | `127.0.0.1` | 服务器监听地址 |
+| `SERVER_ADDR` | `127.0.0.1`（容器镜像为 `0.0.0.0`） | 服务器监听地址 |
 | `SERVER_PORT` | `2345` | 服务器监听端口 |
 | `ENVIRONMENT` | `development` | 运行环境 |
 | `TOKEN_EXPIRY_SECONDS` | `900` | Token 过期时间（秒） |
@@ -310,7 +310,7 @@ Cargo.toml           # 项目依赖配置
 | `AUTH_RATE_LIMIT_MAX_REQUESTS` | `30` | 限流窗口内单主体最大请求数 |
 | `AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS` | `300` | 限流窗口内全局最大请求数 |
 | `TRUST_PROXY_HEADERS` | `false` | 是否信任 `X-Forwarded-For` / `X-Real-IP`；关闭时使用连接 peer IP |
-| `ADMIN_CLIENT_ID` | `` | 管理员客户端 ID（启动必填） |
+| `ADMIN_CLIENT_ID` | `cli-admin-root` | 管理员客户端 ID |
 | `ADMIN_CLIENT_SECRET` | `` | 管理员客户端密钥（启动必填） |
 | `REDIS_URL` | `` | Redis 地址（配置后启用分布式状态存储） |
 | `REDIS_KEY_PREFIX` | `keylo` | Redis key 前缀（多环境隔离） |
@@ -413,15 +413,7 @@ docker pull ghcr.io/bruceblink/keylo:v1.3.1
 docker run --rm -p 2345:2345 \
   -v $(pwd)/keys:/app/keys:ro \
   -v $(pwd)/secrets:/run/secrets:ro \
-  -e ENVIRONMENT=production \
-  -e JWT_ISSUER=keylo \
-  -e JWT_KEY_ID=keylo-rs256-1 \
-  -e JWT_PRIVATE_KEY_PATH=/app/keys/private.pem \
-  -e JWT_PUBLIC_KEY_PATH=/app/keys/public.pem \
   -e DATABASE_URL="postgres://keylo_user@db:5432/keylo" \
-  -e DATABASE_PASSWORD_ENC_FILE="/run/secrets/postgres_password.enc" \
-  -e DATABASE_PASSWORD_KEY_FILE="/run/secrets/database_password.key" \
-  -e ADMIN_CLIENT_ID="cli-admin-root" \
   -e ADMIN_CLIENT_SECRET="replace-with-strong-admin-secret" \
   -e REDIS_URL="redis://redis:6379" \
   ghcr.io/bruceblink/keylo:v1.3.1
@@ -447,7 +439,7 @@ docker-compose logs -f postgres
 
 * `keylo` 服务默认监听 `0.0.0.0:2345`
 * compose 与本地统一使用同名变量（如 `DATABASE_URL`、`REDIS_URL`），按运行场景调整取值
-* 默认要求提供管理客户端（`ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`）
+* `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`，部署时只需提供强 `ADMIN_CLIENT_SECRET`
 * 默认挂载 `${JWT_KEYS_DIR:-./keys}` 到 `/app/keys`
 * Redis 默认启用，满足生产环境的限流、登录锁定和 OAuth state 依赖
 
@@ -526,7 +518,7 @@ docker compose logs -f keylo-service
 * 使用 RSA 2048 位或更高密钥
 * 私钥只保留在 Keylo 服务端
 * 设置 `ENVIRONMENT=production`
-* 显式配置 `ADMIN_CLIENT_ID`、`ADMIN_CLIENT_SECRET` 和 `REDIS_URL`
+* 显式配置 `ADMIN_CLIENT_SECRET` 和 `REDIS_URL`，需要自定义管理客户端 ID 时再覆盖 `ADMIN_CLIENT_ID`
 * 仅在反向代理可信且已覆盖客户端真实地址时设置 `TRUST_PROXY_HEADERS=true`
 * 为外部访问启用 HTTPS 和反向代理
 
