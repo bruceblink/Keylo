@@ -1,4 +1,4 @@
-﻿# Keylo 第三方系统与服务对接指南
+# Keylo 第三方系统与服务对接指南
 
 本文档聚焦第三方系统如何把 Keylo 作为统一认证中心接入，避免与 [API_REFERENCE.md](API_REFERENCE.md) 和 [END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md) 重复。
 
@@ -113,6 +113,13 @@ GET /.well-known/keylo-configuration
 
 申请 `service_access` Token 时，请求中的 `scope` 与 `audience` 必须落在白名单内，否则请求会被拒绝。
 
+服务客户端也可以维护集成元数据：
+
+- `integration_type`：区分 `internal`、`third_party`、`gateway`、`job` 等接入类型。
+- `introspection_allowed`：是否允许该服务调用 token 内省接口。对只需要本地 JWKS 验签的服务，可以关闭内省能力以收窄权限。
+- `token_ttl_seconds`：单服务 token TTL。高敏或外部集成服务建议配置更短 TTL。
+- `owner` / `contact`：服务归属和故障联系人，便于审计、轮换和事故处理。
+
 用户/管理 access token 的全局可接受 audience 由 `JWT_AUDIENCES` 配置，默认值为 `admin-backend,crawler`。新增内部资源服务时，应明确它消费哪类 token：
 
 - 消费用户/管理 access token：将资源服务标识加入 `JWT_AUDIENCES`，并在服务端校验 `aud`。
@@ -127,6 +134,13 @@ GET /.well-known/keylo-configuration
 - `POST /v1/admin/services/{service_id}/rotate-secret`
 
 密钥轮换接口支持两种模式：请求体提供 `new_secret` 时响应不回显明文；省略 `new_secret` 时由 Keylo 自动生成并在响应中一次性返回 `new_secret`。
+
+建议接入策略：
+
+- 内部可信服务：`integration_type=internal`，按需开启内省，TTL 可使用全局默认。
+- API 网关 / BFF：`integration_type=gateway`，通常开启内省，严格限制 `allowed_audiences`。
+- 第三方服务：`integration_type=third_party`，优先使用 JWKS 本地验签，仅在确有实时吊销需求时开启内省，并配置较短 `token_ttl_seconds`。
+- 定时任务：`integration_type=job`，只授予任务所需最小 scope。
 
 ---
 

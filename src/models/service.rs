@@ -45,6 +45,14 @@ pub struct ServiceTokenRequest {
     pub scope: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ServiceTokenPolicy {
+    pub allowed_scopes: Vec<String>,
+    pub allowed_audiences: Vec<String>,
+    pub introspection_allowed: bool,
+    pub token_ttl_seconds: Option<i64>,
+}
+
 /// 服务 Token 响应
 #[derive(Debug, Serialize)]
 pub struct ServiceTokenResponse {
@@ -135,6 +143,16 @@ pub struct RegisterServiceRequest {
     pub allowed_scopes: Vec<String>,
     /// 允许该服务访问的目标 audience 列表（"*" 表示不限）
     pub allowed_audiences: Vec<String>,
+    /// 集成类型：internal、third_party、gateway、job 等，默认 internal
+    pub integration_type: Option<String>,
+    /// 是否允许该服务调用内省接口，默认 true
+    pub introspection_allowed: Option<bool>,
+    /// 该服务 token TTL（秒）。为空时使用全局 SERVICE_TOKEN_EXPIRY_SECONDS
+    pub token_ttl_seconds: Option<i64>,
+    /// 服务负责人
+    pub owner: Option<String>,
+    /// 服务联系信息
+    pub contact: Option<String>,
 }
 
 /// 更新服务配置的请求（管理接口）
@@ -145,6 +163,11 @@ pub struct UpdateServiceRequest {
     pub allowed_scopes: Option<Vec<String>>,
     pub allowed_audiences: Option<Vec<String>>,
     pub active: Option<bool>,
+    pub integration_type: Option<String>,
+    pub introspection_allowed: Option<bool>,
+    pub token_ttl_seconds: Option<i64>,
+    pub owner: Option<String>,
+    pub contact: Option<String>,
 }
 
 /// 服务信息（管理接口响应）
@@ -156,6 +179,11 @@ pub struct ServiceInfo {
     pub allowed_scopes: Vec<String>,
     pub allowed_audiences: Vec<String>,
     pub active: bool,
+    pub integration_type: String,
+    pub introspection_allowed: bool,
+    pub token_ttl_seconds: Option<i64>,
+    pub owner: Option<String>,
+    pub contact: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

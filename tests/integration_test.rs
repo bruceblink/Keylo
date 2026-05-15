@@ -776,6 +776,137 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_service_registration_metadata_and_custom_token_ttl() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let service_id = format!("metadata-service-{}", ts);
+
+        let create_service_resp = server
+            .post("/v1/admin/services")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "service-secret",
+                "name": "Metadata Service",
+                "description": "integration metadata test service",
+                "allowed_scopes": ["read", "write"],
+                "allowed_audiences": ["inventory-svc"],
+                "integration_type": "third_party",
+                "introspection_allowed": true,
+                "token_ttl_seconds": 120,
+                "owner": "Platform",
+                "contact": "platform@example.com"
+            }))
+            .await;
+        create_service_resp.assert_status_ok();
+
+        let get_service_resp = server
+            .get(&format!("/v1/admin/services/{}", service_id))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .await;
+        get_service_resp.assert_status_ok();
+        let service_body: serde_json::Value = get_service_resp.json();
+        assert_eq!(service_body["integration_type"], "third_party");
+        assert_eq!(service_body["introspection_allowed"], true);
+        assert_eq!(service_body["token_ttl_seconds"], 120);
+        assert_eq!(service_body["owner"], "Platform");
+        assert_eq!(service_body["contact"], "platform@example.com");
+
+        let service_login_resp = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "service-secret",
+                "audience": "inventory-svc",
+                "scope": "read"
+            }))
+            .await;
+        service_login_resp.assert_status_ok();
+        let service_login_body: serde_json::Value = service_login_resp.json();
+        assert_eq!(service_login_body["expires_in"], 120);
+        assert_eq!(service_login_body["scope"], "read");
+    }
+
+    #[tokio::test]
+    async fn test_service_introspection_can_be_disabled_per_service() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let service_id = format!("no-introspect-service-{}", ts);
+
+        let create_service_resp = server
+            .post("/v1/admin/services")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "service-secret",
+                "name": "No Introspect Service",
+                "allowed_scopes": ["read"],
+                "allowed_audiences": ["admin-backend"],
+                "introspection_allowed": false
+            }))
+            .await;
+        create_service_resp.assert_status_ok();
+
+        let service_login_resp = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "service-secret",
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        service_login_resp.assert_status_ok();
+        let service_login_body: serde_json::Value = service_login_resp.json();
+        let service_access_token = service_login_body["access_token"].as_str().unwrap();
+
+        let introspect_resp = server
+            .post("/v1/service/introspect")
+            .add_header("Authorization", format!("Bearer {}", service_access_token))
+            .json(&json!({
+                "token": service_access_token
+            }))
+            .await;
+        assert_eq!(introspect_resp.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn test_service_rotate_secret_with_supplied_secret_does_not_echo_secret() {
         let server = setup_test_server().await;
 

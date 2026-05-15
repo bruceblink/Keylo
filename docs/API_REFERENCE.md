@@ -355,6 +355,19 @@
 }
 ```
 
+响应体：
+
+```json
+{
+  "access_token": "...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "read write"
+}
+```
+
+`expires_in` 优先使用服务客户端的 `token_ttl_seconds`；未配置时使用全局 `SERVICE_TOKEN_EXPIRY_SECONDS`。
+
 ### 8.2 服务受保护接口
 
 | 方法 | 路径 | 鉴权 |
@@ -378,6 +391,35 @@
 | GET | `/v1/admin/services/{service_id}` | 服务详情 |
 | PUT | `/v1/admin/services/{service_id}` | 更新服务 |
 | POST | `/v1/admin/services/{service_id}/rotate-secret` | 轮换服务密钥 |
+
+`POST /v1/admin/services` 请求体：
+
+```json
+{
+  "service_id": "order-svc",
+  "service_secret": "secret",
+  "name": "Order Service",
+  "description": "Order domain API",
+  "allowed_scopes": ["read", "write"],
+  "allowed_audiences": ["inventory-svc"],
+  "integration_type": "internal",
+  "introspection_allowed": true,
+  "token_ttl_seconds": 3600,
+  "owner": "Platform Team",
+  "contact": "platform@example.com"
+}
+```
+
+字段说明：
+
+- `allowed_scopes`：该服务最多可申请的 scope 集合。
+- `allowed_audiences`：该服务最多可访问的目标 audience 集合，`"*"` 表示不限。
+- `integration_type`：可选集成类型，默认 `internal`。建议使用 `internal`、`third_party`、`gateway`、`job` 等稳定枚举值。
+- `introspection_allowed`：是否允许该服务调用 `/v1/auth/introspect` 和 `/v1/service/introspect`，默认 `true`。
+- `token_ttl_seconds`：该服务 token TTL。为空时使用全局 `SERVICE_TOKEN_EXPIRY_SECONDS`。
+- `owner` / `contact`：运维归属信息，用于审计、轮换和事故联系。
+
+`GET /v1/admin/services/{service_id}` 与列表接口会返回上述服务元数据，但不会返回密钥或密钥 hash。
 
 `POST /v1/admin/services/{service_id}/rotate-secret`：
 

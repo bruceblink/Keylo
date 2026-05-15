@@ -215,7 +215,8 @@ pub async fn init_app_router_with_db(
 
     // service_integration_routes 需要 audience="admin-backend"，使用在 JWT 层严格校验 aud 的专用中间件
     let service_integration_routes = routes::auth::service_integration_routes()
-        .route_layer(middleware::from_fn(
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
             auth::service_integration_authorization_middleware,
         ))
         .layer(middleware::from_fn_with_state(
@@ -225,11 +226,12 @@ pub async fn init_app_router_with_db(
 
     let service_protected_routes = Router::new()
         .merge(service_integration_routes)
-        .merge(
-            routes::service::service_introspect_routes().route_layer(middleware::from_fn(
+        .merge(routes::service::service_introspect_routes().route_layer(
+            middleware::from_fn_with_state(
+                app_state.clone(),
                 auth::service_read_authorization_middleware,
-            )),
-        )
+            ),
+        ))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::service_auth_middleware,
@@ -326,7 +328,8 @@ pub async fn init_app_router_with_db_and_admin(
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
 
     let service_integration_routes = routes::auth::service_integration_routes()
-        .route_layer(middleware::from_fn(
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
             auth::service_integration_authorization_middleware,
         ))
         .layer(middleware::from_fn_with_state(
@@ -336,11 +339,12 @@ pub async fn init_app_router_with_db_and_admin(
 
     let service_protected_routes = Router::new()
         .merge(service_integration_routes)
-        .merge(
-            routes::service::service_introspect_routes().route_layer(middleware::from_fn(
+        .merge(routes::service::service_introspect_routes().route_layer(
+            middleware::from_fn_with_state(
+                app_state.clone(),
                 auth::service_read_authorization_middleware,
-            )),
-        )
+            ),
+        ))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::service_auth_middleware,

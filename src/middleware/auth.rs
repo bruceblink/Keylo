@@ -11,6 +11,10 @@ use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
 
+fn service_id_from_subject(subject: &str) -> Option<&str> {
+    subject.strip_prefix("service:")
+}
+
 fn ensure_access_claims(
     claims: &Claims,
     required_role: Option<&str>,
@@ -227,6 +231,7 @@ pub async fn service_integration_auth_middleware(
 
 /// 面向授权中心集成的服务鉴权：需要 service 角色、read scope、admin-backend audience
 pub async fn service_integration_authorization_middleware(
+    State(state): State<AppState>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -239,11 +244,34 @@ pub async fn service_integration_authorization_middleware(
         return Ok(err.into_response());
     }
 
+    let Some(service_id) = service_id_from_subject(&claims.sub) else {
+        return Ok(AuthError::InvalidToken.into_response());
+    };
+
+    let allowed = if let Some(db) = &state.db {
+        match crate::db::service::service_introspection_allowed(db, service_id).await {
+            Ok(allowed) => allowed,
+            Err(_) => {
+                return Ok(
+                    AuthError::DatabaseError("Service authorization failed".to_string())
+                        .into_response(),
+                )
+            }
+        }
+    } else {
+        false
+    };
+
+    if !allowed {
+        return Ok(AuthError::Forbidden.into_response());
+    }
+
     Ok(next.run(request).await)
 }
 
 /// 服务 token introspect：需要 service 角色和 read scope
 pub async fn service_read_authorization_middleware(
+    State(state): State<AppState>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -254,6 +282,28 @@ pub async fn service_read_authorization_middleware(
 
     if let Err(err) = ensure_service_claims(claims, Some("read"), None) {
         return Ok(err.into_response());
+    }
+
+    let Some(service_id) = service_id_from_subject(&claims.sub) else {
+        return Ok(AuthError::InvalidToken.into_response());
+    };
+
+    let allowed = if let Some(db) = &state.db {
+        match crate::db::service::service_introspection_allowed(db, service_id).await {
+            Ok(allowed) => allowed,
+            Err(_) => {
+                return Ok(
+                    AuthError::DatabaseError("Service authorization failed".to_string())
+                        .into_response(),
+                )
+            }
+        }
+    } else {
+        false
+    };
+
+    if !allowed {
+        return Ok(AuthError::Forbidden.into_response());
     }
 
     Ok(next.run(request).await)

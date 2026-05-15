@@ -3,13 +3,10 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::models::service::ServiceInfo;
+use crate::models::service::{ServiceInfo, ServiceTokenPolicy};
 
 pub enum ServiceCredentialVerification {
-    Authorized {
-        allowed_scopes: Vec<String>,
-        allowed_audiences: Vec<String>,
-    },
+    Authorized(ServiceTokenPolicy),
     WrongSecret,
     NotAuthorized,
 }
@@ -23,6 +20,11 @@ pub async fn create_service_client(
     description: Option<&str>,
     allowed_scopes: &[String],
     allowed_audiences: &[String],
+    integration_type: &str,
+    introspection_allowed: bool,
+    token_ttl_seconds: Option<i64>,
+    owner: Option<&str>,
+    contact: Option<&str>,
 ) -> Result<()> {
     let secret_hash = hash(service_secret, DEFAULT_COST)?;
     let scopes: Vec<&str> = allowed_scopes.iter().map(|s| s.as_str()).collect();
@@ -30,8 +32,9 @@ pub async fn create_service_client(
 
     sqlx::query(
         "INSERT INTO service_clients
-             (service_id, secret_hash, name, description, allowed_scopes, allowed_audiences)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+             (service_id, secret_hash, name, description, allowed_scopes, allowed_audiences,
+              integration_type, introspection_allowed, token_ttl_seconds, owner, contact)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(service_id)
     .bind(&secret_hash)
@@ -39,6 +42,11 @@ pub async fn create_service_client(
     .bind(description)
     .bind(&scopes)
     .bind(&audiences)
+    .bind(integration_type)
+    .bind(introspection_allowed)
+    .bind(token_ttl_seconds)
+    .bind(owner)
+    .bind(contact)
     .execute(pool)
     .await?;
 
@@ -52,7 +60,8 @@ pub async fn verify_service_credentials(
     service_secret: &str,
 ) -> Result<ServiceCredentialVerification> {
     let row = sqlx::query(
-        "SELECT secret_hash, allowed_scopes, allowed_audiences
+        "SELECT secret_hash, allowed_scopes, allowed_audiences, introspection_allowed,
+                token_ttl_seconds
          FROM service_clients
          WHERE service_id = $1 AND active = TRUE",
     )
@@ -67,10 +76,14 @@ pub async fn verify_service_credentials(
             if verify(service_secret, &secret_hash)? {
                 let scopes: Vec<String> = r.get("allowed_scopes");
                 let audiences: Vec<String> = r.get("allowed_audiences");
-                Ok(ServiceCredentialVerification::Authorized {
-                    allowed_scopes: scopes,
-                    allowed_audiences: audiences,
-                })
+                Ok(ServiceCredentialVerification::Authorized(
+                    ServiceTokenPolicy {
+                        allowed_scopes: scopes,
+                        allowed_audiences: audiences,
+                        introspection_allowed: r.get("introspection_allowed"),
+                        token_ttl_seconds: r.get("token_ttl_seconds"),
+                    },
+                ))
             } else {
                 Ok(ServiceCredentialVerification::WrongSecret)
             }
@@ -82,6 +95,7 @@ pub async fn verify_service_credentials(
 pub async fn get_service_client(pool: &PgPool, service_id: &str) -> Result<Option<ServiceInfo>> {
     let row = sqlx::query(
         "SELECT service_id, name, description, allowed_scopes, allowed_audiences, active,
+                integration_type, introspection_allowed, token_ttl_seconds, owner, contact,
                 extract(epoch from created_at)::bigint as created_at,
                 extract(epoch from updated_at)::bigint as updated_at
          FROM service_clients
@@ -98,6 +112,11 @@ pub async fn get_service_client(pool: &PgPool, service_id: &str) -> Result<Optio
         allowed_scopes: r.get("allowed_scopes"),
         allowed_audiences: r.get("allowed_audiences"),
         active: r.get("active"),
+        integration_type: r.get("integration_type"),
+        introspection_allowed: r.get("introspection_allowed"),
+        token_ttl_seconds: r.get("token_ttl_seconds"),
+        owner: r.get("owner"),
+        contact: r.get("contact"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     }))
@@ -107,6 +126,7 @@ pub async fn get_service_client(pool: &PgPool, service_id: &str) -> Result<Optio
 pub async fn list_service_clients(pool: &PgPool) -> Result<Vec<ServiceInfo>> {
     let rows = sqlx::query(
         "SELECT service_id, name, description, allowed_scopes, allowed_audiences, active,
+                integration_type, introspection_allowed, token_ttl_seconds, owner, contact,
                 extract(epoch from created_at)::bigint as created_at,
                 extract(epoch from updated_at)::bigint as updated_at
          FROM service_clients
@@ -124,6 +144,11 @@ pub async fn list_service_clients(pool: &PgPool) -> Result<Vec<ServiceInfo>> {
             allowed_scopes: r.get("allowed_scopes"),
             allowed_audiences: r.get("allowed_audiences"),
             active: r.get("active"),
+            integration_type: r.get("integration_type"),
+            introspection_allowed: r.get("introspection_allowed"),
+            token_ttl_seconds: r.get("token_ttl_seconds"),
+            owner: r.get("owner"),
+            contact: r.get("contact"),
             created_at: r.get("created_at"),
             updated_at: r.get("updated_at"),
         })
@@ -139,6 +164,11 @@ pub async fn update_service_client(
     allowed_scopes: Option<&[String]>,
     allowed_audiences: Option<&[String]>,
     active: Option<bool>,
+    integration_type: Option<&str>,
+    introspection_allowed: Option<bool>,
+    token_ttl_seconds: Option<i64>,
+    owner: Option<&str>,
+    contact: Option<&str>,
 ) -> Result<bool> {
     let scopes: Option<Vec<&str>> = allowed_scopes.map(|s| s.iter().map(|x| x.as_str()).collect());
     let audiences: Option<Vec<&str>> =
@@ -151,6 +181,11 @@ pub async fn update_service_client(
              allowed_scopes    = COALESCE($4, allowed_scopes),
              allowed_audiences = COALESCE($5, allowed_audiences),
              active            = COALESCE($6, active),
+             integration_type  = COALESCE($7, integration_type),
+             introspection_allowed = COALESCE($8, introspection_allowed),
+             token_ttl_seconds = COALESCE($9, token_ttl_seconds),
+             owner             = COALESCE($10, owner),
+             contact           = COALESCE($11, contact),
              updated_at        = NOW()
          WHERE service_id = $1",
     )
@@ -160,10 +195,30 @@ pub async fn update_service_client(
     .bind(scopes)
     .bind(audiences)
     .bind(active)
+    .bind(integration_type)
+    .bind(introspection_allowed)
+    .bind(token_ttl_seconds)
+    .bind(owner)
+    .bind(contact)
     .execute(pool)
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+pub async fn service_introspection_allowed(pool: &PgPool, service_id: &str) -> Result<bool> {
+    let row = sqlx::query(
+        "SELECT introspection_allowed
+         FROM service_clients
+         WHERE service_id = $1 AND active = TRUE",
+    )
+    .bind(service_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row
+        .map(|r| r.get::<bool, _>("introspection_allowed"))
+        .unwrap_or(false))
 }
 
 /// 轮换服务密钥

@@ -49,15 +49,20 @@ pub async fn service_token(
                 .await;
                 return Err(AuthError::WrongCredentials);
             }
-            svc_db::ServiceCredentialVerification::Authorized {
-                allowed_scopes,
-                allowed_audiences,
-            } => {
-                let granted_scopes = resolve_scopes(&payload.scope, &allowed_scopes)?;
-                let audience = resolve_audience(&payload.audience, &allowed_audiences)?;
+            svc_db::ServiceCredentialVerification::Authorized(policy) => {
+                let granted_scopes = resolve_scopes(&payload.scope, &policy.allowed_scopes)?;
+                let audience = resolve_audience(&payload.audience, &policy.allowed_audiences)?;
+                let expires_in = policy
+                    .token_ttl_seconds
+                    .unwrap_or(state.config.service_token_expiry_seconds);
 
-                let token =
-                    mint_service_token(&state, &payload.service_id, &granted_scopes, &audience)?;
+                let token = mint_service_token(
+                    &state,
+                    &payload.service_id,
+                    &granted_scopes,
+                    &audience,
+                    expires_in,
+                )?;
 
                 audit_service_event(
                     &state,
@@ -71,7 +76,6 @@ pub async fn service_token(
                 )
                 .await;
 
-                let expires_in = state.config.service_token_expiry_seconds;
                 return Ok(Json(ServiceTokenResponse::new(
                     token,
                     expires_in,
@@ -144,8 +148,15 @@ pub async fn register_service(
     {
         return Err(AuthError::MissingCredentials);
     }
+    if payload
+        .token_ttl_seconds
+        .is_some_and(|ttl| ttl <= 0 || ttl > state.config.refresh_token_expiry_seconds)
+    {
+        return Err(AuthError::Forbidden);
+    }
 
     let db = require_db(&state)?;
+    let integration_type = normalized_or_default(payload.integration_type.as_deref(), "internal");
 
     svc_db::create_service_client(
         db,
@@ -155,6 +166,11 @@ pub async fn register_service(
         payload.description.as_deref(),
         &payload.allowed_scopes,
         &payload.allowed_audiences,
+        &integration_type,
+        payload.introspection_allowed.unwrap_or(true),
+        payload.token_ttl_seconds,
+        payload.owner.as_deref(),
+        payload.contact.as_deref(),
     )
     .await
     .map_err(|e| {
@@ -189,6 +205,16 @@ pub async fn update_service(
     Json(payload): Json<UpdateServiceRequest>,
 ) -> Result<Json<Value>, AuthError> {
     let db = require_db(&state)?;
+    if payload
+        .token_ttl_seconds
+        .is_some_and(|ttl| ttl <= 0 || ttl > state.config.refresh_token_expiry_seconds)
+    {
+        return Err(AuthError::Forbidden);
+    }
+    let integration_type = payload
+        .integration_type
+        .as_deref()
+        .and_then(non_empty_trimmed);
 
     let updated = svc_db::update_service_client(
         db,
@@ -198,6 +224,11 @@ pub async fn update_service(
         payload.allowed_scopes.as_deref(),
         payload.allowed_audiences.as_deref(),
         payload.active,
+        integration_type.as_deref(),
+        payload.introspection_allowed,
+        payload.token_ttl_seconds,
+        payload.owner.as_deref(),
+        payload.contact.as_deref(),
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
@@ -273,9 +304,10 @@ pub fn mint_service_token(
     service_id: &str,
     scopes: &[String],
     audience: &str,
+    expires_in: i64,
 ) -> Result<String, AuthError> {
     let now = Utc::now().timestamp();
-    let exp = now + state.config.service_token_expiry_seconds;
+    let exp = now + expires_in;
 
     let claims = ServiceClaims {
         sub: format!("service:{}", service_id),
@@ -351,6 +383,21 @@ fn resolve_audience(requested: &Option<String>, allowed: &[String]) -> Result<St
             }
         }
     }
+}
+
+fn non_empty_trimmed(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn normalized_or_default(value: Option<&str>, default: &str) -> String {
+    value
+        .and_then(non_empty_trimmed)
+        .unwrap_or_else(|| default.to_string())
 }
 
 async fn audit_service_event(
