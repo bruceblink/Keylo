@@ -846,6 +846,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_service_registration_normalizes_scope_and_audience_lists() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let service_id = format!("normalized-service-{}", ts);
+
+        let create_service_resp = server
+            .post("/v1/admin/services")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "service-secret",
+                "name": "Normalized Service",
+                "allowed_scopes": [" write ", "read", "write"],
+                "allowed_audiences": [" inventory-svc ", "inventory-svc"]
+            }))
+            .await;
+        create_service_resp.assert_status_ok();
+
+        let get_service_resp = server
+            .get(&format!("/v1/admin/services/{}", service_id))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .await;
+        get_service_resp.assert_status_ok();
+        let service_body: serde_json::Value = get_service_resp.json();
+        assert_eq!(service_body["allowed_scopes"], json!(["read", "write"]));
+        assert_eq!(service_body["allowed_audiences"], json!(["inventory-svc"]));
+    }
+
+    #[tokio::test]
+    async fn test_service_registration_rejects_invalid_scope_list() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let service_id = format!(
+            "invalid-scope-service-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+
+        let create_service_resp = server
+            .post("/v1/admin/services")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "service-secret",
+                "name": "Invalid Scope Service",
+                "allowed_scopes": ["read write"],
+                "allowed_audiences": ["inventory-svc"]
+            }))
+            .await;
+        assert_eq!(create_service_resp.status_code(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = create_service_resp.json();
+        assert_eq!(body["error"], "invalid_request");
+    }
+
+    #[tokio::test]
     async fn test_service_introspection_can_be_disabled_per_service() {
         let server = setup_test_server().await;
 

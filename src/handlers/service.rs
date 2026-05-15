@@ -9,6 +9,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 /// POST /v1/service/token
@@ -152,11 +153,18 @@ pub async fn register_service(
         .token_ttl_seconds
         .is_some_and(|ttl| ttl <= 0 || ttl > state.config.refresh_token_expiry_seconds)
     {
-        return Err(AuthError::Forbidden);
+        return Err(AuthError::InvalidRequest(format!(
+            "token_ttl_seconds must be between 1 and {}",
+            state.config.refresh_token_expiry_seconds
+        )));
     }
+    let allowed_scopes = normalize_list("allowed_scopes", payload.allowed_scopes, false)?;
+    let allowed_audiences = normalize_list("allowed_audiences", payload.allowed_audiences, true)?;
 
     let db = require_db(&state)?;
     let integration_type = normalized_or_default(payload.integration_type.as_deref(), "internal");
+    let owner = payload.owner.as_deref().and_then(non_empty_trimmed);
+    let contact = payload.contact.as_deref().and_then(non_empty_trimmed);
 
     svc_db::create_service_client(
         db,
@@ -164,13 +172,13 @@ pub async fn register_service(
         &payload.service_secret,
         &payload.name,
         payload.description.as_deref(),
-        &payload.allowed_scopes,
-        &payload.allowed_audiences,
+        &allowed_scopes,
+        &allowed_audiences,
         &integration_type,
         payload.introspection_allowed.unwrap_or(true),
         payload.token_ttl_seconds,
-        payload.owner.as_deref(),
-        payload.contact.as_deref(),
+        owner.as_deref(),
+        contact.as_deref(),
     )
     .await
     .map_err(|e| {
@@ -209,26 +217,39 @@ pub async fn update_service(
         .token_ttl_seconds
         .is_some_and(|ttl| ttl <= 0 || ttl > state.config.refresh_token_expiry_seconds)
     {
-        return Err(AuthError::Forbidden);
+        return Err(AuthError::InvalidRequest(format!(
+            "token_ttl_seconds must be between 1 and {}",
+            state.config.refresh_token_expiry_seconds
+        )));
     }
     let integration_type = payload
         .integration_type
         .as_deref()
         .and_then(non_empty_trimmed);
+    let allowed_scopes = payload
+        .allowed_scopes
+        .map(|values| normalize_list("allowed_scopes", values, false))
+        .transpose()?;
+    let allowed_audiences = payload
+        .allowed_audiences
+        .map(|values| normalize_list("allowed_audiences", values, true))
+        .transpose()?;
+    let owner = payload.owner.as_deref().and_then(non_empty_trimmed);
+    let contact = payload.contact.as_deref().and_then(non_empty_trimmed);
 
     let updated = svc_db::update_service_client(
         db,
         &service_id,
         payload.name.as_deref(),
         payload.description.as_deref(),
-        payload.allowed_scopes.as_deref(),
-        payload.allowed_audiences.as_deref(),
+        allowed_scopes.as_deref(),
+        allowed_audiences.as_deref(),
         payload.active,
         integration_type.as_deref(),
         payload.introspection_allowed,
         payload.token_ttl_seconds,
-        payload.owner.as_deref(),
-        payload.contact.as_deref(),
+        owner.as_deref(),
+        contact.as_deref(),
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
@@ -400,6 +421,47 @@ fn normalized_or_default(value: Option<&str>, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+fn normalize_list(
+    field_name: &str,
+    values: Vec<String>,
+    allow_wildcard: bool,
+) -> Result<Vec<String>, AuthError> {
+    let mut normalized = BTreeSet::new();
+
+    for value in values {
+        let item = value.trim();
+        if item.is_empty() {
+            return Err(AuthError::InvalidRequest(format!(
+                "{} must not contain empty values",
+                field_name
+            )));
+        }
+        if item.split_whitespace().count() != 1 {
+            return Err(AuthError::InvalidRequest(format!(
+                "{} values must not contain whitespace",
+                field_name
+            )));
+        }
+        if item == "*" && !allow_wildcard {
+            return Err(AuthError::InvalidRequest(format!(
+                "{} does not allow wildcard values",
+                field_name
+            )));
+        }
+
+        normalized.insert(item.to_string());
+    }
+
+    if normalized.is_empty() {
+        return Err(AuthError::InvalidRequest(format!(
+            "{} must contain at least one value",
+            field_name
+        )));
+    }
+
+    Ok(normalized.into_iter().collect())
+}
+
 async fn audit_service_event(
     state: &AppState,
     event_type: &str,
@@ -410,5 +472,45 @@ async fn audit_service_event(
         if let Err(err) = crate::db::create_audit_log(db, event_type, actor, detail).await {
             tracing::warn!("Failed to write service audit log: {}", err);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_list_trims_deduplicates_and_sorts_values() {
+        let values = vec![
+            " write ".to_string(),
+            "read".to_string(),
+            "write".to_string(),
+        ];
+
+        let normalized = normalize_list("allowed_scopes", values, false).unwrap();
+
+        assert_eq!(normalized, vec!["read".to_string(), "write".to_string()]);
+    }
+
+    #[test]
+    fn normalize_list_rejects_empty_values() {
+        let err =
+            normalize_list("allowed_scopes", vec!["read".into(), " ".into()], false).unwrap_err();
+
+        assert!(matches!(err, AuthError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn normalize_list_rejects_scope_wildcard() {
+        let err = normalize_list("allowed_scopes", vec!["*".into()], false).unwrap_err();
+
+        assert!(matches!(err, AuthError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn normalize_list_allows_audience_wildcard() {
+        let normalized = normalize_list("allowed_audiences", vec!["*".into()], true).unwrap();
+
+        assert_eq!(normalized, vec!["*".to_string()]);
     }
 }

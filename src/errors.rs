@@ -34,6 +34,7 @@ pub enum AuthError {
     ServiceClientNotAuthorized,
     TooManyRequests,
     Conflict(String),
+    InvalidRequest(String),
     InternalServerError(String),
 }
 
@@ -61,6 +62,7 @@ impl fmt::Display for AuthError {
             }
             AuthError::TooManyRequests => write!(f, "Too many requests"),
             AuthError::Conflict(msg) => write!(f, "Conflict: {}", msg),
+            AuthError::InvalidRequest(msg) => write!(f, "Invalid request: {}", msg),
             AuthError::InternalServerError(msg) => write!(f, "Internal server error: {}", msg),
         }
     }
@@ -185,6 +187,9 @@ impl IntoResponse for AuthError {
                 "Too many requests".to_string(),
             ),
             AuthError::Conflict(message) => (StatusCode::CONFLICT, 1020, "conflict", message),
+            AuthError::InvalidRequest(message) => {
+                (StatusCode::BAD_REQUEST, 1021, "invalid_request", message)
+            }
             AuthError::InternalServerError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 1010,

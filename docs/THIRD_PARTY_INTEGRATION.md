@@ -112,6 +112,7 @@ GET /.well-known/keylo-configuration
 - `allowed_audiences`
 
 申请 `service_access` Token 时，请求中的 `scope` 与 `audience` 必须落在白名单内，否则请求会被拒绝。
+注册或更新服务客户端时，Keylo 会对这两个列表执行 trim、去重和排序。列表项不能留空，也不能包含空白字符；`allowed_scopes` 不接受 `*`，`allowed_audiences` 可以使用 `*` 表示目标 audience 不限。
 
 服务客户端也可以维护集成元数据：
 

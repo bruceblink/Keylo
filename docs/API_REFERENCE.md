@@ -419,6 +419,14 @@
 - `token_ttl_seconds`：该服务 token TTL。为空时使用全局 `SERVICE_TOKEN_EXPIRY_SECONDS`。
 - `owner` / `contact`：运维归属信息，用于审计、轮换和事故联系。
 
+输入约束：
+
+- `allowed_scopes` 与 `allowed_audiences` 至少包含一个值。
+- 列表项会自动 trim、去重并排序。
+- 列表项不能是空字符串，也不能包含空白字符；多个 scope 请用数组多项表达，不要写成 `"read write"`。
+- `allowed_audiences` 可使用 `*` 通配；`allowed_scopes` 不允许使用 `*`。
+- `token_ttl_seconds` 必须大于 0，且不能超过 `REFRESH_TOKEN_EXPIRY_SECONDS`。
+
 `GET /v1/admin/services/{service_id}` 与列表接口会返回上述服务元数据，但不会返回密钥或密钥 hash。
 
 `POST /v1/admin/services/{service_id}/rotate-secret`：
