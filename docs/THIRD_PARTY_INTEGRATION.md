@@ -47,6 +47,14 @@ Refresh Token 每次刷新都会被原子消费，第三方系统必须用刷新
 
 ## 3. 推荐接入方式
 
+第三方服务可以先读取 Keylo 的轻量发现配置：
+
+```text
+GET /.well-known/keylo-configuration
+```
+
+该接口返回 issuer、JWKS 地址、内省地址、服务 token 地址、支持的 token 类型、稳定 claims 和当前允许的 access token audiences。它不是完整 OIDC discovery 文档，而是 Keylo 面向轻量统一鉴权/授权中心的集成契约。
+
 ### 3.1 后台管理系统
 
 - 如果系统本身是管理后台，优先使用管理客户端调用 Keylo 管理接口
@@ -84,6 +92,7 @@ Refresh Token 每次刷新都会被原子消费，第三方系统必须用刷新
 - `jti`
 
 - `sub` 用于主体标识（如 `user:<username>`），`uid` 用于稳定用户主键关联（推荐优先使用）。
+- 第三方系统应忽略未知 claims，避免依赖未文档化字段。
 
 1. 校验 Bearer Token 格式
 2. 验签并检查 `iss` / `exp`
@@ -104,6 +113,11 @@ Refresh Token 每次刷新都会被原子消费，第三方系统必须用刷新
 
 申请 `service_access` Token 时，请求中的 `scope` 与 `audience` 必须落在白名单内，否则请求会被拒绝。
 
+用户/管理 access token 的全局可接受 audience 由 `JWT_AUDIENCES` 配置，默认值为 `admin-backend,crawler`。新增内部资源服务时，应明确它消费哪类 token：
+
+- 消费用户/管理 access token：将资源服务标识加入 `JWT_AUDIENCES`，并在服务端校验 `aud`。
+- 消费服务间 `service_access` token：在服务客户端上维护 `allowed_audiences`，申请 token 时指定目标 `audience`。
+
 常用管理入口：
 
 - `POST /v1/admin/services`
@@ -121,12 +135,13 @@ Refresh Token 每次刷新都会被原子消费，第三方系统必须用刷新
 推荐用以下路径完成第三方联调：
 
 1. 按 [END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md) 初始化 Keylo
-2. 获取管理客户端 Token
-3. 创建用户、角色和权限
-4. 注册服务客户端
-5. 获取用户 Token 与 `service_access` Token
-6. 验证 `/.well-known/jwks.json`
-7. 验证 `/v1/auth/introspect` 或 `/v1/service/introspect`
+2. 读取 `/.well-known/keylo-configuration`
+3. 获取管理客户端 Token
+4. 创建用户、角色和权限
+5. 注册服务客户端
+6. 获取用户 Token 与 `service_access` Token
+7. 验证 `/.well-known/jwks.json`
+8. 验证 `/v1/auth/introspect` 或 `/v1/service/introspect`
 
 具体请求体和响应体请直接查阅 [API_REFERENCE.md](API_REFERENCE.md)。
 

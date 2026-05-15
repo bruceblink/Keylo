@@ -12,6 +12,7 @@ static DOTENV_INIT: Once = Once::new();
 
 const DEFAULT_JWT_ISSUER: &str = "keylo";
 const DEFAULT_JWT_KEY_ID: &str = "keylo-rs256-1";
+const DEFAULT_JWT_AUDIENCES: &str = "admin-backend,crawler";
 const DEFAULT_ADMIN_CLIENT_ID: &str = "cli-admin-root";
 const DEFAULT_JWT_PRIVATE_KEY_PATH: &str = "./keys/private.pem";
 const DEFAULT_JWT_PUBLIC_KEY_PATH: &str = "./keys/public.pem";
@@ -138,6 +139,15 @@ pub fn build_database_url(base_url: String, password: Option<String>) -> String 
     )
 }
 
+fn parse_csv_env(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 pub fn database_password_from_env_result() -> Result<Option<String>, String> {
     let encrypted_password =
         read_env_or_file("DATABASE_PASSWORD_ENC", "DATABASE_PASSWORD_ENC_FILE")
@@ -228,6 +238,8 @@ pub struct Config {
     pub jwt_issuer: String,
     /// JWT Key ID
     pub jwt_key_id: String,
+    /// JWT audiences accepted for user/admin access tokens
+    pub jwt_audiences: Vec<String>,
     /// JWT 私钥 PEM（RS256）
     pub jwt_private_key_pem: String,
     /// JWT 公钥 PEM（RS256）
@@ -300,6 +312,9 @@ impl Config {
 
         let jwt_issuer = env::var("JWT_ISSUER").unwrap_or_else(|_| DEFAULT_JWT_ISSUER.to_string());
         let jwt_key_id = env::var("JWT_KEY_ID").unwrap_or_else(|_| DEFAULT_JWT_KEY_ID.to_string());
+        let jwt_audiences = parse_csv_env(
+            &env::var("JWT_AUDIENCES").unwrap_or_else(|_| DEFAULT_JWT_AUDIENCES.to_string()),
+        );
         let jwt_private_key_pem = read_env_or_file_with_default_path(
             "JWT_PRIVATE_KEY_PEM",
             "JWT_PRIVATE_KEY_PATH",
@@ -405,6 +420,7 @@ impl Config {
         Self {
             jwt_issuer,
             jwt_key_id,
+            jwt_audiences,
             jwt_private_key_pem,
             jwt_public_key_pem,
             jwt_using_default_dev_keys,
@@ -519,6 +535,9 @@ impl Config {
     fn validate_common(&self, errors: &mut Vec<String>) {
         require_non_empty(errors, "JWT_ISSUER", &self.jwt_issuer);
         require_non_empty(errors, "JWT_KEY_ID", &self.jwt_key_id);
+        if self.jwt_audiences.is_empty() {
+            errors.push("JWT_AUDIENCES must include at least one audience".to_string());
+        }
 
         if self.jwt_private_key_pem.trim().is_empty() {
             errors.push(
@@ -655,6 +674,7 @@ mod tests {
         Config {
             jwt_issuer: "keylo".to_string(),
             jwt_key_id: "keylo-rs256-1".to_string(),
+            jwt_audiences: vec!["admin-backend".to_string(), "crawler".to_string()],
             jwt_private_key_pem: "private-key".to_string(),
             jwt_public_key_pem: "public-key".to_string(),
             jwt_using_default_dev_keys: false,
@@ -809,6 +829,26 @@ mod tests {
     #[test]
     fn config_uses_conventional_admin_client_id() {
         assert_eq!(default_admin_client_id(), "cli-admin-root");
+    }
+
+    #[test]
+    fn config_parses_jwt_audiences_from_csv() {
+        std::env::set_var(
+            "JWT_AUDIENCES",
+            "admin-backend, inventory-svc,, payment-svc ",
+        );
+
+        let config = Config::from_env();
+
+        std::env::remove_var("JWT_AUDIENCES");
+        assert_eq!(
+            config.jwt_audiences,
+            vec![
+                "admin-backend".to_string(),
+                "inventory-svc".to_string(),
+                "payment-svc".to_string()
+            ]
+        );
     }
 
     #[test]

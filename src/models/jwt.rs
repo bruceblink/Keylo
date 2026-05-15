@@ -136,6 +136,7 @@ pub struct Keys {
     decoding: DecodingKey,
     algorithm: Algorithm,
     issuer: String,
+    audiences: Vec<String>,
     key_id: String,
     jwks: JwksDocument,
 }
@@ -157,6 +158,7 @@ impl Keys {
             decoding,
             algorithm: Algorithm::RS256,
             issuer: config.jwt_issuer.clone(),
+            audiences: config.jwt_audiences.clone(),
             key_id: config.jwt_key_id.clone(),
             jwks: JwksDocument {
                 keys: vec![Jwk {
@@ -184,7 +186,12 @@ impl Keys {
 
     pub fn decode_token(&self, token: &str) -> Result<Claims, AuthError> {
         let mut validation = Validation::new(self.algorithm);
-        validation.set_audience(&["admin-backend", "crawler"]);
+        let audiences = self
+            .audiences
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        validation.set_audience(&audiences);
         validation.set_issuer(&[self.issuer.as_str()]);
 
         decode::<Claims>(token, &self.decoding, &validation)

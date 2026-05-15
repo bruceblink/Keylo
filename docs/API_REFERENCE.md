@@ -52,11 +52,33 @@
 | GET | `/readyz` | 否 | 就绪检查 |
 | GET | `/protected` | 是（access） | 受保护示例接口 |
 
-### 2.2 JWT 公钥
+### 2.2 发现配置与 JWT 公钥
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
+| GET | `/.well-known/keylo-configuration` | 否 | Keylo 轻量发现配置 |
 | GET | `/.well-known/jwks.json` | 否 | JWKS 公钥文档 |
+
+`/.well-known/keylo-configuration` 用于第三方服务发现 Keylo 的核心接入端点。它不是完整 OIDC discovery 文档，而是 Keylo 面向轻量统一鉴权场景提供的稳定集成契约。
+
+示例响应：
+
+```json
+{
+  "issuer": "keylo",
+  "jwks_uri": "http://127.0.0.1:2345/.well-known/jwks.json",
+  "introspection_endpoint": "http://127.0.0.1:2345/v1/auth/introspect",
+  "service_token_endpoint": "http://127.0.0.1:2345/v1/service/token",
+  "service_introspection_endpoint": "http://127.0.0.1:2345/v1/service/introspect",
+  "user_token_endpoint": "http://127.0.0.1:2345/v1/auth/token",
+  "admin_token_endpoint": "http://127.0.0.1:2345/v1/admin/token",
+  "supported_token_types": ["access", "refresh", "service_access"],
+  "supported_claims": ["iss", "sub", "aud", "exp", "iat", "jti", "scope", "role", "token_type", "uid"],
+  "supported_signing_algorithms": ["RS256"],
+  "supported_audiences": ["admin-backend", "crawler"],
+  "documentation_uri": "http://127.0.0.1:2345/docs/THIRD_PARTY_INTEGRATION.md"
+}
+```
 
 ---
 
@@ -419,6 +441,16 @@ Access token 关键字段：
 - `exp`：过期时间（Unix 时间戳，秒）。当前时间超过该值后 token 无效。
 - `iat`：签发时间（Unix 时间戳，秒）。可用于排查时钟漂移、审计与会话时序分析。
 - `jti`：令牌唯一 ID（JWT ID）。用于黑名单吊销、幂等追踪与审计定位。
+
+### 10.1 稳定契约与扩展字段
+
+第三方服务应只把以下字段作为稳定契约消费：`iss`、`sub`、`aud`、`exp`、`iat`、`jti`、`scope`、`role`、`token_type`、`uid`。
+
+Keylo 后续可能在 token 中增加更多字段。第三方服务应忽略未知 claims，避免将未文档化字段作为授权依据。
+
+### 10.2 Audience 配置
+
+Keylo 使用 `JWT_AUDIENCES` 配置用户/管理 access token 可接受的 audience 白名单，默认值为 `admin-backend,crawler`。新增资源服务时，建议先把服务标识加入 `JWT_AUDIENCES` 或通过服务客户端的 `allowed_audiences` 管理服务 token 的目标 audience。
 
 ## 11. 后端校验建议顺序（推荐）
 

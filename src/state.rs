@@ -58,8 +58,7 @@ impl AppState {
         let mut clients = HashMap::new();
         clients.insert("web".into(), "web-secret".into());
 
-        // 默认允许的 audience
-        let audiences = vec!["admin-backend".into(), "crawler".into()];
+        let audiences = config.jwt_audiences.clone();
         let redis_client = config
             .redis_url
             .as_deref()

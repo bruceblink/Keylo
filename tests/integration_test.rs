@@ -157,6 +157,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_keylo_configuration_endpoint() {
+        let config = Config {
+            server_addr: "127.0.0.1".to_string(),
+            server_port: 3456,
+            jwt_audiences: vec!["admin-backend".to_string(), "inventory-svc".to_string()],
+            ..test_config()
+        };
+        let server = setup_test_server_with_config(config).await;
+
+        let response = server.get("/.well-known/keylo-configuration").await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["issuer"], "keylo");
+        assert_eq!(
+            body["jwks_uri"],
+            "http://127.0.0.1:3456/.well-known/jwks.json"
+        );
+        assert_eq!(
+            body["introspection_endpoint"],
+            "http://127.0.0.1:3456/v1/auth/introspect"
+        );
+        assert_eq!(body["supported_signing_algorithms"], json!(["RS256"]));
+        assert_eq!(
+            body["supported_token_types"],
+            json!(["access", "refresh", "service_access"])
+        );
+        assert_eq!(
+            body["supported_audiences"],
+            json!(["admin-backend", "inventory-svc"])
+        );
+        assert!(body["supported_claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|claim| claim == "token_type"));
+    }
+
+    #[tokio::test]
     async fn test_invalid_auth_request() {
         let server = setup_test_server().await;
 

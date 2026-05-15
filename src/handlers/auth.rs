@@ -2,8 +2,8 @@ use crate::db::user::get_user_by_username;
 use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
     AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest,
-    CreateClientRequest, IntrospectTokenRequest, MeResponse, RefreshTokenRequest,
-    RotateClientSecretRequest, TokenIntrospectResponse, UpdateClientRequest,
+    CreateClientRequest, IntrospectTokenRequest, KeyloConfiguration, MeResponse,
+    RefreshTokenRequest, RotateClientSecretRequest, TokenIntrospectResponse, UpdateClientRequest,
 };
 use crate::state::AppState;
 use crate::utils;
@@ -822,6 +822,41 @@ pub async fn auth_introspect(
 }
 pub async fn auth_jwks(State(state): State<AppState>) -> Json<crate::models::JwksDocument> {
     Json(state.jwt_keys.jwks())
+}
+
+pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloConfiguration> {
+    let issuer = state.config.jwt_issuer.clone();
+    let base_url = state.config.server_url();
+
+    Json(KeyloConfiguration {
+        issuer,
+        jwks_uri: format!("{}/.well-known/jwks.json", base_url),
+        introspection_endpoint: format!("{}/v1/auth/introspect", base_url),
+        service_token_endpoint: format!("{}/v1/service/token", base_url),
+        service_introspection_endpoint: format!("{}/v1/service/introspect", base_url),
+        user_token_endpoint: format!("{}/v1/auth/token", base_url),
+        admin_token_endpoint: format!("{}/v1/admin/token", base_url),
+        supported_token_types: vec![
+            "access".to_string(),
+            "refresh".to_string(),
+            "service_access".to_string(),
+        ],
+        supported_claims: vec![
+            "iss".to_string(),
+            "sub".to_string(),
+            "aud".to_string(),
+            "exp".to_string(),
+            "iat".to_string(),
+            "jti".to_string(),
+            "scope".to_string(),
+            "role".to_string(),
+            "token_type".to_string(),
+            "uid".to_string(),
+        ],
+        supported_signing_algorithms: vec!["RS256".to_string()],
+        supported_audiences: state.config.jwt_audiences.clone(),
+        documentation_uri: format!("{}/docs/THIRD_PARTY_INTEGRATION.md", base_url),
+    })
 }
 
 pub async fn auth_refresh(

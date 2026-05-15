@@ -1,6 +1,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
+pub struct KeyloConfiguration {
+    pub issuer: String,
+    pub jwks_uri: String,
+    pub introspection_endpoint: String,
+    pub service_token_endpoint: String,
+    pub service_introspection_endpoint: String,
+    pub user_token_endpoint: String,
+    pub admin_token_endpoint: String,
+    pub supported_token_types: Vec<String>,
+    pub supported_claims: Vec<String>,
+    pub supported_signing_algorithms: Vec<String>,
+    pub supported_audiences: Vec<String>,
+    pub documentation_uri: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AuthBody {
     pub access_token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
