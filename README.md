@@ -129,6 +129,8 @@ cargo tarpaulin --out Html
 
 第三方系统对接 Keylo 的登录流程、Token 内省和服务接入方式见 [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)。
 
+Spring、Node、Go、Rust 等资源服务的最小接入模板见 [docs/integrations/README.md](docs/integrations/README.md)。
+
 多客户端统一用户池与 API 级授权接入说明见 [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)。
 
 完整接口清单见 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)。
@@ -232,6 +234,7 @@ RUST_LOG=keylo=debug cargo run
 * 全量接口与鉴权规则： [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 * 多客户端统一用户池与 RBAC： [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
 * 第三方系统对接： [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)
+* 接入模板： [docs/integrations/README.md](docs/integrations/README.md)
 * AgileBoot 对接： [docs/AGILEBOOT_INTEGRATION.md](docs/AGILEBOOT_INTEGRATION.md)
 
 ### 常用接口（快速确认）
