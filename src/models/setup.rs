@@ -32,14 +32,11 @@ pub struct SetupStatusResponse {
 pub struct SetupInitializeRequest {
     pub admin_client_id: Option<String>,
     pub admin_client_secret: Option<String>,
-    pub generate_rsa_keys: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SetupInitializeResponse {
     pub completed: bool,
-    pub generated_rsa_keys: bool,
-    pub keys_dir: String,
     pub admin_client_id: String,
     pub endpoints: SetupEndpoints,
 }

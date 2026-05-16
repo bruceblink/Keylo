@@ -13,9 +13,6 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use axum_extra::headers::{authorization::Bearer, Authorization};
 use axum_extra::TypedHeader;
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-use rsa::rand_core::OsRng;
-use rsa::RsaPrivateKey;
 use std::path::Path;
 
 const SETUP_DIST_DIR: &str = "web/dist";
@@ -302,44 +299,6 @@ fn normalized_required(field_name: &str, value: Option<String>) -> Result<String
     Ok(trimmed.to_string())
 }
 
-fn generate_rsa_key_pair(keys_dir: &str) -> Result<(), AuthError> {
-    let dir = Path::new(keys_dir);
-    std::fs::create_dir_all(dir).map_err(|err| {
-        AuthError::InternalServerError(format!("Failed to create setup keys dir: {err}"))
-    })?;
-
-    let private_path = dir.join("private.pem");
-    let public_path = dir.join("public.pem");
-    if private_path.exists() || public_path.exists() {
-        return Err(AuthError::Conflict(
-            "RSA key files already exist; remove them or disable generate_rsa_keys".to_string(),
-        ));
-    }
-
-    let mut rng = OsRng;
-    let private_key = RsaPrivateKey::new(&mut rng, 2048).map_err(|err| {
-        AuthError::InternalServerError(format!("Failed to generate RSA private key: {err}"))
-    })?;
-    let public_key = private_key.to_public_key();
-    let private_pem = private_key.to_pkcs8_pem(LineEnding::LF).map_err(|err| {
-        AuthError::InternalServerError(format!("Failed to encode RSA private key: {err}"))
-    })?;
-    let public_pem = public_key
-        .to_public_key_pem(LineEnding::LF)
-        .map_err(|err| {
-            AuthError::InternalServerError(format!("Failed to encode RSA public key: {err}"))
-        })?;
-
-    std::fs::write(private_path, private_pem.as_bytes()).map_err(|err| {
-        AuthError::InternalServerError(format!("Failed to write RSA private key: {err}"))
-    })?;
-    std::fs::write(public_path, public_pem.as_bytes()).map_err(|err| {
-        AuthError::InternalServerError(format!("Failed to write RSA public key: {err}"))
-    })?;
-
-    Ok(())
-}
-
 pub async fn setup_initialize(
     State(state): State<AppState>,
     bearer: Option<TypedHeader<Authorization<Bearer>>>,
@@ -385,13 +344,9 @@ pub async fn setup_initialize(
         .await
         .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
 
-    let generated_rsa_keys = payload.generate_rsa_keys.unwrap_or(false);
-    if generated_rsa_keys {
-        generate_rsa_key_pair(&state.config.setup_keys_dir)?;
-    } else if !has_jwt_keys(&state) {
+    if !has_jwt_keys(&state) {
         return Err(AuthError::InvalidRequest(
-            "JWT keys are missing; provide JWT key config or set generate_rsa_keys=true"
-                .to_string(),
+            "JWT keys are missing; Keylo should auto-generate them during startup".to_string(),
         ));
     }
 
@@ -408,8 +363,6 @@ pub async fn setup_initialize(
 
     Ok(Json(SetupInitializeResponse {
         completed: true,
-        generated_rsa_keys,
-        keys_dir: state.config.setup_keys_dir.clone(),
         admin_client_id,
         endpoints: setup_endpoints(&state),
     }))

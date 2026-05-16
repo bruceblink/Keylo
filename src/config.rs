@@ -2,9 +2,13 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::rand_core::OsRng;
+use rsa::RsaPrivateKey;
 use std::env;
 use std::fs;
 use std::io;
+use std::path::Path;
 use std::sync::Once;
 use urlencoding::encode;
 
@@ -69,6 +73,101 @@ fn read_env_or_file_with_default_path(
     default_path: &str,
 ) -> Option<String> {
     read_env_or_file(value_key, path_key).or_else(|| read_first_existing_file(&[default_path]))
+}
+
+fn env_or_default_path(path_key: &str, default_path: &str) -> String {
+    env::var(path_key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_path.to_string())
+}
+
+fn generate_and_store_rsa_key_pair(
+    private_key_path: &str,
+    public_key_path: &str,
+) -> Result<(String, String), String> {
+    let private_path = Path::new(private_key_path);
+    let public_path = Path::new(public_key_path);
+
+    if let Some(parent) = private_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "Failed to create JWT private key directory '{}': {err}",
+                parent.display()
+            )
+        })?;
+    }
+    if let Some(parent) = public_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "Failed to create JWT public key directory '{}': {err}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let private_key = RsaPrivateKey::new(&mut OsRng, 2048)
+        .map_err(|err| format!("Failed to generate RSA private key: {err}"))?;
+    let public_key = private_key.to_public_key();
+    let private_pem = private_key
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|err| format!("Failed to encode RSA private key: {err}"))?
+        .to_string();
+    let public_pem = public_key
+        .to_public_key_pem(LineEnding::LF)
+        .map_err(|err| format!("Failed to encode RSA public key: {err}"))?;
+
+    fs::write(private_path, private_pem.as_bytes()).map_err(|err| {
+        format!(
+            "Failed to write JWT private key '{}': {err}",
+            private_path.display()
+        )
+    })?;
+    fs::write(public_path, public_pem.as_bytes()).map_err(|err| {
+        format!(
+            "Failed to write JWT public key '{}': {err}",
+            public_path.display()
+        )
+    })?;
+
+    Ok((private_pem, public_pem))
+}
+
+fn load_or_generate_jwt_keys() -> (String, String, bool) {
+    let private_key = read_env_or_file_with_default_path(
+        "JWT_PRIVATE_KEY_PEM",
+        "JWT_PRIVATE_KEY_PATH",
+        DEFAULT_JWT_PRIVATE_KEY_PATH,
+    );
+    let public_key = read_env_or_file_with_default_path(
+        "JWT_PUBLIC_KEY_PEM",
+        "JWT_PUBLIC_KEY_PATH",
+        DEFAULT_JWT_PUBLIC_KEY_PATH,
+    );
+
+    match (private_key, public_key) {
+        (Some(private_key), Some(public_key)) => (private_key, public_key, false),
+        (Some(_), None) => {
+            panic!("JWT private key is configured but JWT public key is missing")
+        }
+        (None, Some(_)) => panic!("JWT public key is configured but JWT private key is missing"),
+        (None, None) => {
+            let private_key_path =
+                env_or_default_path("JWT_PRIVATE_KEY_PATH", DEFAULT_JWT_PRIVATE_KEY_PATH);
+            let public_key_path =
+                env_or_default_path("JWT_PUBLIC_KEY_PATH", DEFAULT_JWT_PUBLIC_KEY_PATH);
+            let (private_key, public_key) =
+                generate_and_store_rsa_key_pair(&private_key_path, &public_key_path)
+                    .unwrap_or_else(|err| panic!("{err}"));
+            (private_key, public_key, true)
+        }
+    }
 }
 
 pub fn load_dotenv() {
@@ -321,18 +420,8 @@ impl Config {
         let jwt_audiences = parse_csv_env(
             &env::var("JWT_AUDIENCES").unwrap_or_else(|_| DEFAULT_JWT_AUDIENCES.to_string()),
         );
-        let jwt_private_key_pem = read_env_or_file_with_default_path(
-            "JWT_PRIVATE_KEY_PEM",
-            "JWT_PRIVATE_KEY_PATH",
-            DEFAULT_JWT_PRIVATE_KEY_PATH,
-        )
-        .unwrap_or_default();
-        let jwt_public_key_pem = read_env_or_file_with_default_path(
-            "JWT_PUBLIC_KEY_PEM",
-            "JWT_PUBLIC_KEY_PATH",
-            DEFAULT_JWT_PUBLIC_KEY_PATH,
-        )
-        .unwrap_or_default();
+        let (jwt_private_key_pem, jwt_public_key_pem, _jwt_keys_generated) =
+            load_or_generate_jwt_keys();
         let jwt_using_default_dev_keys = false;
 
         let database_url = env::var("DATABASE_URL").unwrap_or_default();
@@ -766,6 +855,38 @@ mod tests {
         let url = build_database_url(url_with_password.clone(), Some("ignored".to_string()));
 
         assert_eq!(url, url_with_password);
+    }
+
+    #[test]
+    fn generated_jwt_key_files_are_valid_and_reused() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "keylo-test-keys-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let private_path = temp_root.join("private.pem");
+        let public_path = temp_root.join("public.pem");
+
+        let (private_key, public_key) = generate_and_store_rsa_key_pair(
+            private_path.to_str().unwrap(),
+            public_path.to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert!(private_key.contains("BEGIN PRIVATE KEY"));
+        assert!(public_key.contains("BEGIN PUBLIC KEY"));
+        assert_eq!(fs::read_to_string(&private_path).unwrap(), private_key);
+        assert_eq!(fs::read_to_string(&public_path).unwrap(), public_key);
+
+        let jwt_keys = crate::models::Keys::from_config(&Config {
+            jwt_private_key_pem: private_key,
+            jwt_public_key_pem: public_key,
+            ..valid_config()
+        })
+        .unwrap();
+        assert_eq!(jwt_keys.jwks().keys.len(), 1);
+
+        let _ = fs::remove_dir_all(temp_root);
     }
 
     #[test]

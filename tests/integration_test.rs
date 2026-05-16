@@ -1252,14 +1252,12 @@ mod tests {
             .add_header("Authorization", "Bearer setup-token")
             .json(&json!({
                 "admin_client_id": admin_client_id,
-                "admin_client_secret": "SetupAdmin#456",
-                "generate_rsa_keys": false
+                "admin_client_secret": "SetupAdmin#456"
             }))
             .await;
         init_resp.assert_status_ok();
         let init_body: serde_json::Value = init_resp.json();
         assert_eq!(init_body["completed"], true);
-        assert_eq!(init_body["generated_rsa_keys"], false);
         assert_eq!(init_body["admin_client_id"], admin_client_id);
 
         let second_init_resp = server
@@ -1267,8 +1265,7 @@ mod tests {
             .add_header("Authorization", "Bearer setup-token")
             .json(&json!({
                 "admin_client_id": admin_client_id,
-                "admin_client_secret": "SetupAdmin#456",
-                "generate_rsa_keys": false
+                "admin_client_secret": "SetupAdmin#456"
             }))
             .await;
         assert_eq!(second_init_resp.status_code(), StatusCode::FORBIDDEN);

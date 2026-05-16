@@ -29,8 +29,6 @@ type SetupStatus = {
 
 type SetupInitializeResponse = {
   completed: boolean;
-  generated_rsa_keys: boolean;
-  keys_dir: string;
   admin_client_id: string;
   endpoints: SetupEndpoints;
 };
@@ -59,7 +57,6 @@ function App() {
   const [setupToken, setSetupToken] = useState('');
   const [adminClientId, setAdminClientId] = useState('cli-admin-root');
   const [adminClientSecret, setAdminClientSecret] = useState('');
-  const [generateRsaKeys, setGenerateRsaKeys] = useState(false);
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [message, setMessage] = useState('等待状态加载。');
   const [loading, setLoading] = useState(false);
@@ -98,8 +95,7 @@ function App() {
         },
         body: JSON.stringify({
           admin_client_id: adminClientId,
-          admin_client_secret: adminClientSecret,
-          generate_rsa_keys: generateRsaKeys
+          admin_client_secret: adminClientSecret
         })
       });
       const data = await readJson<SetupInitializeResponse>(response);
@@ -108,11 +104,7 @@ function App() {
           ? { ...current, completed: data.completed, endpoints: data.endpoints }
           : current
       );
-      setMessage(
-        `初始化完成。Admin Client ID: ${data.admin_client_id}${
-          data.generated_rsa_keys ? `，RSA keys dir: ${data.keys_dir}` : ''
-        }`
-      );
+      setMessage(`初始化完成。Admin Client ID: ${data.admin_client_id}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '初始化失败。');
     } finally {
@@ -129,7 +121,7 @@ function App() {
       <header className="header">
         <div>
           <h1>Keylo Setup</h1>
-          <p>首次安装向导用于检查部署依赖、初始化管理客户端，并输出第三方服务接入端点。</p>
+          <p>首次安装向导用于检查部署依赖、初始化管理客户端，并输出第三方服务接入端点。RSA 密钥缺失时会在服务启动时自动生成并通过 JWKS 发布公钥。</p>
         </div>
         <button className="secondary" onClick={loadStatus} disabled={loading}>
           刷新状态
@@ -187,16 +179,6 @@ function App() {
             value={adminClientSecret}
             onChange={(event) => setAdminClientSecret(event.target.value)}
           />
-
-          <label className="toggle" htmlFor="generate-keys">
-            <input
-              id="generate-keys"
-              type="checkbox"
-              checked={generateRsaKeys}
-              onChange={(event) => setGenerateRsaKeys(event.target.checked)}
-            />
-            生成 RSA 密钥文件
-          </label>
 
           <button
             onClick={initialize}

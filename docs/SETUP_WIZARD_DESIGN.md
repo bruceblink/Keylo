@@ -23,7 +23,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 - 数据库连接状态。
 - migration 执行状态。
 - Redis 配置状态。
-- JWT RSA 密钥状态。
+- JWT RSA 密钥状态；未配置密钥文件时 Keylo 自动生成随机 RSA 密钥对并写入 `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`。
 - 管理客户端初始化状态。
 - 初始化完成后的接入端点摘要。
 
@@ -47,6 +47,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 - 初始化完成后，setup API 返回 403，setup 页面显示已完成状态，不再执行初始化动作。
 - 安装向导不能绕过生产安全基线：生产环境仍要求 Redis、非默认 RSA 密钥和有效管理客户端配置。
 - 页面不展示已存在的密钥明文，也不回显管理客户端密钥；只有用户提交或生成时由用户自行保存。
+- 自动生成的 RSA 公钥会通过 `/.well-known/jwks.json` 正常发布。密钥会持久化到文件，避免重启后 token 无法继续验签。
 
 ## 4. 配置项
 
@@ -117,8 +118,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 ```json
 {
   "admin_client_id": "cli-admin-root",
-  "admin_client_secret": "replace-with-strong-secret",
-  "generate_rsa_keys": true
+  "admin_client_secret": "replace-with-strong-secret"
 }
 ```
 
@@ -128,7 +128,6 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 - 校验 setup 未完成。
 - 检查数据库连接。
 - 执行 migrations。
-- 按需生成 RSA 密钥文件到 `SETUP_KEYS_DIR`。
 - 创建或更新管理客户端。
 - 写入 `system_settings.setup.completed=true`。
 - 返回接入端点摘要。
