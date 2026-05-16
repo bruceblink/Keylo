@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+// @ts-ignore: CSS side-effect import without type declarations
 import './styles.css';
 
 type SetupCheck = {
@@ -66,16 +67,19 @@ function App() {
     [status]
   );
 
-  async function loadStatus() {
+  async function loadStatus(nextMessage?: string) {
     setLoading(true);
-    setMessage('正在读取安装状态...');
+    setMessage(nextMessage ?? '正在读取安装状态...');
     try {
       const response = await fetch('/setup/status', {
         headers: authHeaders(setupToken)
       });
       const data = await readJson<SetupStatus>(response);
       setStatus(data);
-      setMessage(data.completed ? '安装已完成，初始化入口已关闭。' : '状态已更新。');
+      setMessage(
+        nextMessage ??
+          (data.completed ? '安装已完成，初始化入口已关闭。' : '状态已更新。')
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '读取状态失败。');
     } finally {
@@ -105,6 +109,7 @@ function App() {
           : current
       );
       setMessage(`初始化完成。Admin Client ID: ${data.admin_client_id}`);
+      await loadStatus(`初始化完成。Admin Client ID: ${data.admin_client_id}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '初始化失败。');
     } finally {
@@ -123,7 +128,7 @@ function App() {
           <h1>Keylo Setup</h1>
           <p>首次安装向导用于检查部署依赖、初始化管理客户端，并输出第三方服务接入端点。RSA 密钥缺失时会在服务启动时自动生成并通过 JWKS 发布公钥。</p>
         </div>
-        <button className="secondary" onClick={loadStatus} disabled={loading}>
+        <button className="secondary" onClick={() => void loadStatus()} disabled={loading}>
           刷新状态
         </button>
       </header>
@@ -180,12 +185,14 @@ function App() {
             onChange={(event) => setAdminClientSecret(event.target.value)}
           />
 
-          <button
-            onClick={initialize}
-            disabled={loading || status?.completed || !adminClientSecret.trim()}
-          >
-            执行初始化
-          </button>
+          <div className="actions">
+            <button
+              onClick={initialize}
+              disabled={loading || status?.completed || !adminClientSecret.trim()}
+            >
+              执行初始化
+            </button>
+          </div>
 
           {requiredFailures.length > 0 ? (
             <p className="hint">仍有必需检查未通过，初始化可能失败。请先修复左侧配置。</p>
