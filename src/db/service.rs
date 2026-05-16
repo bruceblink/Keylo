@@ -11,24 +11,46 @@ pub enum ServiceCredentialVerification {
     NotAuthorized,
 }
 
+pub struct CreateServiceClientParams<'a> {
+    pub service_id: &'a str,
+    pub service_secret: &'a str,
+    pub name: &'a str,
+    pub description: Option<&'a str>,
+    pub allowed_scopes: &'a [String],
+    pub allowed_audiences: &'a [String],
+    pub integration_type: &'a str,
+    pub introspection_allowed: bool,
+    pub token_ttl_seconds: Option<i64>,
+    pub owner: Option<&'a str>,
+    pub contact: Option<&'a str>,
+}
+
+pub struct UpdateServiceClientParams<'a> {
+    pub service_id: &'a str,
+    pub name: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub allowed_scopes: Option<&'a [String]>,
+    pub allowed_audiences: Option<&'a [String]>,
+    pub active: Option<bool>,
+    pub integration_type: Option<&'a str>,
+    pub introspection_allowed: Option<bool>,
+    pub token_ttl_seconds: Option<i64>,
+    pub owner: Option<&'a str>,
+    pub contact: Option<&'a str>,
+}
+
 /// 注册服务客户端
 pub async fn create_service_client(
     pool: &PgPool,
-    service_id: &str,
-    service_secret: &str,
-    name: &str,
-    description: Option<&str>,
-    allowed_scopes: &[String],
-    allowed_audiences: &[String],
-    integration_type: &str,
-    introspection_allowed: bool,
-    token_ttl_seconds: Option<i64>,
-    owner: Option<&str>,
-    contact: Option<&str>,
+    params: CreateServiceClientParams<'_>,
 ) -> Result<()> {
-    let secret_hash = hash(service_secret, DEFAULT_COST)?;
-    let scopes: Vec<&str> = allowed_scopes.iter().map(|s| s.as_str()).collect();
-    let audiences: Vec<&str> = allowed_audiences.iter().map(|s| s.as_str()).collect();
+    let secret_hash = hash(params.service_secret, DEFAULT_COST)?;
+    let scopes: Vec<&str> = params.allowed_scopes.iter().map(|s| s.as_str()).collect();
+    let audiences: Vec<&str> = params
+        .allowed_audiences
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
     sqlx::query(
         "INSERT INTO service_clients
@@ -36,17 +58,17 @@ pub async fn create_service_client(
               integration_type, introspection_allowed, token_ttl_seconds, owner, contact)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
-    .bind(service_id)
+    .bind(params.service_id)
     .bind(&secret_hash)
-    .bind(name)
-    .bind(description)
+    .bind(params.name)
+    .bind(params.description)
     .bind(&scopes)
     .bind(&audiences)
-    .bind(integration_type)
-    .bind(introspection_allowed)
-    .bind(token_ttl_seconds)
-    .bind(owner)
-    .bind(contact)
+    .bind(params.integration_type)
+    .bind(params.introspection_allowed)
+    .bind(params.token_ttl_seconds)
+    .bind(params.owner)
+    .bind(params.contact)
     .execute(pool)
     .await?;
 
@@ -158,21 +180,14 @@ pub async fn list_service_clients(pool: &PgPool) -> Result<Vec<ServiceInfo>> {
 /// 更新服务客户端信息
 pub async fn update_service_client(
     pool: &PgPool,
-    service_id: &str,
-    name: Option<&str>,
-    description: Option<&str>,
-    allowed_scopes: Option<&[String]>,
-    allowed_audiences: Option<&[String]>,
-    active: Option<bool>,
-    integration_type: Option<&str>,
-    introspection_allowed: Option<bool>,
-    token_ttl_seconds: Option<i64>,
-    owner: Option<&str>,
-    contact: Option<&str>,
+    params: UpdateServiceClientParams<'_>,
 ) -> Result<bool> {
-    let scopes: Option<Vec<&str>> = allowed_scopes.map(|s| s.iter().map(|x| x.as_str()).collect());
-    let audiences: Option<Vec<&str>> =
-        allowed_audiences.map(|a| a.iter().map(|x| x.as_str()).collect());
+    let scopes: Option<Vec<&str>> = params
+        .allowed_scopes
+        .map(|s| s.iter().map(|x| x.as_str()).collect());
+    let audiences: Option<Vec<&str>> = params
+        .allowed_audiences
+        .map(|a| a.iter().map(|x| x.as_str()).collect());
 
     let result = sqlx::query(
         "UPDATE service_clients
@@ -189,17 +204,17 @@ pub async fn update_service_client(
              updated_at        = NOW()
          WHERE service_id = $1",
     )
-    .bind(service_id)
-    .bind(name)
-    .bind(description)
+    .bind(params.service_id)
+    .bind(params.name)
+    .bind(params.description)
     .bind(scopes)
     .bind(audiences)
-    .bind(active)
-    .bind(integration_type)
-    .bind(introspection_allowed)
-    .bind(token_ttl_seconds)
-    .bind(owner)
-    .bind(contact)
+    .bind(params.active)
+    .bind(params.integration_type)
+    .bind(params.introspection_allowed)
+    .bind(params.token_ttl_seconds)
+    .bind(params.owner)
+    .bind(params.contact)
     .execute(pool)
     .await?;
 

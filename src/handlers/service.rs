@@ -168,17 +168,19 @@ pub async fn register_service(
 
     svc_db::create_service_client(
         db,
-        &payload.service_id,
-        &payload.service_secret,
-        &payload.name,
-        payload.description.as_deref(),
-        &allowed_scopes,
-        &allowed_audiences,
-        &integration_type,
-        payload.introspection_allowed.unwrap_or(true),
-        payload.token_ttl_seconds,
-        owner.as_deref(),
-        contact.as_deref(),
+        svc_db::CreateServiceClientParams {
+            service_id: &payload.service_id,
+            service_secret: &payload.service_secret,
+            name: &payload.name,
+            description: payload.description.as_deref(),
+            allowed_scopes: &allowed_scopes,
+            allowed_audiences: &allowed_audiences,
+            integration_type: &integration_type,
+            introspection_allowed: payload.introspection_allowed.unwrap_or(true),
+            token_ttl_seconds: payload.token_ttl_seconds,
+            owner: owner.as_deref(),
+            contact: contact.as_deref(),
+        },
     )
     .await
     .map_err(|e| {
@@ -239,17 +241,19 @@ pub async fn update_service(
 
     let updated = svc_db::update_service_client(
         db,
-        &service_id,
-        payload.name.as_deref(),
-        payload.description.as_deref(),
-        allowed_scopes.as_deref(),
-        allowed_audiences.as_deref(),
-        payload.active,
-        integration_type.as_deref(),
-        payload.introspection_allowed,
-        payload.token_ttl_seconds,
-        owner.as_deref(),
-        contact.as_deref(),
+        svc_db::UpdateServiceClientParams {
+            service_id: &service_id,
+            name: payload.name.as_deref(),
+            description: payload.description.as_deref(),
+            allowed_scopes: allowed_scopes.as_deref(),
+            allowed_audiences: allowed_audiences.as_deref(),
+            active: payload.active,
+            integration_type: integration_type.as_deref(),
+            introspection_allowed: payload.introspection_allowed,
+            token_ttl_seconds: payload.token_ttl_seconds,
+            owner: owner.as_deref(),
+            contact: contact.as_deref(),
+        },
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
