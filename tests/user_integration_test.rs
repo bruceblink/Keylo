@@ -362,6 +362,6 @@ wwIDAQAB
             }))
             .await;
 
-        assert_eq!(change_response.status_code(), 400); // 缺少Authorization header
+        assert_eq!(change_response.status_code(), 401); // 缺少Authorization header
     }
 }

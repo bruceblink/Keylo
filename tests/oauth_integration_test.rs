@@ -131,7 +131,7 @@ wwIDAQAB
     }
 
     #[tokio::test]
-    async fn test_link_oauth_account_requires_state() {
+    async fn test_link_oauth_account_requires_user_token() {
         let Some(server) = setup_test_server().await else {
             return;
         };
@@ -162,9 +162,9 @@ wwIDAQAB
             }))
             .await;
 
-        assert_eq!(response.status_code(), 400);
+        assert_eq!(response.status_code(), 401);
         let body: serde_json::Value = response.json();
         assert!(!body["success"].as_bool().unwrap_or(true));
-        assert_eq!(body["error"], "Missing OAuth state");
+        assert_eq!(body["error"], "Missing uid in token");
     }
 }
