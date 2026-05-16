@@ -127,6 +127,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_favicon_is_public_no_content() {
+        let server = setup_test_server().await;
+
+        let response = server.get("/favicon.ico").await;
+
+        assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
     async fn test_readiness_endpoint() {
         let server = setup_test_server().await;
 

@@ -1,5 +1,5 @@
 use crate::config::{build_database_url, database_password_from_env_result, Config};
-use crate::handlers::{healthz, index, protected, readyz};
+use crate::handlers::{favicon, healthz, index, protected, readyz};
 use crate::middleware::auth;
 use crate::routes;
 use crate::state::AppState;
@@ -64,6 +64,7 @@ pub fn init_app_router() -> Router {
         .merge(routes::service::service_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/favicon.ico", get(favicon))
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
@@ -80,6 +81,7 @@ pub fn init_app_router_with_config(config: Config) -> Router {
         .merge(routes::service::service_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/favicon.ico", get(favicon))
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes())
         .route("/", get(index))
         .route("/protected", get(protected))
@@ -228,6 +230,7 @@ pub async fn init_app_router_with_db(
         .merge(routes::service::service_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/favicon.ico", get(favicon))
         .route("/", get(index))
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
 
@@ -348,6 +351,7 @@ pub async fn init_app_router_with_db_and_admin(
         .merge(routes::service::service_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/favicon.ico", get(favicon))
         .route("/", get(index))
         .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
 

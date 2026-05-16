@@ -39,6 +39,10 @@ pub async fn healthz() -> Json<Value> {
     }))
 }
 
+pub async fn favicon() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
 pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let mut checks = json!({
         "database": if state.config.allow_in_memory_fallback { "disabled" } else { "missing" },
