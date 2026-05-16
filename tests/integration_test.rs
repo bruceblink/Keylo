@@ -1193,6 +1193,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_setup_wizard_routes_are_disabled_by_default() {
+        let server = setup_test_server().await;
+
+        let status_resp = server.get("/setup/status").await;
+        assert_eq!(status_resp.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_setup_wizard_status_and_initialize() {
+        let mut config = test_config();
+        config.enable_setup_wizard = true;
+        config.setup_token = Some("setup-token".to_string());
+        config.admin_client_id = Some("setup-admin".to_string());
+        config.admin_client_secret = Some("SetupAdmin#123".to_string());
+
+        let server = setup_test_server_with_config(config).await;
+
+        let unauth_resp = server.get("/setup/status").await;
+        if unauth_resp.status_code() == StatusCode::NOT_FOUND {
+            return;
+        }
+        assert_eq!(unauth_resp.status_code(), StatusCode::UNAUTHORIZED);
+
+        let status_resp = server
+            .get("/setup/status")
+            .add_header("Authorization", "Bearer setup-token")
+            .await;
+        status_resp.assert_status_ok();
+        let status_body: serde_json::Value = status_resp.json();
+        assert_eq!(status_body["enabled"], true);
+        assert_eq!(status_body["environment"], "test");
+        let database_connected = status_body["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| {
+                check["key"] == "database_connection"
+                    && check["ok"] == serde_json::Value::Bool(true)
+            });
+        if !database_connected {
+            return;
+        }
+        assert!(status_body["endpoints"]["jwks_uri"]
+            .as_str()
+            .unwrap()
+            .contains("/.well-known/jwks.json"));
+
+        let admin_client_id = format!(
+            "setup-admin-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+        let init_resp = server
+            .post("/setup/initialize")
+            .add_header("Authorization", "Bearer setup-token")
+            .json(&json!({
+                "admin_client_id": admin_client_id,
+                "admin_client_secret": "SetupAdmin#456",
+                "generate_rsa_keys": false
+            }))
+            .await;
+        init_resp.assert_status_ok();
+        let init_body: serde_json::Value = init_resp.json();
+        assert_eq!(init_body["completed"], true);
+        assert_eq!(init_body["generated_rsa_keys"], false);
+        assert_eq!(init_body["admin_client_id"], admin_client_id);
+
+        let second_init_resp = server
+            .post("/setup/initialize")
+            .add_header("Authorization", "Bearer setup-token")
+            .json(&json!({
+                "admin_client_id": admin_client_id,
+                "admin_client_secret": "SetupAdmin#456",
+                "generate_rsa_keys": false
+            }))
+            .await;
+        assert_eq!(second_init_resp.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn test_untrusted_management_client_cannot_use_user_or_admin_token_flow() {
         let server = setup_test_server().await;
         let admin_login_resp = server

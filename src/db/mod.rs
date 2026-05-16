@@ -11,12 +11,14 @@ pub mod identity;
 pub mod oauth;
 pub mod rbac;
 pub mod service;
+pub mod settings;
 pub mod user;
 
 pub use identity::*;
 pub use oauth::*;
 pub use rbac::*;
 pub use service::*;
+pub use settings::*;
 pub use user::*;
 
 fn token_hash(token: &str) -> String {

@@ -298,6 +298,12 @@ pub struct Config {
     pub log_file_prefix: String,
     /// Allow non-production startup to fall back to a no-database router.
     pub allow_in_memory_fallback: bool,
+    /// Enable first-run setup wizard routes.
+    pub enable_setup_wizard: bool,
+    /// Bearer token required by setup APIs. Required in production when setup wizard is enabled.
+    pub setup_token: Option<String>,
+    /// Directory where setup wizard can generate RSA key files.
+    pub setup_keys_dir: String,
 }
 
 impl Default for Config {
@@ -416,6 +422,12 @@ impl Config {
             .ok()
             .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
+        let enable_setup_wizard = env::var("ENABLE_SETUP_WIZARD")
+            .ok()
+            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        let setup_token = env_non_empty_or_dotenv("SETUP_TOKEN");
+        let setup_keys_dir = env::var("SETUP_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string());
 
         Self {
             jwt_issuer,
@@ -450,6 +462,9 @@ impl Config {
             log_dir,
             log_file_prefix,
             allow_in_memory_fallback,
+            enable_setup_wizard,
+            setup_token,
+            setup_keys_dir,
         }
     }
 
@@ -498,6 +513,8 @@ impl Config {
             errors.push("REDIS_URL must be set in production".to_string());
         }
 
+        self.validate_setup_wizard(&mut errors);
+
         config_result(errors)
     }
 
@@ -518,7 +535,25 @@ impl Config {
             );
         }
 
+        self.validate_setup_wizard(&mut errors);
+
         config_result(errors)
+    }
+
+    fn validate_setup_wizard(&self, errors: &mut Vec<String>) {
+        if !self.enable_setup_wizard {
+            return;
+        }
+
+        if self.is_production() && option_is_blank(self.setup_token.as_deref()) {
+            errors.push(
+                "SETUP_TOKEN must be set when ENABLE_SETUP_WIZARD=true in production".to_string(),
+            );
+        }
+
+        if self.setup_keys_dir.trim().is_empty() {
+            errors.push("SETUP_KEYS_DIR must not be empty".to_string());
+        }
     }
 
     fn validate_management_client(&self, errors: &mut Vec<String>) {
@@ -704,6 +739,9 @@ mod tests {
             log_dir: "./logs".to_string(),
             log_file_prefix: "keylo".to_string(),
             allow_in_memory_fallback: false,
+            enable_setup_wizard: false,
+            setup_token: None,
+            setup_keys_dir: "./keys".to_string(),
         }
     }
 

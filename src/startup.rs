@@ -53,6 +53,7 @@ pub fn init_app_router() -> Router {
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
+        .merge(routes::setup::setup_routes())
         .with_state(app_state)
 }
 
@@ -68,6 +69,7 @@ pub fn init_app_router_with_config(config: Config) -> Router {
         .route("/", get(index))
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
+        .merge(routes::setup::setup_routes())
         .with_state(app_state)
 }
 
@@ -291,6 +293,7 @@ pub async fn init_app_router_with_db(
 
     Ok(Router::new()
         .merge(public_routes)
+        .merge(routes::setup::setup_routes())
         .merge(service_protected_routes)
         .merge(protected_routes)
         .layer(cors)
@@ -394,6 +397,7 @@ pub async fn init_app_router_with_db_and_admin(
 
     Ok(Router::new()
         .merge(public_routes)
+        .merge(routes::setup::setup_routes())
         .merge(service_protected_routes)
         .merge(protected_routes)
         .with_state(app_state))
