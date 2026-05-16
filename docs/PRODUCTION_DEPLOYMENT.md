@@ -127,7 +127,16 @@ chmod 600 /opt/keylo/secrets/postgres_password \
   /opt/keylo/secrets/database_password.key
 ```
 
-随后启动 Compose 时指定 secret 文件位置：
+如果使用外部数据库，或 PostgreSQL 已经完成初始化且不再需要 `/opt/keylo/secrets/postgres_password`，可以改用 `encrypt-file-and-remove` 在成功生成密文后删除明文文件：
+
+```bash
+python scripts/secret_tool.py encrypt-file-and-remove \
+  --text-file /opt/keylo/secrets/postgres_password \
+  --key-file /opt/keylo/secrets/database_password.key \
+  --out /opt/keylo/secrets/postgres_password.enc
+```
+
+随后启动 Keylo 时指定 secret 文件位置：
 
 ```bash
 POSTGRES_PASSWORD_FILE=/opt/keylo/secrets/postgres_password \
