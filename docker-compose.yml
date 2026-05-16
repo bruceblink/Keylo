@@ -47,9 +47,12 @@ services:
     environment:
       TZ: UTC
       DATABASE_URL: postgres://keylo_user@postgres:5432/keylo
-      SERVER_PORT: 2345
+      SERVER_PORT: ${SERVER_PORT:-2345}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
       ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID}
       ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET}
+      ENABLE_SETUP_WIZARD: ${ENABLE_SETUP_WIZARD:-true}
+      SETUP_TOKEN: ${SETUP_TOKEN}
       REDIS_URL: redis://redis:6379
       LOG_DIR: /app/logs
     ports:
