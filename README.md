@@ -489,7 +489,8 @@ docker compose logs -f keylo-service
 
 ### 4. 安装向导
 
-* 安装向导默认关闭，通过 `ENABLE_SETUP_WIZARD=true` 显式启用
+* 安装向导默认启用；首次未完成 setup 时访问 `/` 会进入 `/setup`
+* 如需关闭安装向导，可设置 `ENABLE_SETUP_WIZARD=false`
 * 生产环境启用安装向导时必须配置 `SETUP_TOKEN`
 * 未配置 RSA 密钥文件时，Keylo 会自动生成随机 RSA 密钥对并通过 JWKS 发布公钥
 * React 前端位于 `web/`，构建后由 Keylo 托管 `/setup`
