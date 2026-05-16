@@ -334,6 +334,52 @@
 | POST | `/api/oauth/link` |
 | DELETE | `/api/oauth/unlink/{provider}` |
 
+### 7.3 统一身份源注册中心（admin）
+
+身份源注册中心用于统一登记 Keylo 可接入的身份来源元数据，包括本地密码、OAuth2、OIDC upstream 和 LDAP。当前接口只提供注册与配置管理能力，不改变现有 `/v1/auth/oauth/*` 登录执行路径。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/admin/identity-sources` | 身份源列表 |
+| POST | `/v1/admin/identity-sources` | 注册身份源 |
+| GET | `/v1/admin/identity-sources/{source_id}` | 身份源详情 |
+| PUT | `/v1/admin/identity-sources/{source_id}` | 更新身份源 |
+
+`POST /v1/admin/identity-sources` 请求体：
+
+```json
+{
+  "name": "github",
+  "source_type": "oauth2",
+  "display_name": "GitHub",
+  "description": "GitHub OAuth identity source",
+  "config": {
+    "provider": "github",
+    "issuer": "https://github.com"
+  },
+  "claim_mapping": {
+    "external_id": "id",
+    "email": "email"
+  },
+  "jit_enabled": true,
+  "auto_link_enabled": true,
+  "active": true
+}
+```
+
+字段说明：
+
+- `name`：稳定唯一标识，会被 trim 并转为小写，不能包含空白字符。
+- `source_type`：支持 `local_password`、`oauth2`、`oidc_upstream`、`ldap`。
+- `display_name`：面向管理界面或集成文档展示的名称。
+- `config`：身份源配置对象。Keylo 当前只校验它是 JSON object，具体 schema 由后续接入实现定义。
+- `claim_mapping`：外部身份字段到 Keylo 标准字段的映射对象。
+- `jit_enabled`：是否允许后续登录接入实现进行 JIT 用户创建，默认 `false`。
+- `auto_link_enabled`：是否允许后续登录接入实现自动关联已有用户，默认 `true`。
+- `active`：是否启用该身份源，默认 `true`。
+
+`PUT /v1/admin/identity-sources/{source_id}` 支持局部更新：`display_name`、`description`、`config`、`claim_mapping`、`jit_enabled`、`auto_link_enabled`、`active`。
+
 ---
 
 ## 8. 服务间认证接口

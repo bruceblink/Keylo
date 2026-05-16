@@ -145,24 +145,45 @@ GET /.well-known/keylo-configuration
 
 ---
 
-## 6. 最小联调路径
+## 6. 身份源注册
+
+Keylo 提供统一身份源注册中心，用于提前登记和治理外部身份来源：
+
+- `local_password`：Keylo 本地用户名密码。
+- `oauth2`：GitHub、企业微信等 OAuth2 身份源。
+- `oidc_upstream`：上游企业 IdP 或云身份提供商。
+- `ldap`：企业目录服务。
+
+常用管理入口：
+
+- `POST /v1/admin/identity-sources`
+- `GET /v1/admin/identity-sources`
+- `GET /v1/admin/identity-sources/{source_id}`
+- `PUT /v1/admin/identity-sources/{source_id}`
+
+当前版本的身份源接口是注册中心能力，不会自动替代现有 `/v1/auth/oauth/*` 登录流程。第三方服务集成时可先把身份源、claim mapping、JIT 策略和启用状态登记到 Keylo，后续接入 LDAP/OIDC upstream 时复用同一套元数据模型。
+
+---
+
+## 7. 最小联调路径
 
 推荐用以下路径完成第三方联调：
 
 1. 按 [END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md) 初始化 Keylo
 2. 读取 `/.well-known/keylo-configuration`
 3. 获取管理客户端 Token
-4. 创建用户、角色和权限
-5. 注册服务客户端
-6. 获取用户 Token 与 `service_access` Token
-7. 验证 `/.well-known/jwks.json`
-8. 验证 `/v1/auth/introspect` 或 `/v1/service/introspect`
+4. 按需登记身份源
+5. 创建用户、角色和权限
+6. 注册服务客户端
+7. 获取用户 Token 与 `service_access` Token
+8. 验证 `/.well-known/jwks.json`
+9. 验证 `/v1/auth/introspect` 或 `/v1/service/introspect`
 
 具体请求体和响应体请直接查阅 [API_REFERENCE.md](API_REFERENCE.md)。
 
 ---
 
-## 7. 常见误区
+## 8. 常见误区
 
 - 把管理客户端拿去调用 `/v1/auth/token`
 - 认为前端隐藏按钮等于授权
@@ -173,7 +194,7 @@ GET /.well-known/keylo-configuration
 
 ---
 
-## 8. 相关文档
+## 9. 相关文档
 
 - [API_REFERENCE.md](API_REFERENCE.md)
 - [END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md)

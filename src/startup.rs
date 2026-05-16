@@ -263,6 +263,10 @@ pub async fn init_app_router_with_db(
                 .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
         .merge(
+            routes::identity::identity_admin_routes()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .merge(
             routes::user::admin_user_routes()
                 .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
@@ -373,6 +377,10 @@ pub async fn init_app_router_with_db_and_admin(
         )
         .merge(
             routes::service::service_admin_routes()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .merge(
+            routes::identity::identity_admin_routes()
                 .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
         .merge(

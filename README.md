@@ -242,7 +242,7 @@ RUST_LOG=keylo=debug cargo run
 
 * 公开：`POST /v1/auth/token`、`POST /v1/admin/token`、`POST /v1/auth/refresh`、`POST /v1/service/token`
 * 用户：`GET /v1/auth/me`、`POST /v1/auth/logout`、`POST /v1/user/change-password`
-* 管理：`/v1/admin/*`、`/v1/admin/users/*`、`/v1/admin/services/*`
+* 管理：`/v1/admin/*`、`/v1/admin/users/*`、`/v1/admin/services/*`、`/v1/admin/identity-sources/*`
 * RBAC：`/api/rbac/*`
 * OAuth：公开流程 `/v1/auth/oauth/*`，管理接口 `/api/oauth/*`
 
@@ -270,7 +270,7 @@ src/
 ├── handlers/        # HTTP handlers
 ├── middleware/      # 鉴权与授权中间件
 ├── models/          # 领域模型
-├── routes/          # 路由定义（auth/user/rbac/oauth/service）
+├── routes/          # 路由定义（auth/user/rbac/oauth/service/identity）
 ├── errors.rs        # 错误定义
 └── utils.rs         # 工具函数
 
@@ -483,6 +483,7 @@ docker compose logs -f keylo-service
 * 默认使用 RS256 与 JWKS
 * 下游系统可本地验签
 * 高敏接口可叠加内省做实时吊销校验
+* 提供身份源注册中心，统一登记 local password、OAuth2、OIDC upstream 和 LDAP 身份源元数据
 
 ### 4. 运维与安全基线
 
@@ -511,6 +512,10 @@ docker compose logs -f keylo-service
 ### 添加新的认证 Provider
 
 在 `src/routes/oauth.rs` 和对应 handler 中注册新的 OAuth 提供商逻辑。
+
+### 添加新的身份源类型
+
+先扩展 `identity_sources.source_type` 的迁移约束、`src/handlers/identity.rs` 的支持类型校验和 API 文档，再接入具体登录流程。当前身份源接口是注册中心能力，不会自动替代现有 OAuth 登录路径。
 
 ### 自定义 Claims
 

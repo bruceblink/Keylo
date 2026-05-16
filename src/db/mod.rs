@@ -7,11 +7,13 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use uuid::Uuid;
 
+pub mod identity;
 pub mod oauth;
 pub mod rbac;
 pub mod service;
 pub mod user;
 
+pub use identity::*;
 pub use oauth::*;
 pub use rbac::*;
 pub use service::*;

@@ -1047,6 +1047,152 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_identity_source_admin_api_crud() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let source_name = format!(
+            "github-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+
+        let create_resp = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "name": source_name,
+                "source_type": "oauth2",
+                "display_name": "GitHub",
+                "description": "GitHub OAuth identity source",
+                "config": {
+                    "provider": "github",
+                    "issuer": "https://github.com"
+                },
+                "claim_mapping": {
+                    "external_id": "id",
+                    "email": "email"
+                },
+                "jit_enabled": true
+            }))
+            .await;
+        create_resp.assert_status_ok();
+        let create_body: serde_json::Value = create_resp.json();
+        assert_eq!(create_body["name"], source_name);
+        assert_eq!(create_body["source_type"], "oauth2");
+        assert_eq!(create_body["display_name"], "GitHub");
+        assert_eq!(create_body["jit_enabled"], true);
+        assert_eq!(create_body["auto_link_enabled"], true);
+        assert_eq!(create_body["active"], true);
+        let source_id = create_body["id"].as_str().unwrap();
+
+        let get_resp = server
+            .get(&format!("/v1/admin/identity-sources/{}", source_id))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .await;
+        get_resp.assert_status_ok();
+        let get_body: serde_json::Value = get_resp.json();
+        assert_eq!(get_body["config"]["provider"], "github");
+
+        let update_resp = server
+            .put(&format!("/v1/admin/identity-sources/{}", source_id))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "display_name": "GitHub Enterprise",
+                "active": false,
+                "claim_mapping": {
+                    "external_id": "sub",
+                    "email": "email"
+                }
+            }))
+            .await;
+        update_resp.assert_status_ok();
+        let update_body: serde_json::Value = update_resp.json();
+        assert_eq!(update_body["display_name"], "GitHub Enterprise");
+        assert_eq!(update_body["active"], false);
+        assert_eq!(update_body["claim_mapping"]["external_id"], "sub");
+
+        let list_resp = server
+            .get("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .await;
+        list_resp.assert_status_ok();
+        let list_body: serde_json::Value = list_resp.json();
+        assert!(list_body["identity_sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["id"] == source_id));
+    }
+
+    #[tokio::test]
+    async fn test_identity_source_admin_api_rejects_invalid_source_type() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+
+        let create_resp = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "name": "unsupported-source",
+                "source_type": "saml",
+                "display_name": "SAML"
+            }))
+            .await;
+        assert_eq!(create_resp.status_code(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = create_resp.json();
+        assert_eq!(body["error"], "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn test_identity_source_admin_api_requires_admin_token() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+
+        let list_resp = server.get("/v1/admin/identity-sources").await;
+        assert_eq!(list_resp.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_untrusted_management_client_cannot_use_user_or_admin_token_flow() {
         let server = setup_test_server().await;
         let admin_login_resp = server
