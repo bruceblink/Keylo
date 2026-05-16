@@ -201,12 +201,6 @@ python scripts/secret_tool.py encrypt \
 docker-compose up -d
 ```
 
-如果使用外部数据库，或 PostgreSQL 已经完成初始化且不再需要 `secrets/postgres_password`，可以用以下命令生成 Keylo 运行期密文并删除明文文件：
-
-```bash
-python scripts/secret_tool.py encrypt-file-and-remove
-```
-
 这将启动：
 
 * PostgreSQL 数据库 (监听 `5432`)
@@ -495,8 +489,7 @@ docker compose logs -f keylo-service
 
 ### 4. 安装向导
 
-* 安装向导默认启用；首次未完成 setup 时访问 `/` 会进入 `/setup`
-* 如需关闭安装向导，可设置 `ENABLE_SETUP_WIZARD=false`
+* 安装向导默认关闭，通过 `ENABLE_SETUP_WIZARD=true` 显式启用
 * 生产环境启用安装向导时必须配置 `SETUP_TOKEN`
 * 未配置 RSA 密钥文件时，Keylo 会自动生成随机 RSA 密钥对并通过 JWKS 发布公钥
 * React 前端位于 `web/`，构建后由 Keylo 托管 `/setup`

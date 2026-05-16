@@ -514,7 +514,7 @@ impl Config {
         let enable_setup_wizard = env::var("ENABLE_SETUP_WIZARD")
             .ok()
             .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(true);
+            .unwrap_or(false);
         let setup_token = env_non_empty_or_dotenv("SETUP_TOKEN");
         let setup_keys_dir = env::var("SETUP_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string());
 
@@ -828,7 +828,7 @@ mod tests {
             log_dir: "./logs".to_string(),
             log_file_prefix: "keylo".to_string(),
             allow_in_memory_fallback: false,
-            enable_setup_wizard: true,
+            enable_setup_wizard: false,
             setup_token: None,
             setup_keys_dir: "./keys".to_string(),
         }
@@ -970,7 +970,7 @@ mod tests {
 
         let err = config.validate_for_database_startup().unwrap_err();
 
-        assert!(err.contains("Invalid startup configuration"));
+        assert!(err.contains("DATABASE_URL must not contain a plaintext password"));
     }
 
     #[test]

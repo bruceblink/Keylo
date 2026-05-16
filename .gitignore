@@ -15,5 +15,3 @@
 /web/*.tsbuildinfo
 /web/vite.config.js
 /web/vite.config.d.ts
-__pycache__/
-*.pyc

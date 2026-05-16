@@ -86,8 +86,6 @@ python scripts/secret_tool.py encrypt \
 docker compose up -d postgres redis
 ```
 
-仓库自带的 PostgreSQL 容器首次初始化需要读取 `secrets/postgres_password`。如果使用外部数据库，或数据库已初始化且不再需要明文文件，可以改用 `python scripts/secret_tool.py encrypt-file-and-remove` 生成运行期密文并删除明文。
-
 ### 1.4 启动 Keylo
 
 ```bash

@@ -11,11 +11,6 @@ use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
 
-fn bearer_token(auth: Option<TypedHeader<Authorization<Bearer>>>) -> Result<String, AuthError> {
-    auth.map(|TypedHeader(Authorization(bearer))| bearer.token().to_string())
-        .ok_or(AuthError::Unauthorized)
-}
-
 fn service_id_from_subject(subject: &str) -> Option<&str> {
     subject.strip_prefix("service:")
 }
@@ -82,17 +77,14 @@ fn ensure_service_claims(
 /// 认证中间件 - 检查token是否在黑名单中
 pub async fn auth_middleware(
     State(state): State<AppState>,
-    auth: Option<TypedHeader<Authorization<Bearer>>>,
+    TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = match bearer_token(auth) {
-        Ok(token) => token,
-        Err(err) => return Ok(err.into_response()),
-    };
+    let token = auth.token();
 
     // 先验证 JWT 是否有效（签名、过期、aud 等）
-    let claims = match state.jwt_keys.decode_token(&token) {
+    let claims = match state.jwt_keys.decode_token(token) {
         Ok(claims) => claims,
         Err(err) => return Ok(err.into_response()),
     };
@@ -104,7 +96,7 @@ pub async fn auth_middleware(
 
     // 检查token是否在黑名单中
     if let Some(db) = &state.db {
-        match crate::db::is_token_blacklisted(db, &token).await {
+        match crate::db::is_token_blacklisted(db, token).await {
             Ok(true) => {
                 // Token在黑名单中，返回401
                 let error_response = AuthError::InvalidToken;
@@ -172,23 +164,20 @@ pub async fn user_authorization_middleware(
 /// aud 字段的精确校验由后续授权中间件（ensure_service_claims）负责
 pub async fn service_auth_middleware(
     State(state): State<AppState>,
-    auth: Option<TypedHeader<Authorization<Bearer>>>,
+    TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = match bearer_token(auth) {
-        Ok(token) => token,
-        Err(err) => return Ok(err.into_response()),
-    };
+    let token = auth.token();
 
-    let claims = match crate::handlers::service::decode_service_token(&state, &token) {
+    let claims = match crate::handlers::service::decode_service_token(&state, token) {
         Ok(c) => c,
         Err(err) => return Ok(err.into_response()),
     };
 
     // 检查 Token 黑名单
     if let Some(db) = &state.db {
-        match crate::db::is_token_blacklisted(db, &token).await {
+        match crate::db::is_token_blacklisted(db, token).await {
             Ok(true) => return Ok(AuthError::InvalidToken.into_response()),
             Err(_) => {
                 return Ok(
@@ -208,18 +197,15 @@ pub async fn service_auth_middleware(
 /// 同时注入 ServiceClaims 供后续 service_integration_authorization_middleware 使用
 pub async fn service_integration_auth_middleware(
     State(state): State<AppState>,
-    auth: Option<TypedHeader<Authorization<Bearer>>>,
+    TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = match bearer_token(auth) {
-        Ok(token) => token,
-        Err(err) => return Ok(err.into_response()),
-    };
+    let token = auth.token();
 
     let claims = match crate::handlers::service::decode_service_token_for_audience(
         &state,
-        &token,
+        token,
         "admin-backend",
     ) {
         Ok(c) => c,
@@ -228,7 +214,7 @@ pub async fn service_integration_auth_middleware(
 
     // 检查 Token 黑名单
     if let Some(db) = &state.db {
-        match crate::db::is_token_blacklisted(db, &token).await {
+        match crate::db::is_token_blacklisted(db, token).await {
             Ok(true) => return Ok(AuthError::InvalidToken.into_response()),
             Err(_) => {
                 return Ok(

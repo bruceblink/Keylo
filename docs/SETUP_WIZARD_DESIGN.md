@@ -41,8 +41,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 
 ## 3. 安全原则
 
-- 安装向导默认启用；首次未完成 setup 时访问 `/` 会进入 `/setup`。
-- 不需要安装向导时，可以显式设置 `ENABLE_SETUP_WIZARD=false`。
+- 安装向导默认关闭，必须显式设置 `ENABLE_SETUP_WIZARD=true`。
 - 生产环境必须配置 `SETUP_TOKEN`，所有 setup API 都要求 `Authorization: Bearer <SETUP_TOKEN>`。
 - 非生产环境也建议配置 `SETUP_TOKEN`；未配置时仅适合本地临时调试。
 - 初始化完成后，setup API 返回 403，setup 页面显示已完成状态，不再执行初始化动作。
@@ -56,7 +55,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 
 | 配置 | 默认值 | 说明 |
 |---|---|---|
-| `ENABLE_SETUP_WIZARD` | `true` | 是否启用安装向导路由 |
+| `ENABLE_SETUP_WIZARD` | `false` | 是否启用安装向导路由 |
 | `SETUP_TOKEN` | 空 | setup API 访问令牌；生产环境启用安装向导时必填 |
 | `SETUP_KEYS_DIR` | `./keys` | 生成 RSA 密钥文件的目录 |
 

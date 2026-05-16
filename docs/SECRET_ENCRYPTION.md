@@ -41,17 +41,12 @@ AES-256-GCM 是跨语言支持最好的认证加密方案之一：
 
 ```bash
 python -m pip install cryptography
-python scripts/secret_tool.py encrypt-file-and-remove
+python scripts/secret_tool.py generate-key --out secrets/database_password.key
+python scripts/secret_tool.py encrypt \
+  --text-file secrets/postgres_password \
+  --key-file secrets/database_password.key \
+  --out secrets/postgres_password.enc
 ```
-
-默认行为：
-
-- 读取 `secrets/postgres_password` 中的自定义明文密码。
-- 如果 `secrets/database_password.key` 不存在，自动生成 AES-256 key。
-- 写入 `secrets/postgres_password.enc`。
-- 成功后删除 `secrets/postgres_password`，避免明文密码长期留在磁盘。
-
-注意：如果使用仓库内置 PostgreSQL 容器首次初始化数据库，PostgreSQL 仍需要读取 `secrets/postgres_password`。这种场景应先完成数据库初始化，或继续使用下面的低阶命令保留明文文件；外部数据库或已初始化数据库更适合使用 `encrypt-file-and-remove`。
 
 也可以直接加密命令行文本：
 
@@ -60,16 +55,6 @@ python scripts/secret_tool.py encrypt \
   --text "your-secret" \
   --key-file secrets/database_password.key \
   --out secrets/your_secret.enc
-```
-
-需要保留明文文件时，可以使用低阶命令：
-
-```bash
-python scripts/secret_tool.py generate-key --out secrets/database_password.key
-python scripts/secret_tool.py encrypt \
-  --text-file secrets/postgres_password \
-  --key-file secrets/database_password.key \
-  --out secrets/postgres_password.enc
 ```
 
 ## 解密流程

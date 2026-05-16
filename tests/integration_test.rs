@@ -1,7 +1,7 @@
 use axum::body::Bytes;
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use keylo::config::{build_database_url, database_password_from_env_result, Config};
+use keylo::config::Config;
 use keylo::startup;
 use serde_json::json;
 
@@ -64,7 +64,6 @@ mod tests {
             redis_url: None,
             auth_rate_limit_max_requests: 1000,
             auth_global_rate_limit_max_requests: 10_000,
-            enable_setup_wizard: false,
             ..Default::default()
         }
     }
@@ -1225,9 +1224,6 @@ mod tests {
         let status_body: serde_json::Value = status_resp.json();
         assert_eq!(status_body["enabled"], true);
         assert_eq!(status_body["environment"], "test");
-        if status_body["completed"] == serde_json::Value::Bool(true) {
-            return;
-        }
         let database_connected = status_body["checks"]
             .as_array()
             .unwrap()
@@ -1284,22 +1280,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_index_redirects_to_setup_when_wizard_enabled_and_incomplete() {
-        let mut config = test_config();
-        config.enable_setup_wizard = true;
-        config.setup_token = Some("setup-token".to_string());
-
-        let server = setup_test_server_with_config(config).await;
-
-        let response = server.get("/").await;
-        if response.status_code() == StatusCode::OK {
-            return;
-        }
-        assert_eq!(response.status_code(), StatusCode::SEE_OTHER);
-        assert_eq!(response.headers()["location"].to_str().unwrap(), "/setup");
-    }
-
-    #[tokio::test]
     async fn test_untrusted_management_client_cannot_use_user_or_admin_token_flow() {
         let server = setup_test_server().await;
         let admin_login_resp = server
@@ -1315,6 +1295,9 @@ mod tests {
         }
 
         admin_login_resp.assert_status_ok();
+        let admin_login_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_login_body["access_token"].as_str().unwrap();
+
         let client_id = format!(
             "untrusted-client-{}",
             SystemTime::now()
@@ -1323,22 +1306,17 @@ mod tests {
                 .as_millis()
         );
 
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let database_url = build_database_url(
-            database_url,
-            database_password_from_env_result().unwrap_or(None),
-        );
-        let db = keylo::db::init_db_pool(&database_url).await.unwrap();
-        keylo::db::create_client(
-            &db,
-            &client_id,
-            "client-secret",
-            "Untrusted Client",
-            Some("should not authenticate as user or admin"),
-        )
-        .await
-        .unwrap();
+        let create_resp = server
+            .post("/v1/admin/clients")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "client_id": client_id,
+                "client_secret": "client-secret",
+                "name": "Untrusted Client",
+                "description": "should not authenticate as user or admin"
+            }))
+            .await;
+        create_resp.assert_status_ok();
 
         let user_flow_resp = server
             .post("/v1/auth/token")

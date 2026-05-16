@@ -115,18 +115,19 @@ mkdir -p /opt/keylo/secrets
 openssl rand -base64 32 > /opt/keylo/secrets/postgres_password
 
 python -m pip install cryptography
-python scripts/secret_tool.py encrypt-file-and-remove \
+python scripts/secret_tool.py generate-key \
+  --out /opt/keylo/secrets/database_password.key
+python scripts/secret_tool.py encrypt \
   --text-file /opt/keylo/secrets/postgres_password \
   --key-file /opt/keylo/secrets/database_password.key \
   --out /opt/keylo/secrets/postgres_password.enc
 
-chmod 600 /opt/keylo/secrets/postgres_password.enc \
+chmod 600 /opt/keylo/secrets/postgres_password \
+  /opt/keylo/secrets/postgres_password.enc \
   /opt/keylo/secrets/database_password.key
 ```
 
-`encrypt-file-and-remove` 会在成功生成密文后删除 `/opt/keylo/secrets/postgres_password`。如果使用仓库内置 PostgreSQL 容器做首次初始化，PostgreSQL 仍需要该明文文件；这种场景应先完成数据库初始化，或使用外部已初始化数据库，再删除明文文件。
-
-随后启动 Keylo 时指定 secret 文件位置：
+随后启动 Compose 时指定 secret 文件位置：
 
 ```bash
 POSTGRES_PASSWORD_FILE=/opt/keylo/secrets/postgres_password \
