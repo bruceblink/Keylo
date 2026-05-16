@@ -5,6 +5,11 @@
 
 # 忽略 node_modules
 node_modules
+web/node_modules
+web/dist
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
 npm-debug.log
 yarn.lock
 pnpm-lock.yaml
@@ -12,11 +17,8 @@ pnpm-lock.yaml
 # 忽略 Rust 构建产物
 target
 web_services/tests
-Cargo.lock
 
-# 忽略 Dockerfile 本身（可选）
-Dockerfile
-.dockerignore
+# 忽略 Docker 辅助目录
 /docker
 
 # 忽略编辑器配置

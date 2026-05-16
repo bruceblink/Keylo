@@ -66,6 +66,19 @@ jobs:
           echo "publish_latest=${publish_latest}" >> "$GITHUB_OUTPUT"
           echo "publish_major_minor=${publish_major_minor}" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build setup web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
       - name: Derive image coordinates
         id: image
         shell: bash
@@ -117,11 +130,6 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
 
       - name: Generate changelog
         run: npx changelogithub@14.0.0

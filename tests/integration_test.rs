@@ -1269,6 +1269,14 @@ mod tests {
             }))
             .await;
         assert_eq!(second_init_resp.status_code(), StatusCode::FORBIDDEN);
+
+        let status_after_init_resp = server
+            .get("/setup/status")
+            .add_header("Authorization", "Bearer setup-token")
+            .await;
+        status_after_init_resp.assert_status_ok();
+        let status_after_init_body: serde_json::Value = status_after_init_resp.json();
+        assert_eq!(status_after_init_body["completed"], true);
     }
 
     #[tokio::test]

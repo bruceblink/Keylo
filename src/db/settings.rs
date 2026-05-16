@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde_json::Value;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row};
+
+const SETUP_INITIALIZATION_LOCK_ID: i64 = 4_703_998_017_724_456_961;
 
 pub async fn get_setting(pool: &PgPool, key: &str) -> Result<Option<Value>> {
     let row = sqlx::query("SELECT value FROM system_settings WHERE key = $1")
@@ -44,4 +46,39 @@ pub async fn mark_setup_completed(pool: &PgPool) -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+pub struct SetupInitializationLock {
+    conn: sqlx::pool::PoolConnection<Postgres>,
+}
+
+impl SetupInitializationLock {
+    pub async fn release(mut self) -> Result<()> {
+        let unlocked: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+            .bind(SETUP_INITIALIZATION_LOCK_ID)
+            .fetch_one(&mut *self.conn)
+            .await?;
+
+        if !unlocked {
+            tracing::warn!("Setup initialization advisory lock was not held during release");
+        }
+
+        Ok(())
+    }
+}
+
+pub async fn try_acquire_setup_initialization_lock(
+    pool: &PgPool,
+) -> Result<Option<SetupInitializationLock>> {
+    let mut conn = pool.acquire().await?;
+    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(SETUP_INITIALIZATION_LOCK_ID)
+        .fetch_one(&mut *conn)
+        .await?;
+
+    if locked {
+        Ok(Some(SetupInitializationLock { conn }))
+    } else {
+        Ok(None)
+    }
 }

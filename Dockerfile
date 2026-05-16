@@ -16,6 +16,14 @@ COPY . .
 ENV SQLX_OFFLINE=true
 RUN cargo build --release --bin keylo
 
+# Frontend builder: build React setup wizard assets
+FROM node:24-bookworm-slim AS web-builder
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 # ---------- Runtime Stage ----------
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
@@ -28,6 +36,7 @@ RUN apt-get update -y \
 
 # Copy binary and configuration
 COPY --from=builder /app/target/release/keylo /app/keylo
+COPY --from=web-builder /app/web/dist /app/web/dist
 #COPY configuration /app/configuration
 
 # Set environment variables

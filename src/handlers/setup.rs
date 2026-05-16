@@ -344,6 +344,21 @@ pub async fn setup_initialize(
         .await
         .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
 
+    let setup_lock = db::try_acquire_setup_initialization_lock(&pool)
+        .await
+        .map_err(|err| AuthError::DatabaseError(err.to_string()))?
+        .ok_or_else(|| {
+            AuthError::Conflict("Setup initialization is already running".to_string())
+        })?;
+
+    if db::setup_completed(&pool)
+        .await
+        .map_err(|err| AuthError::DatabaseError(err.to_string()))?
+    {
+        let _ = setup_lock.release().await;
+        return Err(AuthError::Forbidden);
+    }
+
     if !has_jwt_keys(&state) {
         return Err(AuthError::InvalidRequest(
             "JWT keys are missing; Keylo should auto-generate them during startup".to_string(),
@@ -358,6 +373,10 @@ pub async fn setup_initialize(
     .await
     .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
     db::mark_setup_completed(&pool)
+        .await
+        .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
+    setup_lock
+        .release()
         .await
         .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
 

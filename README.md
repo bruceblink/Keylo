@@ -436,6 +436,8 @@ docker run --rm -p 2345:2345 \
 docker build -t keylo:latest .
 ```
 
+镜像构建会执行 `web` 前端构建，并把 `web/dist` 复制到运行镜像内用于 `/setup` 安装向导。
+
 ### Docker Compose 开发依赖
 
 ```bash
