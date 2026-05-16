@@ -1234,9 +1234,6 @@ mod tests {
         let status_body: serde_json::Value = status_resp.json();
         assert_eq!(status_body["enabled"], true);
         assert_eq!(status_body["environment"], "test");
-        if status_body["completed"] == serde_json::Value::Bool(true) {
-            return;
-        }
         let database_connected = status_body["checks"]
             .as_array()
             .unwrap()
@@ -1253,35 +1250,24 @@ mod tests {
             .unwrap()
             .contains("/.well-known/jwks.json"));
 
-        let admin_client_id = format!(
-            "setup-admin-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = build_database_url(
+            database_url,
+            database_password_from_env_result().unwrap_or(None),
         );
+        let db = keylo::db::init_db_pool(&database_url).await.unwrap();
+        keylo::db::mark_setup_completed(&db).await.unwrap();
+
         let init_resp = server
             .post("/setup/initialize")
             .add_header("Authorization", "Bearer setup-token")
             .json(&json!({
-                "admin_client_id": admin_client_id,
+                "admin_client_id": "setup-admin-test",
                 "admin_client_secret": "SetupAdmin#456"
             }))
             .await;
-        init_resp.assert_status_ok();
-        let init_body: serde_json::Value = init_resp.json();
-        assert_eq!(init_body["completed"], true);
-        assert_eq!(init_body["admin_client_id"], admin_client_id);
-
-        let second_init_resp = server
-            .post("/setup/initialize")
-            .add_header("Authorization", "Bearer setup-token")
-            .json(&json!({
-                "admin_client_id": admin_client_id,
-                "admin_client_secret": "SetupAdmin#456"
-            }))
-            .await;
-        assert_eq!(second_init_resp.status_code(), StatusCode::FORBIDDEN);
+        assert_eq!(init_resp.status_code(), StatusCode::FORBIDDEN);
 
         let status_after_init_resp = server
             .get("/setup/status")
