@@ -3,13 +3,26 @@ use crate::models::Claims;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use redis::AsyncCommands;
 use serde_json::{json, Value};
 
-pub async fn index() -> Result<String, AuthError> {
-    // Send the protected data to the user
-    Ok("Welcome to the keylo :)".to_string())
+pub async fn index(State(state): State<AppState>) -> Response {
+    if state.config.enable_setup_wizard {
+        let setup_completed = match &state.db {
+            Some(db) => crate::db::setup_completed(db.as_ref())
+                .await
+                .unwrap_or(false),
+            None => false,
+        };
+
+        if !setup_completed {
+            return Redirect::to("/setup").into_response();
+        }
+    }
+
+    "Welcome to the keylo :)".into_response()
 }
 
 pub async fn protected(claims: Claims) -> Result<String, AuthError> {

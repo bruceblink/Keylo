@@ -471,6 +471,7 @@ wwIDAQAB
         let mut config = Config::from_env();
         config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
         config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
+        config.enable_setup_wizard = false;
         config
     }
 
