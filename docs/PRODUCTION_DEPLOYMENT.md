@@ -159,6 +159,18 @@ DATABASE_PASSWORD_KEY_FILE=/opt/keylo/secrets/database_password.key \
 
 ## 运行后检查
 
+### 日志检查
+
+Keylo 默认同时输出 stdout 和文件日志。Docker Compose 中日志目录挂载到 `./logs:/app/logs`，文件日志使用 `LOG_FILE_PREFIX` 作为前缀并按天滚动归档。
+
+建议生产环境保留以下日志级别，便于排查请求是否到达服务、响应状态和耗时：
+
+```bash
+RUST_LOG=keylo=info,axum=info,tower_http=info
+```
+
+HTTP 访问日志只记录 method、uri、status、latency 等元数据，不记录 `Authorization` 请求头。
+
 部署成功后至少验证：
 
 1. 用户登录可以正常获取 Access Token。

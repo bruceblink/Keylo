@@ -54,7 +54,10 @@ services:
       ENABLE_SETUP_WIZARD: ${ENABLE_SETUP_WIZARD:-true}
       SETUP_TOKEN: ${SETUP_TOKEN}
       REDIS_URL: redis://redis:6379
+      RUST_LOG: ${KEYLO_RUST_LOG:-keylo=debug,axum=info,tower_http=info}
+      LOG_TO_FILE: ${LOG_TO_FILE:-true}
       LOG_DIR: /app/logs
+      LOG_FILE_PREFIX: ${LOG_FILE_PREFIX:-keylo}
     ports:
       - "${SERVER_PORT:-2345}:2345"
     volumes:

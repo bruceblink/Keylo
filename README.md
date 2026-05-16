@@ -339,7 +339,12 @@ Cargo.toml           # 项目依赖配置
 | `SUPER_ADMIN_USERNAME` | `` | 超级管理员用户名（引导启用时） |
 | `SUPER_ADMIN_EMAIL` | `` | 超级管理员邮箱（引导启用时） |
 | `SUPER_ADMIN_PASSWORD` | `` | 超级管理员初始密码（引导启用时） |
-| `RUST_LOG` | `keylo=debug` | 日志级别 |
+| `RUST_LOG` | `keylo=debug,axum=info,tower_http=info` | 日志级别；`tower_http=info` 用于 HTTP 访问日志 |
+| `LOG_TO_FILE` | `true` | 是否同时写入文件日志 |
+| `LOG_DIR` | `./logs` | 文件日志目录；Docker Compose 中为 `/app/logs` |
+| `LOG_FILE_PREFIX` | `keylo` | 文件日志名前缀，按天滚动归档 |
+
+HTTP 访问日志默认记录请求方法、URI、HTTP 版本、响应状态码和耗时，不记录 `Authorization` 等请求头，便于排查请求是否到达服务以及响应是否异常。
 
 ## 🔐 JWKS
 

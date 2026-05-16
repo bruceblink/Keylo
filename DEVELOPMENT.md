@@ -47,7 +47,7 @@ docker compose ps
 ### 1.3 启动服务
 
 ```bash
-RUST_LOG=keylo=debug,axum=info cargo run
+RUST_LOG=keylo=debug,axum=info,tower_http=info cargo run
 ```
 
 服务默认监听 [http://127.0.0.1:2345](http://127.0.0.1:2345)。
@@ -57,6 +57,9 @@ RUST_LOG=keylo=debug,axum=info cargo run
 - `Database migrations completed`
 - `Default clients seeded`
 - `Database initialized successfully`
+- `started processing request` / `finished processing request`
+
+HTTP 访问日志由 `tower_http` 输出，包含 method、uri、status、latency，不记录请求头。文件日志默认启用，使用 `LOG_DIR` 和 `LOG_FILE_PREFIX` 配置，并按天滚动生成日志文件。
 
 ---
 
@@ -90,7 +93,7 @@ SELECT id, service_id, active FROM service_clients ORDER BY updated_at DESC;
 
 ```bash
 RUST_LOG=keylo=trace,axum=trace cargo run
-RUST_LOG=keylo=debug,sqlx=warn cargo run
+RUST_LOG=keylo=debug,tower_http=info,sqlx=warn cargo run
 ```
 
 ---
