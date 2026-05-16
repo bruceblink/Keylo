@@ -485,7 +485,14 @@ docker compose logs -f keylo-service
 * 高敏接口可叠加内省做实时吊销校验
 * 提供身份源注册中心，统一登记 local password、OAuth2、OIDC upstream 和 LDAP 身份源元数据
 
-### 4. 运维与安全基线
+### 4. 安装向导
+
+* 安装向导默认关闭，通过 `ENABLE_SETUP_WIZARD=true` 显式启用
+* 生产环境启用安装向导时必须配置 `SETUP_TOKEN`
+* React 前端位于 `web/`，构建后由 Keylo 托管 `/setup`
+* 设计说明见 [docs/SETUP_WIZARD_DESIGN.md](docs/SETUP_WIZARD_DESIGN.md)
+
+### 5. 运维与安全基线
 
 * 启动时自动执行 SQLx 迁移
 * 启动会提前校验 RSA 密钥、管理员客户端、数据库 URL、Token 时长等关键配置；缺失时直接退出
