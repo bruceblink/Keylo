@@ -42,6 +42,8 @@ docker compose up -d postgres redis
 docker compose ps
 ```
 
+本地 Compose 中的 PostgreSQL 首次初始化需要明文密码文件。外部数据库或已初始化数据库场景可以使用 `python scripts/secret_tool.py encrypt-file-and-remove` 删除明文文件。
+
 ### 1.3 启动服务
 
 ```bash

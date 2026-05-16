@@ -201,6 +201,12 @@ python scripts/secret_tool.py encrypt \
 docker-compose up -d
 ```
 
+如果使用外部数据库，或 PostgreSQL 已经完成初始化且不再需要 `secrets/postgres_password`，可以用以下命令生成 Keylo 运行期密文并删除明文文件：
+
+```bash
+python scripts/secret_tool.py encrypt-file-and-remove
+```
+
 这将启动：
 
 * PostgreSQL 数据库 (监听 `5432`)
