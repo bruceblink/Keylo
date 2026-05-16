@@ -82,7 +82,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize logging
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "keylo=debug,axum=info".into());
+        .unwrap_or_else(|_| "keylo=debug,axum=info,tower_http=info".into());
 
     let _log_guard = if config.log_to_file {
         std::fs::create_dir_all(&config.log_dir).map_err(|e| {
@@ -112,6 +112,22 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("Starting Keylo service");
     tracing::info!("Environment: {}", config.environment);
     tracing::info!("Server: {}", config.server_url());
+    tracing::info!(
+        log_to_file = config.log_to_file,
+        log_dir = %config.log_dir,
+        log_file_prefix = %config.log_file_prefix,
+        "Logging initialized with daily rolling file appender"
+    );
+    tracing::info!(
+        setup_wizard_enabled = config.enable_setup_wizard,
+        setup_token_configured = config.setup_token.is_some(),
+        "Setup wizard configuration loaded"
+    );
+    tracing::info!(
+        redis_configured = config.redis_url.is_some(),
+        in_memory_fallback_allowed = config.allow_in_memory_fallback,
+        "Runtime dependency configuration loaded"
+    );
 
     if config.allow_in_memory_fallback {
         config

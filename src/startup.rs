@@ -12,6 +12,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 fn redact_dsn(input: &str) -> String {
     if let Some((scheme, rest)) = input.split_once("://") {
@@ -42,6 +44,18 @@ fn is_allowed_cors_origin(origin: &HeaderValue) -> bool {
     )
 }
 
+fn access_log_layer() -> TraceLayer<
+    tower_http::classify::SharedClassifier<tower_http::classify::ServerErrorsAsFailures>,
+    DefaultMakeSpan,
+    DefaultOnRequest,
+    DefaultOnResponse,
+> {
+    TraceLayer::new_for_http()
+        .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+        .on_request(DefaultOnRequest::new().level(Level::INFO))
+        .on_response(DefaultOnResponse::new().level(Level::INFO))
+}
+
 pub fn init_app_router() -> Router {
     let app_state = AppState::new(Config::default(), None)
         .expect("Default Config must always produce valid JWT keys");
@@ -54,6 +68,7 @@ pub fn init_app_router() -> Router {
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
         .merge(routes::setup::setup_routes())
+        .layer(access_log_layer())
         .with_state(app_state)
 }
 
@@ -70,6 +85,7 @@ pub fn init_app_router_with_config(config: Config) -> Router {
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
         .merge(routes::setup::setup_routes())
+        .layer(access_log_layer())
         .with_state(app_state)
 }
 
@@ -296,6 +312,7 @@ pub async fn init_app_router_with_db(
         .merge(routes::setup::setup_routes())
         .merge(service_protected_routes)
         .merge(protected_routes)
+        .layer(access_log_layer())
         .layer(cors)
         .with_state(app_state))
 }
@@ -400,6 +417,7 @@ pub async fn init_app_router_with_db_and_admin(
         .merge(routes::setup::setup_routes())
         .merge(service_protected_routes)
         .merge(protected_routes)
+        .layer(access_log_layer())
         .with_state(app_state))
 }
 
