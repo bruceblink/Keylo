@@ -70,7 +70,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 已有配置仍作为运行基线：
 
 - `DATABASE_URL`
-- `REDIS_URL`
+- Redis URL 密文配置：生产环境使用 `REDIS_URL_ENC_FILE` / `REDIS_URL_KEY_FILE`，非生产调试才允许明文 `REDIS_URL`
 - `JWT_ISSUER`
 - `JWT_KEY_ID`
 - `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`

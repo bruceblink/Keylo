@@ -46,31 +46,71 @@ python scripts/secret_tool.py encrypt-file-and-remove
 
 默认行为：
 
-- 读取 `secrets/postgres_password` 中的自定义明文密码。
-- 如果 `secrets/database_password.key` 不存在，自动生成 AES-256 key。
-- 写入 `secrets/postgres_password.enc`。
-- 成功后删除 `secrets/postgres_password`，避免明文密码长期留在磁盘。
+- 读取 `.secrets/.postgres_password` 中的自定义明文密码。
+- 如果 `.secrets/.database_password.key` 不存在，自动生成 AES-256 key。
+- 写入 `.secrets/.postgres_password.enc`。
+- 成功后删除 `.secrets/.postgres_password`，避免明文密码长期留在磁盘。
 
-注意：如果使用仓库内置 PostgreSQL 容器首次初始化数据库，PostgreSQL 仍需要读取 `secrets/postgres_password`。这种场景应先完成数据库初始化，或继续使用下面的低阶命令保留明文文件；外部数据库或已初始化数据库更适合使用 `encrypt-file-and-remove`。
+注意：如果使用仓库内置 PostgreSQL 容器首次初始化数据库，PostgreSQL 仍需要读取 `.secrets/.postgres_password`。这种场景应先完成数据库初始化，或继续使用下面的低阶命令保留明文文件；外部数据库或已初始化数据库更适合使用 `encrypt-file-and-remove`。
 
 也可以直接加密命令行文本：
 
 ```bash
 python scripts/secret_tool.py encrypt \
   --text "your-secret" \
-  --key-file secrets/database_password.key \
-  --out secrets/your_secret.enc
+  --key-file .secrets/.database_password.key \
+  --out .secrets/.your_secret.enc
 ```
 
 需要保留明文文件时，可以使用低阶命令：
 
 ```bash
-python scripts/secret_tool.py generate-key --out secrets/database_password.key
+python scripts/secret_tool.py generate-key --out .secrets/.database_password.key
 python scripts/secret_tool.py encrypt \
-  --text-file secrets/postgres_password \
-  --key-file secrets/database_password.key \
-  --out secrets/postgres_password.enc
+  --text-file .secrets/.postgres_password \
+  --key-file .secrets/.database_password.key \
+  --out .secrets/.postgres_password.enc
 ```
+
+## Redis URL 与 ACL
+
+Redis 有两个配置面：
+
+- Redis 服务启动读取 `.secrets/.redis.acl`，其中只保存密码 SHA-256 hash。
+- Keylo 启动读取 `.secrets/.redis_url.enc` 和 `.secrets/.redis_url.key`，在内存中解密出 Redis URL，再传给 Redis 客户端。
+
+推荐使用专用命令生成，过程中不会把明文 Redis 密码写入文件：
+
+```bash
+python scripts/secret_tool.py generate-redis
+```
+
+默认生成：
+
+```text
+.secrets/.redis.acl
+.secrets/.redis_url.enc
+.secrets/.redis_url.key
+```
+
+本地开发时如果 Keylo 运行在宿主机、Redis 通过 `docker-compose.dev.yml` 绑定到 `127.0.0.1:63790`，生成本地密文 URL：
+
+```bash
+python scripts/secret_tool.py generate-redis \
+  --host 127.0.0.1 \
+  --port 63790 \
+  --enc-out .secrets/.redis_url.local.enc \
+  --key-out .secrets/.redis_url.local.key
+```
+
+然后配置：
+
+```env
+REDIS_URL_ENC_FILE=./.secrets/.redis_url.local.enc
+REDIS_URL_KEY_FILE=./.secrets/.redis_url.local.key
+```
+
+生产环境不要配置 `REDIS_URL` 或 `REDIS_URL_FILE`。它们属于明文来源，只保留给非生产排障和临时调试。
 
 ## 解密流程
 

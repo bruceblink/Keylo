@@ -77,7 +77,7 @@ LOG_TO_FILE=true
 LOG_FILE_PREFIX=keylo
 ```
 
-5. 如使用内置 PostgreSQL 容器首次初始化，保留 `secrets/postgres_password` 供 PostgreSQL 首次读取；外部数据库或已初始化数据库可使用：
+5. 如使用内置 PostgreSQL 容器首次初始化，保留 `.secrets/.postgres_password` 供 PostgreSQL 首次读取；外部数据库或已初始化数据库可使用：
 
 ```bash
 python scripts/secret_tool.py encrypt-file-and-remove
