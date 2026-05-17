@@ -48,6 +48,7 @@ wwIDAQAB
         Config {
             jwt_private_key_pem: TEST_JWT_PRIVATE_KEY_PEM.to_string(),
             jwt_public_key_pem: TEST_JWT_PUBLIC_KEY_PEM.to_string(),
+            jwt_keys_generated: false,
             admin_client_id: Some("user-test-admin".to_string()),
             admin_client_secret: Some("UserTestAdmin#123".to_string()),
             environment: "test".to_string(),

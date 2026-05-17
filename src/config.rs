@@ -17,6 +17,8 @@ static DOTENV_INIT: Once = Once::new();
 const DEFAULT_JWT_ISSUER: &str = "keylo";
 const DEFAULT_JWT_KEY_ID: &str = "keylo-rs256-1";
 const DEFAULT_JWT_AUDIENCES: &str = "admin-backend,crawler";
+const DEFAULT_CORS_ALLOWED_ORIGINS: &str =
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173";
 const DEFAULT_ADMIN_CLIENT_ID: &str = "cli-admin-root";
 const DEFAULT_JWT_PRIVATE_KEY_PATH: &str = "./keys/private.pem";
 const DEFAULT_JWT_PUBLIC_KEY_PATH: &str = "./keys/public.pem";
@@ -247,6 +249,17 @@ fn parse_csv_env(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn default_cors_allowed_origins() -> Vec<String> {
+    parse_csv_env(DEFAULT_CORS_ALLOWED_ORIGINS)
+}
+
+fn parse_cors_origins(value: &str) -> Vec<String> {
+    parse_csv_env(value)
+        .into_iter()
+        .map(|origin| origin.trim_end_matches('/').to_string())
+        .collect()
+}
+
 pub fn database_password_from_env_result() -> Result<Option<String>, String> {
     let encrypted_password =
         read_env_or_file("DATABASE_PASSWORD_ENC", "DATABASE_PASSWORD_ENC_FILE")
@@ -343,8 +356,8 @@ pub struct Config {
     pub jwt_private_key_pem: String,
     /// JWT 公钥 PEM（RS256）
     pub jwt_public_key_pem: String,
-    /// 是否正在使用内置开发密钥
-    pub jwt_using_default_dev_keys: bool,
+    /// Whether JWT key files were generated during startup because no key config was found.
+    pub jwt_keys_generated: bool,
     /// 数据库URL
     pub database_url: String,
     /// 服务监听地址
@@ -369,6 +382,8 @@ pub struct Config {
     pub auth_global_rate_limit_max_requests: u32,
     /// 是否信任代理转发头（X-Forwarded-For/X-Real-IP）
     pub trust_proxy_headers: bool,
+    /// Allowed browser origins for credentialed CORS requests.
+    pub cors_allowed_origins: Vec<String>,
     /// Admin client ID seeded at startup when both ID and secret are configured.
     pub admin_client_id: Option<String>,
     /// Admin client secret seeded at startup when both ID and secret are configured.
@@ -420,9 +435,8 @@ impl Config {
         let jwt_audiences = parse_csv_env(
             &env::var("JWT_AUDIENCES").unwrap_or_else(|_| DEFAULT_JWT_AUDIENCES.to_string()),
         );
-        let (jwt_private_key_pem, jwt_public_key_pem, _jwt_keys_generated) =
+        let (jwt_private_key_pem, jwt_public_key_pem, jwt_keys_generated) =
             load_or_generate_jwt_keys();
-        let jwt_using_default_dev_keys = false;
 
         let database_url = env::var("DATABASE_URL").unwrap_or_default();
 
@@ -474,6 +488,10 @@ impl Config {
             .ok()
             .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
+        let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS").map_or_else(
+            |_| default_cors_allowed_origins(),
+            |value| parse_cors_origins(&value),
+        );
 
         let admin_client_id =
             env_non_empty_or_dotenv("ADMIN_CLIENT_ID").or_else(|| Some(default_admin_client_id()));
@@ -524,7 +542,7 @@ impl Config {
             jwt_audiences,
             jwt_private_key_pem,
             jwt_public_key_pem,
-            jwt_using_default_dev_keys,
+            jwt_keys_generated,
             database_url,
             server_addr,
             server_port,
@@ -537,6 +555,7 @@ impl Config {
             auth_rate_limit_max_requests,
             auth_global_rate_limit_max_requests,
             trust_proxy_headers,
+            cors_allowed_origins,
             admin_client_id,
             admin_client_secret,
             redis_url,
@@ -662,6 +681,17 @@ impl Config {
         if self.jwt_audiences.is_empty() {
             errors.push("JWT_AUDIENCES must include at least one audience".to_string());
         }
+        if self.cors_allowed_origins.is_empty() {
+            errors.push("CORS_ALLOWED_ORIGINS must include at least one origin".to_string());
+        }
+        for origin in &self.cors_allowed_origins {
+            if !valid_cors_origin(origin) {
+                errors.push(format!(
+                    "CORS_ALLOWED_ORIGINS contains invalid origin '{}'",
+                    origin
+                ));
+            }
+        }
 
         if self.jwt_private_key_pem.trim().is_empty() {
             errors.push(
@@ -756,6 +786,18 @@ fn database_url_contains_password(database_url: &str) -> bool {
     userinfo.contains(':')
 }
 
+fn valid_cors_origin(origin: &str) -> bool {
+    let Ok(uri) = origin.parse::<http::Uri>() else {
+        return false;
+    };
+
+    matches!(uri.scheme_str(), Some("http" | "https"))
+        && uri.host().is_some()
+        && uri
+            .path_and_query()
+            .is_none_or(|path_and_query| path_and_query.as_str() == "/")
+}
+
 fn env_value_is_non_empty(key: &str) -> bool {
     env::var(key)
         .ok()
@@ -801,7 +843,7 @@ mod tests {
             jwt_audiences: vec!["admin-backend".to_string(), "crawler".to_string()],
             jwt_private_key_pem: "private-key".to_string(),
             jwt_public_key_pem: "public-key".to_string(),
-            jwt_using_default_dev_keys: false,
+            jwt_keys_generated: false,
             database_url: "postgres://keylo_user@localhost:5432/keylo".to_string(),
             server_addr: "127.0.0.1".to_string(),
             server_port: 2345,
@@ -814,6 +856,7 @@ mod tests {
             auth_rate_limit_max_requests: 30,
             auth_global_rate_limit_max_requests: 300,
             trust_proxy_headers: false,
+            cors_allowed_origins: default_cors_allowed_origins(),
             admin_client_id: Some("cli-admin-root".to_string()),
             admin_client_secret: Some("strong-admin-secret".to_string()),
             redis_url: None,

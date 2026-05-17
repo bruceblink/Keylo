@@ -60,6 +60,7 @@ mod tests {
         Config {
             jwt_private_key_pem: TEST_JWT_PRIVATE_KEY_PEM.to_string(),
             jwt_public_key_pem: TEST_JWT_PUBLIC_KEY_PEM.to_string(),
+            jwt_keys_generated: false,
             environment: "test".to_string(),
             redis_url: None,
             auth_rate_limit_max_requests: 1000,

@@ -24,7 +24,7 @@ fn redact_dsn(input: &str) -> String {
     input.to_string()
 }
 
-fn is_allowed_cors_origin(origin: &HeaderValue) -> bool {
+fn is_allowed_cors_origin(origin: &HeaderValue, allowed_origins: &[String]) -> bool {
     let Ok(origin_str) = origin.to_str() else {
         return false;
     };
@@ -38,10 +38,7 @@ fn is_allowed_cors_origin(origin: &HeaderValue) -> bool {
         }
     }
 
-    matches!(
-        (uri.scheme_str(), uri.host()),
-        (Some("https"), Some(_)) | (Some("http"), Some("localhost" | "127.0.0.1"))
-    )
+    allowed_origins.iter().any(|allowed| allowed == origin_str)
 }
 
 fn access_log_layer() -> TraceLayer<
@@ -56,9 +53,27 @@ fn access_log_layer() -> TraceLayer<
         .on_response(DefaultOnResponse::new().level(Level::INFO))
 }
 
+fn cors_layer(cors_allowed_origins: Vec<String>) -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(move |origin, _| {
+            is_allowed_cors_origin(origin, &cors_allowed_origins)
+        }))
+        .allow_methods(AllowMethods::list([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+        ]))
+        .allow_headers(AllowHeaders::mirror_request())
+        .allow_credentials(true)
+}
+
 pub fn init_app_router() -> Router {
-    let app_state = AppState::new(Config::default(), None)
-        .expect("Default Config must always produce valid JWT keys");
+    let config = Config::default();
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
+    let app_state =
+        AppState::new(config, None).expect("Default Config must always produce valid JWT keys");
     Router::new()
         .merge(routes::auth::public_router())
         .merge(routes::service::service_public_routes())
@@ -70,10 +85,12 @@ pub fn init_app_router() -> Router {
         .merge(routes::auth::protected_router())
         .merge(routes::setup::setup_routes())
         .layer(access_log_layer())
+        .layer(cors_layer(cors_allowed_origins))
         .with_state(app_state)
 }
 
 pub fn init_app_router_with_config(config: Config) -> Router {
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
     let app_state = AppState::new(config, None)
         .expect("Failed to initialize AppState: invalid JWT key configuration");
     Router::new()
@@ -88,6 +105,7 @@ pub fn init_app_router_with_config(config: Config) -> Router {
         .merge(routes::auth::protected_router())
         .merge(routes::setup::setup_routes())
         .layer(access_log_layer())
+        .layer(cors_layer(cors_allowed_origins))
         .with_state(app_state)
 }
 
@@ -105,16 +123,14 @@ pub async fn init_app_router_with_db(
         .validate_for_database_startup()
         .map_err(anyhow::Error::msg)?;
 
-    if config.is_production() {
-        if config.jwt_using_default_dev_keys {
-            anyhow::bail!(
-                "JWT_PRIVATE_KEY_PEM/JWT_PUBLIC_KEY_PEM or corresponding *_PATH values must be set in production"
-            );
-        }
-    } else if config.jwt_using_default_dev_keys {
-        tracing::warn!("⚠️  SECURITY WARNING: Using hardcoded development JWT keys. \
-            Set JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM (or their *_PATH equivalents) \
-            before deploying to production. These keys are public and MUST NOT be used in production.");
+    if config.jwt_keys_generated {
+        tracing::warn!(
+            private_key_path = std::env::var("JWT_PRIVATE_KEY_PATH")
+                .unwrap_or_else(|_| "./keys/private.pem".to_string()),
+            public_key_path = std::env::var("JWT_PUBLIC_KEY_PATH")
+                .unwrap_or_else(|_| "./keys/public.pem".to_string()),
+            "JWT RSA key pair was generated because no key configuration was found"
+        );
     }
 
     if config.is_production() {
@@ -223,6 +239,7 @@ pub async fn init_app_router_with_db(
         Err(e) => tracing::warn!("Audit logs cleanup failed: {}", e),
     }
 
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
     let app_state = AppState::new(config, Some(Arc::new(db)))?;
 
     let public_routes = Router::new()
@@ -296,27 +313,13 @@ pub async fn init_app_router_with_db(
             auth::auth_middleware,
         ));
 
-    let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(|origin, _| {
-            is_allowed_cors_origin(origin)
-        }))
-        .allow_methods(AllowMethods::list([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-            axum::http::Method::PUT,
-            axum::http::Method::DELETE,
-            axum::http::Method::OPTIONS,
-        ]))
-        .allow_headers(AllowHeaders::mirror_request())
-        .allow_credentials(true);
-
     Ok(Router::new()
         .merge(public_routes)
         .merge(routes::setup::setup_routes())
         .merge(service_protected_routes)
         .merge(protected_routes)
         .layer(access_log_layer())
-        .layer(cors)
+        .layer(cors_layer(cors_allowed_origins))
         .with_state(app_state))
 }
 
@@ -516,31 +519,54 @@ wwIDAQAB
 
     #[test]
     fn cors_origin_validation_matrix() {
-        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
-            "https://example.com"
-        )));
-        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
-            "https://example.com:8443"
-        )));
-        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
-            "http://localhost:3000"
-        )));
-        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
-            "http://127.0.0.1:5173"
-        )));
+        let allowed_origins = test_config().cors_allowed_origins;
 
-        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
-            "http://localhost.evil.com"
-        )));
-        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
-            "http://127.0.0.1.evil.com"
-        )));
-        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
-            "http://example.com"
-        )));
-        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
-            "https://example.com/path"
-        )));
+        assert!(is_allowed_cors_origin(
+            &HeaderValue::from_static("http://localhost:5173"),
+            &allowed_origins
+        ));
+        assert!(is_allowed_cors_origin(
+            &HeaderValue::from_static("http://127.0.0.1:5173"),
+            &allowed_origins
+        ));
+
+        assert!(!is_allowed_cors_origin(
+            &HeaderValue::from_static("https://example.com"),
+            &allowed_origins
+        ));
+        assert!(!is_allowed_cors_origin(
+            &HeaderValue::from_static("http://localhost.evil.com"),
+            &allowed_origins
+        ));
+        assert!(!is_allowed_cors_origin(
+            &HeaderValue::from_static("http://127.0.0.1.evil.com"),
+            &allowed_origins
+        ));
+        assert!(!is_allowed_cors_origin(
+            &HeaderValue::from_static("http://example.com"),
+            &allowed_origins
+        ));
+        assert!(!is_allowed_cors_origin(
+            &HeaderValue::from_static("http://localhost:5173/path"),
+            &allowed_origins
+        ));
+    }
+
+    #[test]
+    fn cors_origin_validation_allows_explicit_https_origin() {
+        assert!(is_allowed_cors_origin(
+            &HeaderValue::from_static("https://example.com"),
+            &["https://example.com".to_string()]
+        ));
+        assert!(is_allowed_cors_origin(
+            &HeaderValue::from_static("https://example.com:8443"),
+            &["https://example.com:8443".to_string()]
+        ));
+
+        assert!(!is_allowed_cors_origin(
+            &HeaderValue::from_static("https://example.com/path"),
+            &["https://example.com".to_string()]
+        ));
     }
 
     #[tokio::test]
