@@ -5,11 +5,11 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: keylo_user
-      POSTGRES_PASSWORD_FILE: /run/secrets/.postgres_password
+      POSTGRES_PASSWORD_FILE: /run/secrets/.database_password
       POSTGRES_DB: keylo
     secrets:
-      - source: postgres_password
-        target: .postgres_password
+      - source: database_password
+        target: .database_password
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -69,8 +69,8 @@ services:
       - ./keys:/app/keys:ro
       - ./logs:/app/logs
     secrets:
-      - source: postgres_password_enc
-        target: .postgres_password.enc
+      - source: database_password_enc
+        target: .database_password.enc
       - source: database_password_key
         target: .database_password.key
       - source: redis_url_enc
@@ -92,10 +92,10 @@ volumes:
   redis_data:
 
 secrets:
-  postgres_password:
-    file: ./.secrets/.postgres_password
-  postgres_password_enc:
-    file: ./.secrets/.postgres_password.enc
+  database_password:
+    file: ./.secrets/.database_password
+  database_password_enc:
+    file: ./.secrets/.database_password.enc
   database_password_key:
     file: ./.secrets/.database_password.key
   redis_acl:

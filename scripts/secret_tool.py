@@ -16,20 +16,28 @@ import argparse
 import base64
 import hashlib
 import os
+import secrets
+import string
 import stat
 import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 PREFIX = "secret:v1:aes-256-gcm"
-DEFAULT_TEXT_FILE = ".secrets/.postgres_password"
+DEFAULT_TEXT_FILE = ".secrets/.database_password"
 DEFAULT_KEY_FILE = ".secrets/.database_password.key"
-DEFAULT_OUT_FILE = ".secrets/.postgres_password.enc"
+DEFAULT_OUT_FILE = ".secrets/.database_password.enc"
 DEFAULT_REDIS_ACL_FILE = ".secrets/.redis.acl"
 DEFAULT_REDIS_URL_KEY_FILE = ".secrets/.redis_url.key"
 DEFAULT_REDIS_URL_ENC_FILE = ".secrets/.redis_url.enc"
+DEFAULT_RSA_PRIVATE_KEY_FILE = "keys/private.pem"
+DEFAULT_RSA_PUBLIC_KEY_FILE = "keys/public.pem"
+PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*()-_=+[]{}:,.?"
+DEFAULT_PASSWORD_LENGTH = 32
 
 
 def ensure_writable(path: Path) -> None:
@@ -59,8 +67,31 @@ def write_text(path: Path, value: str) -> None:
     hide_if_dot_path(path)
 
 
+def read_text_if_non_empty(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    value = path.read_text(encoding="utf-8").strip()
+    return value or None
+
+
 def generate_key_value() -> str:
     return base64.b64encode(os.urandom(32)).decode("ascii")
+
+
+def generate_password(length: int = DEFAULT_PASSWORD_LENGTH) -> str:
+    if length < 9:
+        raise ValueError("password length must be greater than 8")
+
+    required = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice("!@#$%^&*()-_=+[]{}:,.?"),
+    ]
+    remaining = [secrets.choice(PASSWORD_ALPHABET) for _ in range(length - len(required))]
+    password_chars = required + remaining
+    secrets.SystemRandom().shuffle(password_chars)
+    return "".join(password_chars)
 
 
 def decode_key(value: str) -> bytes:
@@ -162,6 +193,28 @@ def cmd_encrypt_file_and_remove(args: argparse.Namespace) -> None:
     print(f"removed_plaintext: {text_file}")
 
 
+def write_database_secret(args: argparse.Namespace) -> tuple[Path, Path, Path, bool, bool]:
+    secret_dir = Path(args.secret_dir)
+    plain_file = secret_dir / ".database_password"
+    key_file = secret_dir / ".database_password.key"
+    enc_file = secret_dir / ".database_password.enc"
+
+    provided_password = read_text_if_non_empty(plain_file)
+    password = provided_password or generate_password(args.password_length)
+    key_text = generate_key_value()
+
+    write_text(plain_file, password)
+    write_text(key_file, key_text)
+    write_text(enc_file, encrypt_value(password, decode_key(key_text)))
+
+    keep_plain = args.keep_database_plain
+    if not keep_plain:
+        ensure_writable(plain_file)
+        plain_file.unlink(missing_ok=True)
+
+    return plain_file, key_file, enc_file, provided_password is not None, keep_plain
+
+
 def cmd_generate_redis(args: argparse.Namespace) -> None:
     password = base64.b64encode(os.urandom(args.password_bytes)).decode("ascii")
     password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
@@ -195,6 +248,72 @@ def cmd_generate_redis(args: argparse.Namespace) -> None:
     print(f"redis_url_key: {key_file}")
     print(f"redis_url_enc: {enc_file}")
     print("plain_password_written: false")
+
+
+def cmd_generate_deployment(args: argparse.Namespace) -> None:
+    database_plain, database_key, database_enc, provided_database_password, keep_database_plain = (
+        write_database_secret(args)
+    )
+
+    redis_args = argparse.Namespace(
+        username=args.redis_username,
+        key_prefix=args.redis_key_prefix,
+        host=args.redis_host,
+        port=args.redis_port,
+        password_bytes=args.redis_password_bytes,
+        acl_out=str(Path(args.secret_dir) / ".redis.acl"),
+        key_out=str(Path(args.secret_dir) / ".redis_url.key"),
+        enc_out=str(Path(args.secret_dir) / ".redis_url.enc"),
+    )
+    cmd_generate_redis(redis_args)
+
+    print(f"secret_dir: {Path(args.secret_dir)}")
+    print(f"database_password_source: {'provided' if provided_database_password else 'generated'}")
+    print(f"database_password: {'kept' if keep_database_plain else 'removed'}")
+    print(f"database_password_enc: {database_enc}")
+    print(f"database_password_key: {database_key}")
+    print(f"database_password_plain: {database_plain}")
+
+
+def generate_rsa_keypair(bits: int) -> tuple[str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
+    public_key = private_key.public_key()
+
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+    public_key_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+
+    return private_key_pem, public_key_pem
+
+
+def cmd_generate_rsa(args: argparse.Namespace) -> None:
+    private_key_pem, public_key_pem = generate_rsa_keypair(args.bits)
+
+    if args.stdout:
+        print("# Keylo RSA key pair")
+        print(f"# key_size={args.bits}")
+        print("# private_key_pem")
+        print(private_key_pem.rstrip("\n"))
+        print("# public_key_pem")
+        print(public_key_pem.rstrip("\n"))
+        return
+
+    private_path = Path(args.out_private)
+    public_path = Path(args.out_public)
+    write_text(private_path, private_key_pem.rstrip("\n"))
+    write_text(public_path, public_key_pem.rstrip("\n"))
+    if os.name != "nt":
+        private_path.chmod(0o600)
+        public_path.chmod(0o644)
+    print(f"rsa_private_key: {private_path}")
+    print(f"rsa_public_key: {public_path}")
+    print(f"key_size: {args.bits}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -291,6 +410,52 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"encrypted Redis URL output path (default: {DEFAULT_REDIS_URL_ENC_FILE})",
     )
     generate_redis.set_defaults(func=cmd_generate_redis)
+
+    generate_deployment = subparsers.add_parser(
+        "generate-deployment",
+        help="generate database and Redis deployment secrets",
+    )
+    generate_deployment.add_argument("--secret-dir", default=".secrets")
+    generate_deployment.add_argument("--password-length", type=int, default=DEFAULT_PASSWORD_LENGTH)
+    generate_deployment.add_argument(
+        "--keep-database-plain",
+        action="store_true",
+        help="keep .secrets/.database_password for first-time database initialization",
+    )
+    generate_deployment.add_argument("--redis-username", default="keylo")
+    generate_deployment.add_argument("--redis-key-prefix", default="keylo")
+    generate_deployment.add_argument("--redis-host", default="redis")
+    generate_deployment.add_argument("--redis-port", default="6379")
+    generate_deployment.add_argument("--redis-password-bytes", type=int, default=32)
+    generate_deployment.set_defaults(func=cmd_generate_deployment)
+
+    generate_rsa = subparsers.add_parser(
+        "generate-rsa",
+        help="generate an RSA key pair for JWT signing",
+    )
+    generate_rsa.add_argument(
+        "--bits",
+        type=int,
+        default=2048,
+        choices=(2048, 3072, 4096),
+        help="RSA key size. Default: 2048",
+    )
+    generate_rsa.add_argument(
+        "--out-private",
+        default=DEFAULT_RSA_PRIVATE_KEY_FILE,
+        help=f"private key output path (default: {DEFAULT_RSA_PRIVATE_KEY_FILE})",
+    )
+    generate_rsa.add_argument(
+        "--out-public",
+        default=DEFAULT_RSA_PUBLIC_KEY_FILE,
+        help=f"public key output path (default: {DEFAULT_RSA_PUBLIC_KEY_FILE})",
+    )
+    generate_rsa.add_argument(
+        "--stdout",
+        action="store_true",
+        help="print PEM keys instead of writing files",
+    )
+    generate_rsa.set_defaults(func=cmd_generate_rsa)
 
     return parser
 

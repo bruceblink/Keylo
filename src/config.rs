@@ -22,7 +22,10 @@ const DEFAULT_CORS_ALLOWED_ORIGINS: &str =
 const DEFAULT_ADMIN_CLIENT_ID: &str = "cli-admin-root";
 const DEFAULT_JWT_PRIVATE_KEY_PATH: &str = "./keys/private.pem";
 const DEFAULT_JWT_PUBLIC_KEY_PATH: &str = "./keys/public.pem";
-const DEFAULT_DATABASE_PASSWORD_ENC_PATHS: [&str; 3] = [
+const DEFAULT_DATABASE_PASSWORD_ENC_PATHS: [&str; 6] = [
+    "./.secrets/.database_password.enc",
+    "/run/secrets/.database_password.enc",
+    "/run/secrets/database_password.enc",
     "./.secrets/.postgres_password.enc",
     "/run/secrets/.postgres_password.enc",
     "/run/secrets/postgres_password.enc",
@@ -1088,7 +1091,7 @@ mod tests {
 
     #[test]
     fn production_database_startup_rejects_plaintext_password_file_config() {
-        std::env::set_var("DATABASE_PASSWORD_FILE", "./.secrets/.postgres_password");
+        std::env::set_var("DATABASE_PASSWORD_FILE", "./.secrets/.database_password");
         let mut config = valid_config();
         config.environment = "production".to_string();
         config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
