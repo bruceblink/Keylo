@@ -19,23 +19,26 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - keylo_network
+      - keylo_db_network
 
   redis:
     image: redis:8.6.2-alpine
     container_name: keylo-redis
     restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--aclfile", "/run/secrets/redis_acl", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
+    secrets:
+      - redis_acl
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -u \"$${REDIS_URL}\" ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
+    environment:
+      REDIS_URL: ${REDIS_URL:?REDIS_URL must be set with Redis ACL credentials}
     networks:
-      - keylo_network
+      - keylo_redis_network
 
   keylo:
     build:
@@ -53,7 +56,7 @@ services:
       ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET}
       ENABLE_SETUP_WIZARD: ${ENABLE_SETUP_WIZARD:-true}
       SETUP_TOKEN: ${SETUP_TOKEN}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL:?REDIS_URL must be set with Redis ACL credentials}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       RUST_LOG: ${KEYLO_RUST_LOG:-keylo=debug,axum=info,tower_http=info}
       LOG_TO_FILE: ${LOG_TO_FILE:-true}
@@ -68,7 +71,9 @@ services:
       - postgres_password_enc
       - database_password_key
     networks:
-      - keylo_network
+      - keylo_public_network
+      - keylo_db_network
+      - keylo_redis_network
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,7 +91,15 @@ secrets:
     file: ./secrets/postgres_password.enc
   database_password_key:
     file: ./secrets/database_password.key
+  redis_acl:
+    file: ./secrets/redis.acl
 
 networks:
-  keylo_network:
+  keylo_public_network:
     driver: bridge
+  keylo_db_network:
+    driver: bridge
+    internal: true
+  keylo_redis_network:
+    driver: bridge
+    internal: true

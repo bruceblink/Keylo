@@ -44,7 +44,7 @@ Copy-Item .env.example .env
 DATABASE_URL=postgres://keylo_user@localhost:5432/keylo
 DATABASE_PASSWORD_ENC_FILE=./secrets/postgres_password.enc
 DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key
-REDIS_URL=redis://localhost:6379
+REDIS_URL=redis://keylo:replace-with-strong-redis-password@redis:6379
 JWT_KEY_ID=keylo-rs256-1
 JWT_PRIVATE_KEY_PATH=./keys/private.pem
 JWT_PUBLIC_KEY_PATH=./keys/public.pem
@@ -87,6 +87,25 @@ docker compose up -d postgres redis
 ```
 
 仓库自带的 PostgreSQL 容器首次初始化需要读取 `secrets/postgres_password`。如果使用外部数据库，或数据库已初始化且不再需要明文文件，可以改用 `python scripts/secret_tool.py encrypt-file-and-remove` 生成运行期密文并删除明文。
+
+Redis 默认不暴露到宿主机，只允许 Keylo 通过 Compose 内部网络访问。启动前需要准备 `secrets/redis.acl`：
+
+```text
+user default off
+user keylo on >replace-with-strong-redis-password ~keylo:* +@read +@write +@connection
+```
+
+如果 Keylo 也在 Compose 中运行，使用 `REDIS_URL=redis://keylo:<password>@redis:6379`。如果你在宿主机上运行 `cargo run`，用本地开发 override 暴露 Redis 到回环地址：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
+```
+
+然后把本机进程使用的 Redis 地址改为：
+
+```env
+REDIS_URL=redis://keylo:replace-with-strong-redis-password@127.0.0.1:63790
+```
 
 ### 1.4 启动 Keylo
 

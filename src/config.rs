@@ -591,6 +591,16 @@ impl Config {
         if self.is_production() && option_is_blank(self.redis_url.as_deref()) {
             errors.push("REDIS_URL must be set in production".to_string());
         }
+        if self.is_production()
+            && self
+                .redis_url
+                .as_deref()
+                .is_some_and(redis_url_lacks_credentials)
+        {
+            errors.push(
+                "REDIS_URL must include Redis ACL username and password in production".to_string(),
+            );
+        }
 
         self.validate_setup_wizard(&mut errors);
 
@@ -755,6 +765,23 @@ fn database_url_contains_password(database_url: &str) -> bool {
         return false;
     };
     userinfo.contains(':')
+}
+
+fn redis_url_lacks_credentials(redis_url: &str) -> bool {
+    let Some((scheme, rest)) = redis_url.split_once("://") else {
+        return true;
+    };
+    if scheme != "redis" && scheme != "rediss" {
+        return true;
+    }
+    let Some((userinfo, _)) = rest.split_once('@') else {
+        return true;
+    };
+    let Some((username, password)) = userinfo.split_once(':') else {
+        return true;
+    };
+
+    username.trim().is_empty() || password.trim().is_empty()
 }
 
 fn valid_cors_origin(origin: &str) -> bool {
@@ -951,7 +978,7 @@ mod tests {
         std::env::set_var("DATABASE_PASSWORD", "plain-secret");
         let mut config = valid_config();
         config.environment = "production".to_string();
-        config.redis_url = Some("redis://localhost:6379".to_string());
+        config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
 
         let err = config.validate_for_database_startup().unwrap_err();
 
@@ -964,7 +991,7 @@ mod tests {
         std::env::set_var("DATABASE_PASSWORD_FILE", "./secrets/postgres_password");
         let mut config = valid_config();
         config.environment = "production".to_string();
-        config.redis_url = Some("redis://localhost:6379".to_string());
+        config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
 
         let err = config.validate_for_database_startup().unwrap_err();
 
@@ -976,7 +1003,7 @@ mod tests {
     fn production_database_startup_rejects_password_in_database_url() {
         let mut config = valid_config();
         config.environment = "production".to_string();
-        config.redis_url = Some("redis://localhost:6379".to_string());
+        config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
         config.database_url = format!(
             "{}{}{}",
             "postgres://keylo_user:", "<plain-secret>", "@localhost:5432/keylo"
@@ -1045,6 +1072,17 @@ mod tests {
         let err = config.validate_for_database_startup().unwrap_err();
 
         assert!(err.contains("REDIS_URL"));
+    }
+
+    #[test]
+    fn production_database_startup_requires_redis_credentials() {
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.redis_url = Some("redis://localhost:6379".to_string());
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        assert!(err.contains("REDIS_URL must include Redis ACL username and password"));
     }
 
     #[test]

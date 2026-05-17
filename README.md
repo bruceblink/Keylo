@@ -331,7 +331,7 @@ Cargo.toml           # 项目依赖配置
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173` | 允许浏览器跨域携带凭证访问的 Origin 白名单，逗号分隔 |
 | `ADMIN_CLIENT_ID` | `cli-admin-root` | 管理员客户端 ID |
 | `ADMIN_CLIENT_SECRET` | `` | 管理员客户端密钥（启动必填） |
-| `REDIS_URL` | `` | Redis 地址（配置后启用分布式状态存储） |
+| `REDIS_URL` | `` | Redis 地址（配置后启用分布式状态存储）；生产环境必须包含 ACL 用户名和密码 |
 | `REDIS_KEY_PREFIX` | `keylo` | Redis key 前缀（多环境隔离） |
 | `DB_POOL_SIZE` | `10` | 数据库连接池最大连接数 |
 | `ALLOW_IN_MEMORY_FALLBACK` | `false` | 非生产环境是否允许数据库初始化失败后启动无数据库路由；默认关闭 |
@@ -439,7 +439,7 @@ docker run --rm -p 2345:2345 \
   -v $(pwd)/secrets:/run/secrets:ro \
   -e DATABASE_URL="postgres://keylo_user@db:5432/keylo" \
   -e ADMIN_CLIENT_SECRET="replace-with-strong-admin-secret" \
-  -e REDIS_URL="redis://redis:6379" \
+  -e REDIS_URL="redis://keylo:replace-with-strong-redis-password@redis:6379" \
   ghcr.io/bruceblink/keylo:v1.5.0
 ```
 
@@ -468,6 +468,8 @@ docker-compose logs -f postgres
 * `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`，部署时只需提供强 `ADMIN_CLIENT_SECRET`
 * 默认挂载 `${JWT_KEYS_DIR:-./keys}` 到 `/app/keys`
 * Redis 默认启用，满足生产环境的限流、登录锁定和 OAuth state 依赖
+* Redis 不映射宿主机端口，只加入 `keylo_redis_network` 专用内部网络；不要让其他服务加入该网络
+* Redis 通过 `./secrets/redis.acl` 启用 ACL，`REDIS_URL` 使用 `keylo` 用户凭据
 
 首次在服务器部署时，建议先准备 `.env` 或 shell 环境变量，再执行：
 
