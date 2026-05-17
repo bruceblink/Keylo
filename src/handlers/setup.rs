@@ -203,11 +203,11 @@ pub async fn setup_status(
             redis_ok || !redis_required,
             redis_required,
             if redis_ok {
-                "REDIS_URL is configured"
+                "Redis URL is configured"
             } else if redis_required {
-                "REDIS_URL is required in production"
+                "Redis URL is required in production"
             } else {
-                "REDIS_URL is optional outside production"
+                "Redis URL is optional outside production"
             },
         ),
         check(

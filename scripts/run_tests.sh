@@ -39,20 +39,20 @@ fi
 
 # Start PostgreSQL test database
 print_status "Starting PostgreSQL test database..."
-mkdir -p secrets
-if [ ! -s secrets/test_postgres_password ]; then
-    openssl rand -base64 32 > secrets/test_postgres_password
+mkdir -p .secrets
+if [ ! -s .secrets/.test_postgres_password ]; then
+    openssl rand -base64 32 > .secrets/.test_postgres_password
 fi
-if [ ! -s secrets/test_database_password.key ]; then
-    openssl rand -base64 32 > secrets/test_database_password.key
+if [ ! -s .secrets/.test_database_password.key ]; then
+    openssl rand -base64 32 > .secrets/.test_database_password.key
 fi
-DATABASE_PASSWORD_FILE="$(pwd)/secrets/test_postgres_password" \
-DATABASE_PASSWORD_KEY_FILE="$(pwd)/secrets/test_database_password.key" \
-    cargo run --quiet --bin keylo-encrypt-db-password > secrets/test_postgres_password.enc
+DATABASE_PASSWORD_FILE="$(pwd)/.secrets/.test_postgres_password" \
+DATABASE_PASSWORD_KEY_FILE="$(pwd)/.secrets/.test_database_password.key" \
+    cargo run --quiet --bin keylo-encrypt-db-password > .secrets/.test_postgres_password.enc
 if docker run -d --name keylo-test-db \
-    -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
+    -e POSTGRES_PASSWORD_FILE=/run/secrets/.postgres_password \
     -e POSTGRES_DB=keylo_test \
-    -v "$(pwd)/secrets/test_postgres_password:/run/secrets/postgres_password:ro" \
+    -v "$(pwd)/.secrets/.test_postgres_password:/run/secrets/.postgres_password:ro" \
     -p 5432:5432 postgres:15 > /dev/null 2>&1; then
     print_success "PostgreSQL test database started"
 else
@@ -76,10 +76,10 @@ if [ $i -eq 30 ]; then
 fi
 
 # Set test environment variables
-TEST_DB_PASSWORD="$(tr -d '\r\n' < secrets/test_postgres_password)"
+TEST_DB_PASSWORD="$(tr -d '\r\n' < .secrets/.test_postgres_password)"
 export TEST_DATABASE_URL="postgres://postgres:${TEST_DB_PASSWORD}@localhost:5432/keylo_test"
-export DATABASE_PASSWORD_ENC_FILE="$(pwd)/secrets/test_postgres_password.enc"
-export DATABASE_PASSWORD_KEY_FILE="$(pwd)/secrets/test_database_password.key"
+export DATABASE_PASSWORD_ENC_FILE="$(pwd)/.secrets/.test_postgres_password.enc"
+export DATABASE_PASSWORD_KEY_FILE="$(pwd)/.secrets/.test_database_password.key"
 export RUST_LOG=debug
 
 # Run tests

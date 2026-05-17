@@ -110,7 +110,7 @@ async fn require_redis_ready_in_production(config: &Config) -> Result<(), anyhow
     let redis_url = config.redis_url.as_deref().unwrap_or_default();
     let redis_url_log = redact_dsn(redis_url);
     let redis_client = redis::Client::open(redis_url)
-        .map_err(|e| anyhow::anyhow!("Invalid REDIS_URL '{}': {}", redis_url_log, e))?;
+        .map_err(|e| anyhow::anyhow!("Invalid Redis URL '{}': {}", redis_url_log, e))?;
 
     let mut last_redis_err: Option<String> = None;
     for attempt in 1..=STARTUP_RETRY_ATTEMPTS {
@@ -389,6 +389,7 @@ fn validate_test_database_startup_config(config: &Config) -> Result<(), anyhow::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::default_cors_allowed_origins;
     use axum::extract::connect_info::MockConnectInfo;
     use axum::{
         body::Body,
@@ -439,11 +440,44 @@ wwIDAQAB
 -----END PUBLIC KEY-----"#;
 
     fn test_config() -> Config {
-        let mut config = Config::from_env();
-        config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
-        config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
-        config.enable_setup_wizard = false;
-        config
+        Config {
+            jwt_issuer: "keylo".to_string(),
+            jwt_key_id: "keylo-rs256-1".to_string(),
+            jwt_audiences: vec!["admin-backend".to_string(), "crawler".to_string()],
+            jwt_private_key_pem: TEST_JWT_PRIVATE_KEY_PEM.to_string(),
+            jwt_public_key_pem: TEST_JWT_PUBLIC_KEY_PEM.to_string(),
+            jwt_keys_generated: false,
+            database_url: String::new(),
+            server_addr: "127.0.0.1".to_string(),
+            server_port: 2345,
+            environment: "development".to_string(),
+            token_expiry_seconds: 900,
+            refresh_token_expiry_seconds: 2_592_000,
+            max_failed_login_attempts: 5,
+            login_lockout_seconds: 300,
+            auth_rate_limit_window_seconds: 60,
+            auth_rate_limit_max_requests: 30,
+            auth_global_rate_limit_max_requests: 300,
+            trust_proxy_headers: false,
+            cors_allowed_origins: default_cors_allowed_origins(),
+            admin_client_id: Some("cli-admin-root".to_string()),
+            admin_client_secret: Some("test-admin-secret".to_string()),
+            redis_url: None,
+            redis_key_prefix: "keylo".to_string(),
+            audit_log_retention_days: 30,
+            service_token_expiry_seconds: 3600,
+            enable_super_admin_bootstrap: false,
+            super_admin_username: None,
+            super_admin_email: None,
+            super_admin_password: None,
+            log_to_file: false,
+            log_dir: "./logs".to_string(),
+            log_file_prefix: "keylo".to_string(),
+            allow_in_memory_fallback: false,
+            enable_setup_wizard: false,
+            setup_token: None,
+            setup_keys_dir: "./keys".to_string(),
+        }
     }
 
     #[test]

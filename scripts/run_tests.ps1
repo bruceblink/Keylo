@@ -14,10 +14,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Info "Starting PostgreSQL test database..."
-New-Item -ItemType Directory -Force -Path "secrets" *> $null
-$testPasswordFile = (Resolve-Path "secrets").Path + "\test_postgres_password"
-$testPasswordEncFile = (Resolve-Path "secrets").Path + "\test_postgres_password.enc"
-$testPasswordKeyFile = (Resolve-Path "secrets").Path + "\test_database_password.key"
+New-Item -ItemType Directory -Force -Path ".secrets" *> $null
+$secretDir = Resolve-Path ".secrets"
+(Get-Item $secretDir).Attributes = (Get-Item $secretDir).Attributes -bor [System.IO.FileAttributes]::Hidden
+$testPasswordFile = $secretDir.Path + "\.test_postgres_password"
+$testPasswordEncFile = $secretDir.Path + "\.test_postgres_password.enc"
+$testPasswordKeyFile = $secretDir.Path + "\.test_database_password.key"
 if (!(Test-Path $testPasswordFile) -or ((Get-Item $testPasswordFile).Length -eq 0)) {
     [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) | Set-Content -NoNewline $testPasswordFile
 }
@@ -29,9 +31,9 @@ $env:DATABASE_PASSWORD_KEY_FILE = $testPasswordKeyFile
 cargo run --quiet --bin keylo-encrypt-db-password | Set-Content -NoNewline $testPasswordEncFile
 Remove-Item Env:DATABASE_PASSWORD_FILE
 docker run -d --name keylo-test-db `
-    -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password `
+    -e POSTGRES_PASSWORD_FILE=/run/secrets/.postgres_password `
     -e POSTGRES_DB=keylo_test `
-    -v "${testPasswordFile}:/run/secrets/postgres_password:ro" `
+    -v "${testPasswordFile}:/run/secrets/.postgres_password:ro" `
     -p 5432:5432 postgres:15 *> $null
 if ($LASTEXITCODE -eq 0) {
     Success "PostgreSQL test database started"

@@ -23,14 +23,24 @@ const DEFAULT_ADMIN_CLIENT_ID: &str = "cli-admin-root";
 const DEFAULT_JWT_PRIVATE_KEY_PATH: &str = "./keys/private.pem";
 const DEFAULT_JWT_PUBLIC_KEY_PATH: &str = "./keys/public.pem";
 const DEFAULT_DATABASE_PASSWORD_ENC_PATHS: [&str; 3] = [
-    "./secrets/postgres_password.enc",
-    "/run/secrets/postgres_password_enc",
+    "./.secrets/.postgres_password.enc",
+    "/run/secrets/.postgres_password.enc",
     "/run/secrets/postgres_password.enc",
 ];
 const DEFAULT_DATABASE_PASSWORD_KEY_PATHS: [&str; 3] = [
-    "./secrets/database_password.key",
-    "/run/secrets/database_password_key",
+    "./.secrets/.database_password.key",
+    "/run/secrets/.database_password.key",
     "/run/secrets/database_password.key",
+];
+const DEFAULT_REDIS_URL_ENC_PATHS: [&str; 3] = [
+    "./.secrets/.redis_url.enc",
+    "/run/secrets/.redis_url.enc",
+    "/run/secrets/redis_url.enc",
+];
+const DEFAULT_REDIS_URL_KEY_PATHS: [&str; 3] = [
+    "./.secrets/.redis_url.key",
+    "/run/secrets/.redis_url.key",
+    "/run/secrets/redis_url.key",
 ];
 
 fn read_env_or_file(value_key: &str, path_key: &str) -> Option<String> {
@@ -249,7 +259,7 @@ fn parse_csv_env(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn default_cors_allowed_origins() -> Vec<String> {
+pub(crate) fn default_cors_allowed_origins() -> Vec<String> {
     parse_csv_env(DEFAULT_CORS_ALLOWED_ORIGINS)
 }
 
@@ -301,6 +311,25 @@ pub fn database_password_from_env_result() -> Result<Option<String>, String> {
     ))
 }
 
+pub fn redis_url_from_env_result() -> Result<Option<String>, String> {
+    let encrypted_url = read_env_or_file("REDIS_URL_ENC", "REDIS_URL_ENC_FILE")
+        .or_else(|| read_first_existing_file(&DEFAULT_REDIS_URL_ENC_PATHS));
+    if let Some(encrypted_url) = encrypted_url {
+        let key = read_env_or_file("REDIS_URL_KEY", "REDIS_URL_KEY_FILE")
+            .or_else(|| read_first_existing_file(&DEFAULT_REDIS_URL_KEY_PATHS))
+            .ok_or_else(|| {
+                "REDIS_URL_KEY or REDIS_URL_KEY_FILE must be set when using encrypted Redis URL"
+                    .to_string()
+            })?;
+        let redis_url = decrypt_redis_url(&encrypted_url, &key)?.trim().to_string();
+        return Ok((!redis_url.is_empty()).then_some(redis_url));
+    }
+
+    Ok(read_env_or_file("REDIS_URL", "REDIS_URL_FILE")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty()))
+}
+
 pub fn database_password_source_is_plaintext() -> bool {
     env_value_is_non_empty("DATABASE_PASSWORD") || env_value_is_non_empty("DATABASE_PASSWORD_FILE")
 }
@@ -311,6 +340,16 @@ pub fn database_password_source_is_encrypted() -> bool {
         || any_default_file_exists(&DEFAULT_DATABASE_PASSWORD_ENC_PATHS)
 }
 
+pub fn redis_url_source_is_plaintext() -> bool {
+    env_value_is_non_empty("REDIS_URL") || env_value_is_non_empty("REDIS_URL_FILE")
+}
+
+pub fn redis_url_source_is_encrypted() -> bool {
+    env_value_is_non_empty("REDIS_URL_ENC")
+        || env_value_is_non_empty("REDIS_URL_ENC_FILE")
+        || any_default_file_exists(&DEFAULT_REDIS_URL_ENC_PATHS)
+}
+
 pub fn configured_database_url_contains_password() -> bool {
     env::var("DATABASE_URL")
         .ok()
@@ -318,37 +357,56 @@ pub fn configured_database_url_contains_password() -> bool {
 }
 
 pub fn decrypt_database_password(encrypted: &str, key: &str) -> Result<String, String> {
+    decrypt_config_secret(
+        encrypted,
+        key,
+        "DATABASE_PASSWORD_ENC",
+        "DATABASE_PASSWORD_KEY",
+    )
+}
+
+pub fn decrypt_redis_url(encrypted: &str, key: &str) -> Result<String, String> {
+    decrypt_config_secret(encrypted, key, "REDIS_URL_ENC", "REDIS_URL_KEY")
+}
+
+fn decrypt_config_secret(
+    encrypted: &str,
+    key: &str,
+    encrypted_label: &str,
+    key_label: &str,
+) -> Result<String, String> {
     let encrypted = encrypted.trim();
     let parts = encrypted.split(':').collect::<Vec<_>>();
     if parts.len() != 5 || parts[0] != "secret" || parts[1] != "v1" || parts[2] != "aes-256-gcm" {
         return Err(
-            "DATABASE_PASSWORD_ENC must use format secret:v1:aes-256-gcm:<nonce_base64>:<ciphertext_base64>"
-                .to_string(),
+            format!(
+                "{encrypted_label} must use format secret:v1:aes-256-gcm:<nonce_base64>:<ciphertext_base64>"
+            ),
         );
     }
 
     let nonce = BASE64
         .decode(parts[3])
-        .map_err(|err| format!("Invalid DATABASE_PASSWORD_ENC nonce: {err}"))?;
+        .map_err(|err| format!("Invalid {encrypted_label} nonce: {err}"))?;
     if nonce.len() != 12 {
-        return Err("DATABASE_PASSWORD_ENC nonce must decode to 12 bytes".to_string());
+        return Err(format!("{encrypted_label} nonce must decode to 12 bytes"));
     }
 
     let ciphertext = BASE64
         .decode(parts[4])
-        .map_err(|err| format!("Invalid DATABASE_PASSWORD_ENC ciphertext: {err}"))?;
-    let key = decode_database_password_key(key)?;
+        .map_err(|err| format!("Invalid {encrypted_label} ciphertext: {err}"))?;
+    let key = decode_config_secret_key(key, key_label)?;
     let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|_| "DATABASE_PASSWORD_KEY must decode to 32 bytes".to_string())?;
+        .map_err(|_| format!("{key_label} must decode to 32 bytes"))?;
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
-        .map_err(|_| "Failed to decrypt DATABASE_PASSWORD_ENC".to_string())?;
+        .map_err(|_| format!("Failed to decrypt {encrypted_label}"))?;
 
     String::from_utf8(plaintext)
-        .map_err(|_| "DATABASE_PASSWORD_ENC decrypted to non-UTF-8 data".to_string())
+        .map_err(|_| format!("{encrypted_label} decrypted to non-UTF-8 data"))
 }
 
-fn decode_database_password_key(key: &str) -> Result<Vec<u8>, String> {
+fn decode_config_secret_key(key: &str, key_label: &str) -> Result<Vec<u8>, String> {
     let key = key.trim();
     if let Ok(decoded) = BASE64.decode(key) {
         if decoded.len() == 32 {
@@ -361,7 +419,9 @@ fn decode_database_password_key(key: &str) -> Result<Vec<u8>, String> {
         return Ok(raw);
     }
 
-    Err("DATABASE_PASSWORD_KEY must be 32 bytes or base64-encoded 32 bytes".to_string())
+    Err(format!(
+        "{key_label} must be 32 bytes or base64-encoded 32 bytes"
+    ))
 }
 
 /// 应用配置
@@ -488,7 +548,8 @@ impl Config {
             env_non_empty_or_dotenv("ADMIN_CLIENT_ID").or_else(|| Some(default_admin_client_id()));
         let admin_client_secret = env_non_empty_or_dotenv("ADMIN_CLIENT_SECRET");
 
-        let redis_url = env::var("REDIS_URL").ok();
+        let redis_url = redis_url_from_env_result()
+            .unwrap_or_else(|err| panic!("Failed to load Redis URL: {err}"));
         let redis_key_prefix = env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "keylo".into());
 
         let audit_log_retention_days = parse_i64_env("AUDIT_LOG_RETENTION_DAYS", 30);
@@ -588,18 +649,35 @@ impl Config {
             }
         }
 
-        if self.is_production() && option_is_blank(self.redis_url.as_deref()) {
-            errors.push("REDIS_URL must be set in production".to_string());
-        }
-        if self.is_production()
-            && self
+        if self.is_production() {
+            if redis_url_source_is_plaintext() {
+                errors.push(
+                    "REDIS_URL/REDIS_URL_FILE cannot be used in production; use REDIS_URL_ENC or REDIS_URL_ENC_FILE"
+                        .to_string(),
+                );
+            }
+
+            if option_is_blank(self.redis_url.as_deref()) {
+                errors.push("REDIS_URL_ENC must be set in production".to_string());
+            }
+
+            if self
                 .redis_url
                 .as_deref()
                 .is_some_and(redis_url_lacks_credentials)
-        {
-            errors.push(
-                "REDIS_URL must include Redis ACL username and password in production".to_string(),
-            );
+            {
+                errors.push(
+                    "Redis URL must include Redis ACL username and password in production"
+                        .to_string(),
+                );
+            }
+
+            if !redis_url_source_is_encrypted() {
+                errors.push(
+                    "Redis URL must be encrypted in production; use REDIS_URL_ENC or REDIS_URL_ENC_FILE"
+                        .to_string(),
+                );
+            }
         }
 
         self.validate_setup_wizard(&mut errors);
@@ -974,6 +1052,28 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_redis_url_can_be_decrypted() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let nonce = b"123456789012";
+        let cipher = Aes256Gcm::new_from_slice(key.as_bytes()).unwrap();
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(nonce),
+                b"redis://keylo:redis-secret@redis:6379".as_ref(),
+            )
+            .unwrap();
+        let encrypted = format!(
+            "secret:v1:aes-256-gcm:{}:{}",
+            BASE64.encode(nonce),
+            BASE64.encode(ciphertext)
+        );
+
+        let redis_url = decrypt_redis_url(&encrypted, key).unwrap();
+
+        assert_eq!(redis_url, "redis://keylo:redis-secret@redis:6379");
+    }
+
+    #[test]
     fn production_database_startup_rejects_plaintext_password_source() {
         std::env::set_var("DATABASE_PASSWORD", "plain-secret");
         let mut config = valid_config();
@@ -988,7 +1088,7 @@ mod tests {
 
     #[test]
     fn production_database_startup_rejects_plaintext_password_file_config() {
-        std::env::set_var("DATABASE_PASSWORD_FILE", "./secrets/postgres_password");
+        std::env::set_var("DATABASE_PASSWORD_FILE", "./.secrets/.postgres_password");
         let mut config = valid_config();
         config.environment = "production".to_string();
         config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
@@ -1082,7 +1182,79 @@ mod tests {
 
         let err = config.validate_for_database_startup().unwrap_err();
 
-        assert!(err.contains("REDIS_URL must include Redis ACL username and password"));
+        assert!(err.contains("Redis URL must include Redis ACL username and password"));
+    }
+
+    #[test]
+    fn production_database_startup_rejects_plaintext_redis_url_source() {
+        let previous_redis_url = std::env::var("REDIS_URL").ok();
+        std::env::set_var("REDIS_URL", "redis://keylo:redis-secret@localhost:6379");
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        restore_env("REDIS_URL", previous_redis_url);
+        assert!(err.contains("REDIS_URL/REDIS_URL_FILE cannot be used in production"));
+    }
+
+    #[test]
+    fn config_loads_redis_url_from_encrypted_file() {
+        let previous_redis_url = std::env::var("REDIS_URL").ok();
+        let previous_redis_url_file = std::env::var("REDIS_URL_FILE").ok();
+        let previous_redis_url_enc_file = std::env::var("REDIS_URL_ENC_FILE").ok();
+        let previous_redis_url_key_file = std::env::var("REDIS_URL_KEY_FILE").ok();
+        std::env::set_var("REDIS_URL", "");
+        std::env::remove_var("REDIS_URL_FILE");
+        std::env::remove_var("REDIS_URL_ENC_FILE");
+        std::env::remove_var("REDIS_URL_KEY_FILE");
+        let temp_root = std::env::temp_dir().join(format!(
+            "keylo-test-redis-url-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let key = "0123456789abcdef0123456789abcdef";
+        let nonce = b"123456789012";
+        let cipher = Aes256Gcm::new_from_slice(key.as_bytes()).unwrap();
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(nonce),
+                b"redis://keylo:redis-secret@localhost:6379".as_ref(),
+            )
+            .unwrap();
+        let encrypted = format!(
+            "secret:v1:aes-256-gcm:{}:{}",
+            BASE64.encode(nonce),
+            BASE64.encode(ciphertext)
+        );
+        let redis_url_enc_file = temp_root.join("redis_url.enc");
+        let redis_url_key_file = temp_root.join("redis_url.key");
+        fs::write(&redis_url_enc_file, encrypted).unwrap();
+        fs::write(&redis_url_key_file, key).unwrap();
+        std::env::set_var("REDIS_URL_ENC_FILE", &redis_url_enc_file);
+        std::env::set_var("REDIS_URL_KEY_FILE", &redis_url_key_file);
+
+        let config = Config::from_env();
+
+        restore_env("REDIS_URL", previous_redis_url);
+        restore_env("REDIS_URL_FILE", previous_redis_url_file);
+        restore_env("REDIS_URL_ENC_FILE", previous_redis_url_enc_file);
+        restore_env("REDIS_URL_KEY_FILE", previous_redis_url_key_file);
+        let _ = fs::remove_dir_all(temp_root);
+        assert_eq!(
+            config.redis_url.as_deref(),
+            Some("redis://keylo:redis-secret@localhost:6379")
+        );
+    }
+
+    fn restore_env(key: &str, value: Option<String>) {
+        if let Some(value) = value {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
     }
 
     #[test]

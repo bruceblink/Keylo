@@ -14,20 +14,49 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import os
+import stat
+import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 PREFIX = "secret:v1:aes-256-gcm"
-DEFAULT_TEXT_FILE = "secrets/postgres_password"
-DEFAULT_KEY_FILE = "secrets/database_password.key"
-DEFAULT_OUT_FILE = "secrets/postgres_password.enc"
+DEFAULT_TEXT_FILE = ".secrets/.postgres_password"
+DEFAULT_KEY_FILE = ".secrets/.database_password.key"
+DEFAULT_OUT_FILE = ".secrets/.postgres_password.enc"
+DEFAULT_REDIS_ACL_FILE = ".secrets/.redis.acl"
+DEFAULT_REDIS_URL_KEY_FILE = ".secrets/.redis_url.key"
+DEFAULT_REDIS_URL_ENC_FILE = ".secrets/.redis_url.enc"
+
+
+def ensure_writable(path: Path) -> None:
+    if os.name == "nt" and path.exists():
+        subprocess.run(
+            ["attrib", "-h", "-r", str(path)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        path.chmod(stat.S_IWRITE)
+
+
+def hide_if_dot_path(path: Path) -> None:
+    if os.name != "nt":
+        return
+
+    for item in [path.parent, path]:
+        if item.name.startswith(".") and item.exists():
+            os.system(f'attrib +h "{item}" >nul 2>nul')
 
 
 def write_text(path: Path, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable(path)
     path.write_text(value + "\n", encoding="utf-8")
+    hide_if_dot_path(path)
 
 
 def generate_key_value() -> str:
@@ -133,6 +162,41 @@ def cmd_encrypt_file_and_remove(args: argparse.Namespace) -> None:
     print(f"removed_plaintext: {text_file}")
 
 
+def cmd_generate_redis(args: argparse.Namespace) -> None:
+    password = base64.b64encode(os.urandom(args.password_bytes)).decode("ascii")
+    password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    username = args.username.strip()
+    key_prefix = args.key_prefix.strip()
+    redis_url = (
+        f"redis://{quote(username, safe='')}:"
+        f"{quote(password, safe='')}@{args.host}:{args.port}"
+    )
+
+    key_text = generate_key_value()
+    encrypted_url = encrypt_value(redis_url, decode_key(key_text))
+    acl_text = (
+        "user default off\n"
+        f"user {username} on #{password_hash} ~{key_prefix}:* +@read +@write +@connection\n"
+    )
+
+    acl_file = Path(args.acl_out)
+    key_file = Path(args.key_out)
+    enc_file = Path(args.enc_out)
+    acl_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    enc_file.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable(acl_file)
+    acl_file.write_text(acl_text, encoding="utf-8")
+    hide_if_dot_path(acl_file)
+    write_text(key_file, key_text)
+    write_text(enc_file, encrypted_url)
+
+    print(f"redis_acl: {acl_file}")
+    print(f"redis_url_key: {key_file}")
+    print(f"redis_url_enc: {enc_file}")
+    print("plain_password_written: false")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Shared AES-256-GCM secret utility")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -177,6 +241,56 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite encrypted output if it already exists",
     )
     encrypt_file_and_remove.set_defaults(func=cmd_encrypt_file_and_remove)
+
+    generate_redis = subparsers.add_parser(
+        "generate-redis",
+        help=(
+            "generate Redis ACL hash, AES key, and encrypted Redis URL without "
+            "writing the plain password"
+        ),
+    )
+    generate_redis.add_argument(
+        "--username",
+        default="keylo",
+        help="Redis ACL username (default: keylo)",
+    )
+    generate_redis.add_argument(
+        "--key-prefix",
+        default="keylo",
+        help="Redis key prefix allowed by ACL (default: keylo)",
+    )
+    generate_redis.add_argument(
+        "--host",
+        default="redis",
+        help="Redis host used in the encrypted URL (default: redis)",
+    )
+    generate_redis.add_argument(
+        "--port",
+        default="6379",
+        help="Redis port used in the encrypted URL (default: 6379)",
+    )
+    generate_redis.add_argument(
+        "--password-bytes",
+        type=int,
+        default=32,
+        help="number of random bytes for the generated password (default: 32)",
+    )
+    generate_redis.add_argument(
+        "--acl-out",
+        default=DEFAULT_REDIS_ACL_FILE,
+        help=f"Redis ACL output path (default: {DEFAULT_REDIS_ACL_FILE})",
+    )
+    generate_redis.add_argument(
+        "--key-out",
+        default=DEFAULT_REDIS_URL_KEY_FILE,
+        help=f"AES key output path (default: {DEFAULT_REDIS_URL_KEY_FILE})",
+    )
+    generate_redis.add_argument(
+        "--enc-out",
+        default=DEFAULT_REDIS_URL_ENC_FILE,
+        help=f"encrypted Redis URL output path (default: {DEFAULT_REDIS_URL_ENC_FILE})",
+    )
+    generate_redis.set_defaults(func=cmd_generate_redis)
 
     return parser
 
