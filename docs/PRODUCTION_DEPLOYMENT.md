@@ -30,8 +30,8 @@ CORS_ALLOWED_ORIGINS=https://admin.example.com
 如果使用仓库内的 [docker-compose.yml](docker-compose.yml)，还需要保证：
 
 - 宿主机存在 RSA 密钥目录，并通过 `${JWT_KEYS_DIR:-./keys}` 挂载到容器 `/app/keys`
-- 宿主机存在 PostgreSQL 初始化明文密码文件 `${POSTGRES_PASSWORD_FILE:-./.secrets/.postgres_password}`，该文件只提供给 PostgreSQL 初始化
-- 宿主机存在 Keylo 运行期数据库密文 `${DATABASE_PASSWORD_ENC_FILE:-./.secrets/.postgres_password.enc}` 和解密密钥 `${DATABASE_PASSWORD_KEY_FILE:-./.secrets/.database_password.key}`，Keylo 不读取明文数据库密码文件
+- 宿主机存在 PostgreSQL 初始化明文密码文件 `${POSTGRES_PASSWORD_FILE:-./.secrets/.database_password}`，该文件只提供给 PostgreSQL 初始化
+- 宿主机存在 Keylo 运行期数据库密文 `${DATABASE_PASSWORD_ENC_FILE:-./.secrets/.database_password.enc}` 和解密密钥 `${DATABASE_PASSWORD_KEY_FILE:-./.secrets/.database_password.key}`，Keylo 不读取明文数据库密码文件
 - 宿主机存在 Redis ACL 文件 `./.secrets/.redis.acl`，只开启 `keylo` 用户并限制 key 前缀访问
 - 宿主机存在 Redis URL 密文 `./.secrets/.redis_url.enc` 和解密 key `./.secrets/.redis_url.key`，Keylo 通过 `REDIS_URL_ENC_FILE` / `REDIS_URL_KEY_FILE` 读取并在内存中解密
 - Docker Compose 中 `SERVER_ADDR` 约定为 `0.0.0.0`，避免容器内只监听回环地址
@@ -64,17 +64,18 @@ CORS_ALLOWED_ORIGINS=https://admin.example.com
 示例生成命令：
 
 ```bash
-mkdir -p keys
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
-openssl rsa -pubout -in private.pem -out public.pem
+python -m pip install cryptography
+python scripts/secret_tool.py generate-rsa
 ```
 
 推荐的服务器落地步骤：
 
 ```bash
-mkdir -p /opt/keylo/keys
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /opt/keylo/keys/private.pem
-openssl rsa -pubout -in /opt/keylo/keys/private.pem -out /opt/keylo/keys/public.pem
+python -m pip install cryptography
+python scripts/secret_tool.py generate-rsa \
+  --bits 2048 \
+  --out-private /opt/keylo/keys/private.pem \
+  --out-public /opt/keylo/keys/public.pem
 chmod 600 /opt/keylo/keys/private.pem
 chmod 644 /opt/keylo/keys/public.pem
 ```
@@ -116,35 +117,29 @@ Docker Compose 首次初始化 PostgreSQL 时，PostgreSQL 仍需要读取一次
 
 ```bash
 mkdir -p /opt/keylo/.secrets
-openssl rand -base64 32 > /opt/keylo/.secrets/.postgres_password
 
 python -m pip install cryptography
-python scripts/secret_tool.py generate-key \
-  --out /opt/keylo/.secrets/.database_password.key
-python scripts/secret_tool.py encrypt \
-  --text-file /opt/keylo/.secrets/.postgres_password \
-  --key-file /opt/keylo/.secrets/.database_password.key \
-  --out /opt/keylo/.secrets/.postgres_password.enc
+python scripts/secret_tool.py generate-deployment \
+  --secret-dir /opt/keylo/.secrets \
+  --keep-database-plain
 
-chmod 600 /opt/keylo/.secrets/.postgres_password \
-  /opt/keylo/.secrets/.postgres_password.enc \
+chmod 600 /opt/keylo/.secrets/.database_password \
+  /opt/keylo/.secrets/.database_password.enc \
   /opt/keylo/.secrets/.database_password.key
 ```
 
-如果使用外部数据库，或 PostgreSQL 已经完成初始化且不再需要 `/opt/keylo/.secrets/.postgres_password`，可以改用 `encrypt-file-and-remove` 在成功生成密文后删除明文文件：
+如果需要自定义数据库密码，先写入 `/opt/keylo/.secrets/.database_password`，再执行上面的生成命令。PostgreSQL 初始化成功后，应删除明文文件。外部数据库或已初始化数据库可以省略 `--keep-database-plain`，脚本会在成功生成密文后删除明文文件：
 
 ```bash
-python scripts/secret_tool.py encrypt-file-and-remove \
-  --text-file /opt/keylo/.secrets/.postgres_password \
-  --key-file /opt/keylo/.secrets/.database_password.key \
-  --out /opt/keylo/.secrets/.postgres_password.enc
+python scripts/secret_tool.py generate-deployment \
+  --secret-dir /opt/keylo/.secrets
 ```
 
 随后启动 Keylo 时指定 secret 文件位置：
 
 ```bash
-POSTGRES_PASSWORD_FILE=/opt/keylo/.secrets/.postgres_password \
-DATABASE_PASSWORD_ENC_FILE=/opt/keylo/.secrets/.postgres_password.enc \
+POSTGRES_PASSWORD_FILE=/opt/keylo/.secrets/.database_password \
+DATABASE_PASSWORD_ENC_FILE=/opt/keylo/.secrets/.database_password.enc \
 DATABASE_PASSWORD_KEY_FILE=/opt/keylo/.secrets/.database_password.key \
   docker compose up -d --build
 ```

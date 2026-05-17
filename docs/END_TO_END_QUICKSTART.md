@@ -42,7 +42,7 @@ Copy-Item .env.example .env
 
 ```env
 DATABASE_URL=postgres://keylo_user@localhost:5432/keylo
-DATABASE_PASSWORD_ENC_FILE=./.secrets/.postgres_password.enc
+DATABASE_PASSWORD_ENC_FILE=./.secrets/.database_password.enc
 DATABASE_PASSWORD_KEY_FILE=./.secrets/.database_password.key
 REDIS_URL_ENC_FILE=./.secrets/.redis_url.enc
 REDIS_URL_KEY_FILE=./.secrets/.redis_url.key
@@ -61,9 +61,8 @@ ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
 Keylo 在缺少 RSA 密钥配置时会自动生成并持久化随机 RSA 密钥对。生产环境建议提前生成、挂载并备份固定密钥：
 
 ```bash
-mkdir -p keys
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/private.pem
-openssl rsa -pubout -in keys/private.pem -out keys/public.pem
+python -m pip install cryptography
+python scripts/secret_tool.py generate-rsa
 ```
 
 Linux 服务器推荐进一步限制权限：
@@ -77,17 +76,12 @@ chmod 644 keys/public.pem
 
 ```bash
 mkdir -p .secrets
-openssl rand -base64 32 > .secrets/.postgres_password
 python -m pip install cryptography
-python scripts/secret_tool.py generate-key --out .secrets/.database_password.key
-python scripts/secret_tool.py encrypt \
-  --text-file .secrets/.postgres_password \
-  --key-file .secrets/.database_password.key \
-  --out .secrets/.postgres_password.enc
+python scripts/secret_tool.py generate-deployment --keep-database-plain
 docker compose up -d postgres redis
 ```
 
-仓库自带的 PostgreSQL 容器首次初始化需要读取 `.secrets/.postgres_password`。如果使用外部数据库，或数据库已初始化且不再需要明文文件，可以改用 `python scripts/secret_tool.py encrypt-file-and-remove` 生成运行期密文并删除明文。
+如果需要自定义数据库密码，先写入 `.secrets/.database_password`，再执行 `generate-deployment --keep-database-plain`。仓库自带的 PostgreSQL 容器首次初始化需要读取 `.secrets/.database_password`。确认数据库初始化完成后，应删除该明文文件。
 
 Redis 默认不暴露到宿主机，只允许 Keylo 通过 Compose 内部网络访问。启动前需要准备 `.secrets/.redis.acl`、`.secrets/.redis_url.enc` 和 `.secrets/.redis_url.key`。
 
