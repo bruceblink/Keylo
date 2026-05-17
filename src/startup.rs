@@ -15,6 +15,9 @@ use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
+const STARTUP_RETRY_ATTEMPTS: u32 = 30;
+const STARTUP_RETRY_DELAY: Duration = Duration::from_secs(1);
+
 fn redact_dsn(input: &str) -> String {
     if let Some((scheme, rest)) = input.split_once("://") {
         if let Some((_, tail)) = rest.split_once('@') {
@@ -69,60 +72,25 @@ fn cors_layer(cors_allowed_origins: Vec<String>) -> CorsLayer {
         .allow_credentials(true)
 }
 
-pub fn init_app_router() -> Router {
-    let config = Config::default();
-    let cors_allowed_origins = config.cors_allowed_origins.clone();
-    let app_state =
-        AppState::new(config, None).expect("Default Config must always produce valid JWT keys");
-    Router::new()
-        .merge(routes::auth::public_router())
-        .merge(routes::service::service_public_routes())
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/favicon.ico", get(favicon))
-        .route("/", get(index))
-        .route("/protected", get(protected))
-        .merge(routes::auth::protected_router())
-        .merge(routes::setup::setup_routes())
-        .layer(access_log_layer())
-        .layer(cors_layer(cors_allowed_origins))
-        .with_state(app_state)
-}
-
-pub fn init_app_router_with_config(config: Config) -> Router {
-    let cors_allowed_origins = config.cors_allowed_origins.clone();
-    let app_state = AppState::new(config, None)
-        .expect("Failed to initialize AppState: invalid JWT key configuration");
-    Router::new()
-        .merge(routes::auth::public_router())
-        .merge(routes::service::service_public_routes())
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/favicon.ico", get(favicon))
-        .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes())
-        .route("/", get(index))
-        .route("/protected", get(protected))
-        .merge(routes::auth::protected_router())
-        .merge(routes::setup::setup_routes())
-        .layer(access_log_layer())
-        .layer(cors_layer(cors_allowed_origins))
-        .with_state(app_state)
-}
-
-pub async fn init_app_router_with_db(
-    config: Config,
-    database_url: &str,
-) -> Result<Router, anyhow::Error> {
-    let database_url = build_database_url(
+fn resolve_database_url(database_url: &str) -> Result<String, anyhow::Error> {
+    Ok(build_database_url(
         database_url.to_string(),
         database_password_from_env_result().map_err(anyhow::Error::msg)?,
-    );
+    ))
+}
+
+fn validate_database_startup_config(
+    config: &Config,
+    database_url: &str,
+) -> Result<(), anyhow::Error> {
     let mut startup_config = config.clone();
-    startup_config.database_url = database_url.clone();
+    startup_config.database_url = database_url.to_string();
     startup_config
         .validate_for_database_startup()
-        .map_err(anyhow::Error::msg)?;
+        .map_err(anyhow::Error::msg)
+}
 
+fn warn_if_jwt_keys_were_generated(config: &Config) {
     if config.jwt_keys_generated {
         tracing::warn!(
             private_key_path = std::env::var("JWT_PRIVATE_KEY_PATH")
@@ -132,126 +100,135 @@ pub async fn init_app_router_with_db(
             "JWT RSA key pair was generated because no key configuration was found"
         );
     }
+}
 
-    if config.is_production() {
-        let redis_url = config.redis_url.as_deref().unwrap_or_default();
-        let redis_url_log = redact_dsn(redis_url);
-        let redis_client = redis::Client::open(redis_url)
-            .map_err(|e| anyhow::anyhow!("Invalid REDIS_URL '{}': {}", redis_url_log, e))?;
+async fn require_redis_ready_in_production(config: &Config) -> Result<(), anyhow::Error> {
+    if !config.is_production() {
+        return Ok(());
+    }
 
-        let mut redis_ready = false;
-        let mut last_redis_err: Option<String> = None;
-        for attempt in 1..=30 {
-            match redis_client.get_multiplexed_async_connection().await {
-                Ok(mut conn) => match conn.ping::<String>().await {
-                    Ok(_) => {
-                        redis_ready = true;
-                        break;
-                    }
-                    Err(e) => {
-                        last_redis_err = Some(e.to_string());
-                    }
-                },
-                Err(e) => {
-                    last_redis_err = Some(e.to_string());
-                }
-            }
+    let redis_url = config.redis_url.as_deref().unwrap_or_default();
+    let redis_url_log = redact_dsn(redis_url);
+    let redis_client = redis::Client::open(redis_url)
+        .map_err(|e| anyhow::anyhow!("Invalid REDIS_URL '{}': {}", redis_url_log, e))?;
 
-            tracing::warn!(
-                "Redis not ready (attempt {}/30, url={}): {}",
-                attempt,
-                redis_url_log,
-                last_redis_err.as_deref().unwrap_or("unknown error")
-            );
-            sleep(Duration::from_secs(1)).await;
+    let mut last_redis_err: Option<String> = None;
+    for attempt in 1..=STARTUP_RETRY_ATTEMPTS {
+        match redis_client.get_multiplexed_async_connection().await {
+            Ok(mut conn) => match conn.ping::<String>().await {
+                Ok(_) => return Ok(()),
+                Err(e) => last_redis_err = Some(e.to_string()),
+            },
+            Err(e) => last_redis_err = Some(e.to_string()),
         }
 
-        if !redis_ready {
-            anyhow::bail!(
-                "Redis connection failed after 30 attempts (url={}): {}",
-                redis_url_log,
-                last_redis_err.as_deref().unwrap_or("unknown error")
-            );
+        tracing::warn!(
+            "Redis not ready (attempt {}/30, url={}): {}",
+            attempt,
+            redis_url_log,
+            last_redis_err.as_deref().unwrap_or("unknown error")
+        );
+        sleep(STARTUP_RETRY_DELAY).await;
+    }
+
+    anyhow::bail!(
+        "Redis connection failed after 30 attempts (url={}): {}",
+        redis_url_log,
+        last_redis_err.as_deref().unwrap_or("unknown error")
+    )
+}
+
+async fn connect_postgres_with_retry(database_url: &str) -> Result<sqlx::PgPool, anyhow::Error> {
+    let mut last_db_err: Option<String> = None;
+    let database_url_log = redact_dsn(database_url);
+
+    for attempt in 1..=STARTUP_RETRY_ATTEMPTS {
+        match crate::db::init_db_pool(database_url).await {
+            Ok(pool) => return Ok(pool),
+            Err(e) => {
+                last_db_err = Some(e.to_string());
+                tracing::warn!(
+                    "Postgres not ready (attempt {}/30, url={}): {}",
+                    attempt,
+                    database_url_log,
+                    last_db_err.as_deref().unwrap_or("unknown error")
+                );
+                sleep(STARTUP_RETRY_DELAY).await;
+            }
         }
     }
 
-    let db = {
-        let mut connected: Option<sqlx::PgPool> = None;
-        let mut last_db_err: Option<String> = None;
-        let database_url_log = redact_dsn(&database_url);
+    anyhow::bail!(
+        "Postgres connection failed after 30 attempts (url={}): {}",
+        database_url_log,
+        last_db_err.as_deref().unwrap_or("unknown error")
+    )
+}
 
-        for attempt in 1..=30 {
-            match crate::db::init_db_pool(&database_url).await {
-                Ok(pool) => {
-                    connected = Some(pool);
-                    break;
-                }
-                Err(e) => {
-                    last_db_err = Some(e.to_string());
-                    tracing::warn!(
-                        "Postgres not ready (attempt {}/30, url={}): {}",
-                        attempt,
-                        database_url_log,
-                        last_db_err.as_deref().unwrap_or("unknown error")
-                    );
-                    sleep(Duration::from_secs(1)).await;
-                }
-            }
-        }
-
-        connected.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Postgres connection failed after 30 attempts (url={}): {}",
-                database_url_log,
-                last_db_err.as_deref().unwrap_or("unknown error")
-            )
-        })?
-    };
-
-    // Run migrations
-    crate::db::run_migrations(&db).await?;
+async fn initialize_database(pool: &sqlx::PgPool, config: &Config) -> Result<(), anyhow::Error> {
+    crate::db::run_migrations(pool).await?;
     tracing::info!("Database migrations completed");
 
-    // Seed default clients
-    crate::db::seed_default_clients(&db, &config).await?;
+    crate::db::seed_default_clients(pool, config).await?;
     tracing::info!("Default clients seeded");
 
-    // Optional super admin bootstrap
-    crate::db::seed_super_admin_user(&db, &config).await?;
+    crate::db::seed_super_admin_user(pool, config).await?;
     tracing::info!("Super admin bootstrap checked");
 
-    // 非生产环境下，若未配置管理客户端且未启用超级管理员引导，提示管理面可能不可用
-    if !config.is_production() {
-        let has_admin_client = crate::db::has_active_admin_client(&db)
-            .await
-            .unwrap_or(false);
-        if !has_admin_client && !config.enable_super_admin_bootstrap {
-            tracing::warn!(
-                "No active admin client found and SUPER_ADMIN bootstrap is disabled. \
-                 /v1/admin/token and admin management APIs may be unavailable."
-            );
-        }
+    warn_if_management_client_is_missing(pool, config).await;
+    cleanup_audit_logs(pool, config.audit_log_retention_days).await;
+
+    Ok(())
+}
+
+async fn warn_if_management_client_is_missing(pool: &sqlx::PgPool, config: &Config) {
+    if config.is_production() {
+        return;
     }
 
-    // Cleanup old audit logs (best effort)
-    match crate::db::cleanup_old_audit_logs(&db, config.audit_log_retention_days).await {
+    let has_admin_client = crate::db::has_active_admin_client(pool)
+        .await
+        .unwrap_or(false);
+    if !has_admin_client && !config.enable_super_admin_bootstrap {
+        tracing::warn!(
+            "No active admin client found and SUPER_ADMIN bootstrap is disabled. \
+             /v1/admin/token and admin management APIs may be unavailable."
+        );
+    }
+}
+
+async fn cleanup_audit_logs(pool: &sqlx::PgPool, retention_days: i64) {
+    match crate::db::cleanup_old_audit_logs(pool, retention_days).await {
         Ok(deleted) => tracing::info!("Audit logs cleanup completed, deleted={}", deleted),
         Err(e) => tracing::warn!("Audit logs cleanup failed: {}", e),
     }
+}
 
-    let cors_allowed_origins = config.cors_allowed_origins.clone();
-    let app_state = AppState::new(config, Some(Arc::new(db)))?;
-
-    let public_routes = Router::new()
+fn base_public_routes(include_oauth: bool) -> Router<AppState> {
+    let routes = Router::new()
         .merge(routes::auth::public_router())
         .merge(routes::service::service_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/favicon.ico", get(favicon))
-        .route("/", get(index))
-        .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
+        .route("/", get(index));
 
-    // service_integration_routes 需要 audience="admin-backend"，使用在 JWT 层严格校验 aud 的专用中间件
+    if include_oauth {
+        routes.nest("/v1/auth/oauth", routes::oauth::oauth_public_routes())
+    } else {
+        routes
+    }
+}
+
+fn in_memory_protected_routes() -> Router<AppState> {
+    Router::new()
+        .route("/protected", get(protected))
+        .merge(routes::auth::protected_router())
+}
+
+fn service_protected_routes(app_state: &AppState) -> Router<AppState> {
+    // service_integration_routes requires audience="admin-backend"; the dedicated
+    // middleware validates that audience at JWT decode time.
     let service_integration_routes = routes::auth::service_integration_routes()
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
@@ -262,7 +239,7 @@ pub async fn init_app_router_with_db(
             auth::service_integration_auth_middleware,
         ));
 
-    let service_protected_routes = Router::new()
+    Router::new()
         .merge(service_integration_routes)
         .merge(routes::service::service_introspect_routes().route_layer(
             middleware::from_fn_with_state(
@@ -273,9 +250,11 @@ pub async fn init_app_router_with_db(
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::service_auth_middleware,
-        ));
+        ))
+}
 
-    let protected_routes = Router::new()
+fn protected_routes(app_state: &AppState) -> Router<AppState> {
+    Router::new()
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
         .merge(
@@ -311,16 +290,62 @@ pub async fn init_app_router_with_db(
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth::auth_middleware,
-        ));
+        ))
+}
 
-    Ok(Router::new()
-        .merge(public_routes)
+fn database_router(app_state: AppState, cors_allowed_origins: Vec<String>) -> Router {
+    Router::new()
+        .merge(base_public_routes(true))
         .merge(routes::setup::setup_routes())
-        .merge(service_protected_routes)
-        .merge(protected_routes)
+        .merge(service_protected_routes(&app_state))
+        .merge(protected_routes(&app_state))
         .layer(access_log_layer())
         .layer(cors_layer(cors_allowed_origins))
-        .with_state(app_state))
+        .with_state(app_state)
+}
+
+pub fn init_app_router() -> Router {
+    let config = Config::default();
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
+    let app_state =
+        AppState::new(config, None).expect("Default Config must always produce valid JWT keys");
+    Router::new()
+        .merge(base_public_routes(false))
+        .merge(in_memory_protected_routes())
+        .merge(routes::setup::setup_routes())
+        .layer(access_log_layer())
+        .layer(cors_layer(cors_allowed_origins))
+        .with_state(app_state)
+}
+
+pub fn init_app_router_with_config(config: Config) -> Router {
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
+    let app_state = AppState::new(config, None)
+        .expect("Failed to initialize AppState: invalid JWT key configuration");
+    Router::new()
+        .merge(base_public_routes(true))
+        .merge(in_memory_protected_routes())
+        .merge(routes::setup::setup_routes())
+        .layer(access_log_layer())
+        .layer(cors_layer(cors_allowed_origins))
+        .with_state(app_state)
+}
+
+pub async fn init_app_router_with_db(
+    config: Config,
+    database_url: &str,
+) -> Result<Router, anyhow::Error> {
+    let database_url = resolve_database_url(database_url)?;
+    validate_database_startup_config(&config, &database_url)?;
+    warn_if_jwt_keys_were_generated(&config);
+    require_redis_ready_in_production(&config).await?;
+
+    let db = connect_postgres_with_retry(&database_url).await?;
+    initialize_database(&db, &config).await?;
+
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
+    let app_state = AppState::new(config, Some(Arc::new(db)))?;
+    Ok(database_router(app_state, cors_allowed_origins))
 }
 
 /// 测试专用：显式传入 admin 凭据，避免 std::env::set_var 的并发竞态。
@@ -333,10 +358,7 @@ pub async fn init_app_router_with_db_and_admin(
 ) -> Result<Router, anyhow::Error> {
     validate_test_database_startup_config(&config)?;
 
-    let database_url = build_database_url(
-        database_url.to_string(),
-        database_password_from_env_result().map_err(anyhow::Error::msg)?,
-    );
+    let database_url = resolve_database_url(database_url)?;
     let db = crate::db::init_db_pool(&database_url).await?;
     crate::db::run_migrations(&db).await?;
     crate::db::seed_default_clients_with_admin(
@@ -347,85 +369,9 @@ pub async fn init_app_router_with_db_and_admin(
     .await?;
     crate::db::seed_super_admin_user(&db, &config).await?;
 
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
     let app_state = AppState::new(config, Some(Arc::new(db)))?;
-
-    let public_routes = Router::new()
-        .merge(routes::auth::public_router())
-        .merge(routes::service::service_public_routes())
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/favicon.ico", get(favicon))
-        .route("/", get(index))
-        .nest("/v1/auth/oauth", routes::oauth::oauth_public_routes());
-
-    let service_integration_routes = routes::auth::service_integration_routes()
-        .route_layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            auth::service_integration_authorization_middleware,
-        ))
-        .layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            auth::service_integration_auth_middleware,
-        ));
-
-    let service_protected_routes = Router::new()
-        .merge(service_integration_routes)
-        .merge(routes::service::service_introspect_routes().route_layer(
-            middleware::from_fn_with_state(
-                app_state.clone(),
-                auth::service_read_authorization_middleware,
-            ),
-        ))
-        .layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            auth::service_auth_middleware,
-        ));
-
-    let protected_routes = Router::new()
-        .route("/protected", get(protected))
-        .merge(routes::auth::protected_router())
-        .merge(
-            routes::user::self_user_routes()
-                .route_layer(middleware::from_fn(auth::user_authorization_middleware)),
-        )
-        .merge(
-            routes::auth::admin_router()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
-        .nest(
-            "/api/oauth",
-            routes::oauth::oauth_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
-        .nest(
-            "/api/rbac",
-            routes::rbac::rbac_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
-        .merge(
-            routes::service::service_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
-        .merge(
-            routes::identity::identity_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
-        .merge(
-            routes::user::admin_user_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
-        .layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            auth::auth_middleware,
-        ));
-
-    Ok(Router::new()
-        .merge(public_routes)
-        .merge(routes::setup::setup_routes())
-        .merge(service_protected_routes)
-        .merge(protected_routes)
-        .layer(access_log_layer())
-        .with_state(app_state))
+    Ok(database_router(app_state, cors_allowed_origins))
 }
 
 fn validate_test_database_startup_config(config: &Config) -> Result<(), anyhow::Error> {

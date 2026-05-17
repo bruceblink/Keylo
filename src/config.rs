@@ -260,6 +260,27 @@ fn parse_cors_origins(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn parse_bool_env(key: &str, default: bool) -> bool {
+    env::var(key)
+        .ok()
+        .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(default)
+}
+
+fn parse_i64_env(key: &str, default: i64) -> i64 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(default)
+}
+
+fn parse_u32_env(key: &str, default: u32) -> u32 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(default)
+}
+
 pub fn database_password_from_env_result() -> Result<Option<String>, String> {
     let encrypted_password =
         read_env_or_file("DATABASE_PASSWORD_ENC", "DATABASE_PASSWORD_ENC_FILE")
@@ -449,45 +470,15 @@ impl Config {
 
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
 
-        let token_expiry_seconds = env::var("TOKEN_EXPIRY_SECONDS")
-            .unwrap_or_else(|_| "900".to_string()) // 15 minutes
-            .parse::<i64>()
-            .unwrap_or(900);
-
-        let refresh_token_expiry_seconds = env::var("REFRESH_TOKEN_EXPIRY_SECONDS")
-            .unwrap_or_else(|_| "2592000".to_string()) // 30 days
-            .parse::<i64>()
-            .unwrap_or(2592000);
-
-        let max_failed_login_attempts = env::var("MAX_FAILED_LOGIN_ATTEMPTS")
-            .unwrap_or_else(|_| "5".to_string())
-            .parse::<u32>()
-            .unwrap_or(5);
-
-        let login_lockout_seconds = env::var("LOGIN_LOCKOUT_SECONDS")
-            .unwrap_or_else(|_| "300".to_string())
-            .parse::<i64>()
-            .unwrap_or(300);
-
-        let auth_rate_limit_window_seconds = env::var("AUTH_RATE_LIMIT_WINDOW_SECONDS")
-            .unwrap_or_else(|_| "60".to_string())
-            .parse::<i64>()
-            .unwrap_or(60);
-
-        let auth_rate_limit_max_requests = env::var("AUTH_RATE_LIMIT_MAX_REQUESTS")
-            .unwrap_or_else(|_| "30".to_string())
-            .parse::<u32>()
-            .unwrap_or(30);
-
-        let auth_global_rate_limit_max_requests = env::var("AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS")
-            .unwrap_or_else(|_| "300".to_string())
-            .parse::<u32>()
-            .unwrap_or(300);
-
-        let trust_proxy_headers = env::var("TRUST_PROXY_HEADERS")
-            .ok()
-            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false);
+        let token_expiry_seconds = parse_i64_env("TOKEN_EXPIRY_SECONDS", 900);
+        let refresh_token_expiry_seconds = parse_i64_env("REFRESH_TOKEN_EXPIRY_SECONDS", 2_592_000);
+        let max_failed_login_attempts = parse_u32_env("MAX_FAILED_LOGIN_ATTEMPTS", 5);
+        let login_lockout_seconds = parse_i64_env("LOGIN_LOCKOUT_SECONDS", 300);
+        let auth_rate_limit_window_seconds = parse_i64_env("AUTH_RATE_LIMIT_WINDOW_SECONDS", 60);
+        let auth_rate_limit_max_requests = parse_u32_env("AUTH_RATE_LIMIT_MAX_REQUESTS", 30);
+        let auth_global_rate_limit_max_requests =
+            parse_u32_env("AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS", 300);
+        let trust_proxy_headers = parse_bool_env("TRUST_PROXY_HEADERS", false);
         let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS").map_or_else(
             |_| default_cors_allowed_origins(),
             |value| parse_cors_origins(&value),
@@ -500,39 +491,19 @@ impl Config {
         let redis_url = env::var("REDIS_URL").ok();
         let redis_key_prefix = env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "keylo".into());
 
-        let audit_log_retention_days = env::var("AUDIT_LOG_RETENTION_DAYS")
-            .unwrap_or_else(|_| "30".to_string())
-            .parse::<i64>()
-            .unwrap_or(30);
-
-        let service_token_expiry_seconds = env::var("SERVICE_TOKEN_EXPIRY_SECONDS")
-            .unwrap_or_else(|_| "3600".to_string()) // 1 hour
-            .parse::<i64>()
-            .unwrap_or(3600);
-
-        let enable_super_admin_bootstrap = env::var("ENABLE_SUPER_ADMIN_BOOTSTRAP")
-            .ok()
-            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false);
+        let audit_log_retention_days = parse_i64_env("AUDIT_LOG_RETENTION_DAYS", 30);
+        let service_token_expiry_seconds = parse_i64_env("SERVICE_TOKEN_EXPIRY_SECONDS", 3600);
+        let enable_super_admin_bootstrap = parse_bool_env("ENABLE_SUPER_ADMIN_BOOTSTRAP", false);
 
         let super_admin_username = env::var("SUPER_ADMIN_USERNAME").ok();
         let super_admin_email = env::var("SUPER_ADMIN_EMAIL").ok();
         let super_admin_password = env::var("SUPER_ADMIN_PASSWORD").ok();
 
-        let log_to_file = env::var("LOG_TO_FILE")
-            .ok()
-            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(true);
+        let log_to_file = parse_bool_env("LOG_TO_FILE", true);
         let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "./logs".to_string());
         let log_file_prefix = env::var("LOG_FILE_PREFIX").unwrap_or_else(|_| "keylo".to_string());
-        let allow_in_memory_fallback = env::var("ALLOW_IN_MEMORY_FALLBACK")
-            .ok()
-            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false);
-        let enable_setup_wizard = env::var("ENABLE_SETUP_WIZARD")
-            .ok()
-            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(true);
+        let allow_in_memory_fallback = parse_bool_env("ALLOW_IN_MEMORY_FALLBACK", false);
+        let enable_setup_wizard = parse_bool_env("ENABLE_SETUP_WIZARD", true);
         let setup_token = env_non_empty_or_dotenv("SETUP_TOKEN");
         let setup_keys_dir = env::var("SETUP_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string());
 
