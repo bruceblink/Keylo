@@ -484,6 +484,7 @@
 ## 8.4 运行时安全约定
 
 - 登录和内省接口按客户端 IP 限流。默认使用 TCP peer IP；只有 `TRUST_PROXY_HEADERS=true` 时才信任 `X-Forwarded-For` / `X-Real-IP`。
+- 浏览器跨域请求按 `CORS_ALLOWED_ORIGINS` 白名单校验 Origin；配置值必须是 scheme + host + 可选端口，不应包含路径。
 - `/readyz` 默认要求数据库可用；无数据库路由只应在非生产环境显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时使用。
 
 ---
