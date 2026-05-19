@@ -1,0 +1,61 @@
+# ---------- Build Stage ----------
+FROM lukemathwalker/cargo-chef:latest-rust-1.88 AS chef
+WORKDIR /app
+RUN apt update && apt install -y lld clang
+
+# 配置 Cargo 国内镜像源（阿里云，支持稀疏索引，速度更快）
+RUN mkdir -p /usr/local/cargo \
+    && echo '[source.crates-io]' > /usr/local/cargo/config \
+    && echo 'replace-with = "aliyun"' >> /usr/local/cargo/config \
+    && echo '' >> /usr/local/cargo/config \
+    && echo '[source.aliyun]' >> /usr/local/cargo/config \
+    && echo 'registry = "sparse+https://mirrors.aliyun.com/crates.io-index/"' >> /usr/local/cargo/config
+
+# Planner: prepare dependency recipe
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# Builder: build dependencies and project
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY . .
+ENV SQLX_OFFLINE=true
+RUN cargo build --release --bin keylo
+
+# Frontend builder: build React setup wizard assets
+FROM node:24-bookworm-slim AS web-builder
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+# 配置 npm 淘宝镜像，加速依赖下载
+RUN npm config set registry https://registry.npmmirror.com && npm ci
+COPY web/ ./
+RUN npm run build
+
+# ---------- Runtime Stage ----------
+FROM debian:bookworm-slim AS runtime
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary and configuration
+COPY --from=builder /app/target/release/keylo /app/keylo
+COPY --from=web-builder /app/web/dist /app/web/dist
+#COPY configuration /app/configuration
+
+# Set environment variables
+ENV APP_ENV=production
+ENV ENVIRONMENT=production
+ENV SERVER_ADDR=0.0.0.0
+ENV RUST_LOG=keylo=info,axum=info
+
+# Expose the port your app listens on
+EXPOSE 2345
+
+# Start the application
+ENTRYPOINT ["/app/keylo"]
