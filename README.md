@@ -193,7 +193,7 @@ python scripts/secret_tool.py generate-deployment --keep-database-plain
 docker-compose up -d
 ```
 
-`scripts/secret_tool.py` 是合并后的统一密钥工具。Keylo 常用 `generate-deployment`、`generate-redis` 和 `generate-rsa`；周边 Compose/Keystone 场景可使用 `generate-keystone-deployment`、`generate-jwt-secret` 以及 `generate-rsa --format der-env`。完整说明见 [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)。
+`scripts/secret_tool.py` 是合并后的统一密钥工具。Keylo 常用 `generate-deployment`、`generate-redis`、`generate-rsa` 和 `decrypt`；周边 Compose/Keystone 场景可使用 `generate-keystone-deployment`、`generate-jwt-secret` 以及 `generate-rsa --format der-env`。完整说明见 [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)。
 
 如果需要自定义数据库密码，先写入 `.secrets/.database_password`，再执行 `generate-deployment --keep-database-plain`。如果使用外部数据库，或 PostgreSQL 已经完成初始化且不再需要 `.secrets/.database_password`，可以用以下命令生成 Keylo 运行期密文并删除明文文件：
 

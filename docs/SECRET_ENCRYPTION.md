@@ -51,7 +51,7 @@ python scripts/secret_tool.py --help
 - `generate-rsa`：生成 RSA 密钥对；默认 PEM 文件格式，适用于 Keylo JWT 签名。
 - `generate-jwt-secret`：生成对称 JWT secret，供仍使用共享 secret 的周边服务使用。
 - `generate-keystone-deployment`：生成 docker-compose-all / Keystone 部署所需的数据库与 Redis 密钥文件。
-- `generate-key`、`encrypt`、`encrypt-file-and-remove`：低阶 AES key 和密文操作。
+- `generate-key`、`encrypt`、`decrypt`、`encrypt-file-and-remove`：低阶 AES key、加密、解密和明文清理操作。
 
 Keylo 部署推荐一条命令生成：
 
@@ -92,6 +92,25 @@ python scripts/secret_tool.py encrypt \
   --key-file .secrets/.database_password.key \
   --out .secrets/.database_password.enc
 ```
+
+如果需要验证密文和 key 是否匹配，可以直接解密到终端：
+
+```bash
+python scripts/secret_tool.py decrypt \
+  --text-file .secrets/.database_password.enc \
+  --key-file .secrets/.database_password.key
+```
+
+也可以把解密结果写到临时文件，便于和预期明文比对：
+
+```bash
+python scripts/secret_tool.py decrypt \
+  --text-file .secrets/.database_password.enc \
+  --key-file .secrets/.database_password.key \
+  --out .secrets/.database_password.plain
+```
+
+验证完成后不要长期保留解出的明文文件。
 
 ## Redis URL 与 ACL
 

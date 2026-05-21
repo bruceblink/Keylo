@@ -172,6 +172,26 @@ def encrypt_value(plaintext: str, key: bytes) -> str:
     )
 
 
+def decrypt_value(encrypted: str, key: bytes) -> str:
+    encrypted = encrypted.strip()
+    parts = encrypted.split(":", 4)
+    if len(parts) != 5 or ":".join(parts[:3]) != PREFIX:
+        raise ValueError(f"invalid encrypted value format: {encrypted[:32]}")
+
+    try:
+        nonce = base64.b64decode(parts[3], validate=True)
+        ciphertext = base64.b64decode(parts[4], validate=True)
+    except Exception as exc:
+        raise ValueError("invalid encrypted value payload") from exc
+
+    try:
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
+    except Exception as exc:
+        raise ValueError("failed to decrypt value") from exc
+
+    return plaintext.decode("utf-8")
+
+
 def cmd_encrypt(args: argparse.Namespace) -> None:
     if args.text is not None:
         plaintext = args.text
@@ -186,6 +206,26 @@ def cmd_encrypt(args: argparse.Namespace) -> None:
         write_text(Path(args.out), encrypted)
     else:
         print(encrypted)
+
+
+def cmd_decrypt(args: argparse.Namespace) -> None:
+    if args.text is not None:
+        encrypted = args.text
+    elif args.text_file:
+        encrypted = Path(args.text_file).read_text(encoding="utf-8")
+    else:
+        raise ValueError("--text or --text-file is required")
+
+    plaintext = decrypt_value(encrypted, read_key(args))
+
+    if args.out:
+        out_file = Path(args.out)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        ensure_writable(out_file)
+        out_file.write_text(plaintext, encoding="utf-8")
+        hide_if_dot_path(out_file)
+    else:
+        print(plaintext)
 
 
 def cmd_encrypt_file_and_remove(args: argparse.Namespace) -> None:
@@ -474,6 +514,14 @@ def build_parser() -> argparse.ArgumentParser:
     encrypt.add_argument("--key-file", help="file containing the key")
     encrypt.add_argument("--out", help="write encrypted value to this file")
     encrypt.set_defaults(func=cmd_encrypt)
+
+    decrypt = subparsers.add_parser("decrypt", help="decrypt text with AES-256-GCM")
+    decrypt.add_argument("--text", help="encrypted value to decrypt")
+    decrypt.add_argument("--text-file", help="file containing encrypted value to decrypt")
+    decrypt.add_argument("--key", help="32-byte raw key or base64 AES-256 key")
+    decrypt.add_argument("--key-file", help="file containing the key")
+    decrypt.add_argument("--out", help="write decrypted value to this file")
+    decrypt.set_defaults(func=cmd_decrypt)
 
     encrypt_file_and_remove = subparsers.add_parser(
         "encrypt-file-and-remove",
