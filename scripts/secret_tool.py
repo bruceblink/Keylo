@@ -8,6 +8,10 @@ The encrypted value format is:
 It uses AES-256-GCM with a random 12-byte nonce. The GCM tag is appended to
 the ciphertext by cryptography's AESGCM implementation, matching Java, .NET,
 Rust, and Python defaults.
+
+The tool also covers shared deployment flows used across the Keylo and
+docker-compose-all layouts, including JWT secret generation and RSA export
+helpers.
 """
 
 from __future__ import annotations
@@ -38,6 +42,8 @@ DEFAULT_RSA_PRIVATE_KEY_FILE = "keys/private.pem"
 DEFAULT_RSA_PUBLIC_KEY_FILE = "keys/public.pem"
 PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*()-_=+[]{}:,.?"
 DEFAULT_PASSWORD_LENGTH = 32
+DEFAULT_JWT_SECRET_BYTES = 32
+DEFAULT_KEYSTONE_REDIS_KEY_PATTERN = "*"
 
 
 def ensure_writable(path: Path) -> None:
@@ -55,9 +61,14 @@ def hide_if_dot_path(path: Path) -> None:
     if os.name != "nt":
         return
 
-    for item in [path.parent, path]:
+    for item in (path.parent, path):
         if item.name.startswith(".") and item.exists():
-            os.system(f'attrib +h "{item}" >nul 2>nul')
+            subprocess.run(
+                ["attrib", "+h", str(item)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
 
 def write_text(path: Path, value: str) -> None:
@@ -76,6 +87,12 @@ def read_text_if_non_empty(path: Path) -> str | None:
 
 def generate_key_value() -> str:
     return base64.b64encode(os.urandom(32)).decode("ascii")
+
+
+def generate_jwt_secret(length_bytes: int = DEFAULT_JWT_SECRET_BYTES) -> str:
+    if length_bytes < 32:
+        raise ValueError("JWT secret must use at least 32 random bytes")
+    return base64.urlsafe_b64encode(os.urandom(length_bytes)).decode("ascii").rstrip("=")
 
 
 def generate_password(length: int = DEFAULT_PASSWORD_LENGTH) -> str:
@@ -118,12 +135,31 @@ def read_key(args: argparse.Namespace) -> bytes:
     raise ValueError("--key or --key-file is required")
 
 
+def redis_acl_key_pattern(value: str) -> str:
+    value = value.strip()
+    if value in ("*", "~*"):
+        return "~*"
+    if value.startswith("~"):
+        return value
+    return f"~{value}:*"
+
+
 def cmd_generate_key(args: argparse.Namespace) -> None:
     key = generate_key_value()
     if args.out:
         write_text(Path(args.out), key)
     else:
         print(key)
+
+
+def cmd_generate_jwt_secret(args: argparse.Namespace) -> None:
+    jwt_secret = generate_jwt_secret(args.bytes)
+    if args.out:
+        write_text(Path(args.out), jwt_secret)
+    elif args.raw:
+        print(jwt_secret)
+    else:
+        print(f"{args.env_name}={jwt_secret}")
 
 
 def encrypt_value(plaintext: str, key: bytes) -> str:
@@ -193,6 +229,38 @@ def cmd_encrypt_file_and_remove(args: argparse.Namespace) -> None:
     print(f"removed_plaintext: {text_file}")
 
 
+def write_keylo_redis_secret(args: argparse.Namespace) -> tuple[Path, Path, Path]:
+    password = base64.b64encode(os.urandom(args.redis_password_bytes)).decode("ascii")
+    password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    username = args.redis_username.strip()
+    key_prefix = args.redis_key_prefix.strip()
+    redis_url = (
+        f"redis://{quote(username, safe='')}:"
+        f"{quote(password, safe='')}@{args.redis_host}:{args.redis_port}"
+    )
+
+    key_text = generate_key_value()
+    acl_text = (
+        "user default off\n"
+        f"user {username} on #{password_hash} {redis_acl_key_pattern(key_prefix)} "
+        "+@read +@write +@connection\n"
+    )
+
+    acl_file = Path(args.acl_out)
+    key_file = Path(args.key_out)
+    enc_file = Path(args.enc_out)
+    acl_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    enc_file.parent.mkdir(parents=True, exist_ok=True)
+    ensure_writable(acl_file)
+    acl_file.write_text(acl_text, encoding="utf-8")
+    hide_if_dot_path(acl_file)
+    write_text(key_file, key_text)
+    write_text(enc_file, encrypt_value(redis_url, decode_key(key_text)))
+
+    return acl_file, key_file, enc_file
+
+
 def write_database_secret(args: argparse.Namespace) -> tuple[Path, Path, Path, bool, bool]:
     secret_dir = Path(args.secret_dir)
     plain_file = secret_dir / ".database_password"
@@ -215,34 +283,35 @@ def write_database_secret(args: argparse.Namespace) -> tuple[Path, Path, Path, b
     return plain_file, key_file, enc_file, provided_password is not None, keep_plain
 
 
-def cmd_generate_redis(args: argparse.Namespace) -> None:
-    password = base64.b64encode(os.urandom(args.password_bytes)).decode("ascii")
-    password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
-    username = args.username.strip()
-    key_prefix = args.key_prefix.strip()
-    redis_url = (
-        f"redis://{quote(username, safe='')}:"
-        f"{quote(password, safe='')}@{args.host}:{args.port}"
-    )
+def write_keystone_redis_secret(args: argparse.Namespace) -> tuple[Path, Path, Path, bool]:
+    secret_dir = Path(args.secret_dir)
+    plain_file = secret_dir / ".redis_password"
+    key_file = secret_dir / ".redis_password.key"
+    enc_file = secret_dir / ".redis_password.enc"
+    acl_file = secret_dir / ".redis.acl"
 
+    provided_password = read_text_if_non_empty(plain_file)
+    password = provided_password or generate_password(args.password_length)
     key_text = generate_key_value()
-    encrypted_url = encrypt_value(redis_url, decode_key(key_text))
+    password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
     acl_text = (
         "user default off\n"
-        f"user {username} on #{password_hash} ~{key_prefix}:* +@read +@write +@connection\n"
+        f"user {args.redis_user} on #{password_hash} "
+        f"{redis_acl_key_pattern(args.redis_key_prefix)} +@read +@write +@connection +@scripting\n"
     )
 
-    acl_file = Path(args.acl_out)
-    key_file = Path(args.key_out)
-    enc_file = Path(args.enc_out)
-    acl_file.parent.mkdir(parents=True, exist_ok=True)
-    key_file.parent.mkdir(parents=True, exist_ok=True)
-    enc_file.parent.mkdir(parents=True, exist_ok=True)
-    ensure_writable(acl_file)
-    acl_file.write_text(acl_text, encoding="utf-8")
-    hide_if_dot_path(acl_file)
     write_text(key_file, key_text)
-    write_text(enc_file, encrypted_url)
+    write_text(enc_file, encrypt_value(password, decode_key(key_text)))
+    write_text(acl_file, acl_text.rstrip("\n"))
+
+    ensure_writable(plain_file)
+    plain_file.unlink(missing_ok=True)
+
+    return acl_file, key_file, enc_file, provided_password is not None
+
+
+def cmd_generate_redis(args: argparse.Namespace) -> None:
+    acl_file, key_file, enc_file = write_keylo_redis_secret(args)
 
     print(f"redis_acl: {acl_file}")
     print(f"redis_url_key: {key_file}")
@@ -256,11 +325,11 @@ def cmd_generate_deployment(args: argparse.Namespace) -> None:
     )
 
     redis_args = argparse.Namespace(
-        username=args.redis_username,
-        key_prefix=args.redis_key_prefix,
-        host=args.redis_host,
-        port=args.redis_port,
-        password_bytes=args.redis_password_bytes,
+        redis_username=args.redis_username,
+        redis_key_prefix=args.redis_key_prefix,
+        redis_host=args.redis_host,
+        redis_port=args.redis_port,
+        redis_password_bytes=args.redis_password_bytes,
         acl_out=str(Path(args.secret_dir) / ".redis.acl"),
         key_out=str(Path(args.secret_dir) / ".redis_url.key"),
         enc_out=str(Path(args.secret_dir) / ".redis_url.enc"),
@@ -275,45 +344,109 @@ def cmd_generate_deployment(args: argparse.Namespace) -> None:
     print(f"database_password_plain: {database_plain}")
 
 
-def generate_rsa_keypair(bits: int) -> tuple[str, str]:
+def cmd_generate_keystone_deployment(args: argparse.Namespace) -> None:
+    secret_dir = Path(args.secret_dir)
+    database_plain, database_key, database_enc, provided_database_password, keep_database_plain = (
+        write_database_secret(args)
+    )
+    redis_acl, redis_key, redis_enc, provided_redis_password = write_keystone_redis_secret(args)
+
+    print(f"secret_dir: {secret_dir}")
+    print(f"database_password_source: {'provided' if provided_database_password else 'generated'}")
+    print(f"database_password: {'kept' if keep_database_plain else 'removed'}")
+    print(f"database_password_enc: {database_enc}")
+    print(f"database_password_key: {database_key}")
+    print(f"database_password_plain: {database_plain}")
+    print(f"redis_password_source: {'provided' if provided_redis_password else 'generated'}")
+    print(f"redis_acl: {redis_acl}")
+    print(f"redis_password_enc: {redis_enc}")
+    print(f"redis_password_key: {redis_key}")
+    print("plain_redis_password_written: false")
+
+
+def generate_rsa_keypair(bits: int, output_format: str) -> tuple[str, str]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
     public_key = private_key.public_key()
 
-    private_key_pem = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
+    if output_format == "pem":
+        private_key_value = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode("ascii")
+        public_key_value = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        return private_key_value, public_key_value
+
+    private_key_der = private_key.private_bytes(
+        encoding=serialization.Encoding.DER,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
-    ).decode("ascii")
-    public_key_pem = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
+    )
+    public_key_der = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode("ascii")
-
-    return private_key_pem, public_key_pem
+    )
+    return (
+        base64.b64encode(private_key_der).decode("ascii"),
+        base64.b64encode(public_key_der).decode("ascii"),
+    )
 
 
 def cmd_generate_rsa(args: argparse.Namespace) -> None:
-    private_key_pem, public_key_pem = generate_rsa_keypair(args.bits)
+    private_key_value, public_key_value = generate_rsa_keypair(args.bits, args.format)
+
+    if args.format == "der-env":
+        print("# Keystone RSA key pair")
+        print(f"# key_size={args.bits}")
+        print("KEYSTONE_RSA_PRIVATE_KEY=" + private_key_value)
+        print("KEYSTONE_RSA_PUBLIC_KEY=" + public_key_value)
+        if args.raw:
+            print()
+            print("# Raw values")
+            print(private_key_value)
+            print(public_key_value)
+        return
 
     if args.stdout:
         print("# Keylo RSA key pair")
         print(f"# key_size={args.bits}")
         print("# private_key_pem")
-        print(private_key_pem.rstrip("\n"))
+        print(private_key_value.rstrip("\n"))
         print("# public_key_pem")
-        print(public_key_pem.rstrip("\n"))
+        print(public_key_value.rstrip("\n"))
         return
 
     private_path = Path(args.out_private)
     public_path = Path(args.out_public)
-    write_text(private_path, private_key_pem.rstrip("\n"))
-    write_text(public_path, public_key_pem.rstrip("\n"))
+    write_text(private_path, private_key_value.rstrip("\n"))
+    write_text(public_path, public_key_value.rstrip("\n"))
     if os.name != "nt":
         private_path.chmod(0o600)
         public_path.chmod(0o644)
     print(f"rsa_private_key: {private_path}")
     print(f"rsa_public_key: {public_path}")
     print(f"key_size: {args.bits}")
+
+
+def add_database_args(parser: argparse.ArgumentParser, default_secret_dir: str) -> None:
+    parser.add_argument("--secret-dir", default=default_secret_dir)
+    parser.add_argument("--password-length", type=int, default=DEFAULT_PASSWORD_LENGTH)
+    parser.add_argument(
+        "--keep-database-plain",
+        action="store_true",
+        help="keep .database_password for first-time database initialization",
+    )
+
+
+def add_keylo_redis_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--redis-username", "--redis-user", "--username", default="keylo")
+    parser.add_argument("--redis-key-prefix", "--key-prefix", default="keylo")
+    parser.add_argument("--redis-host", "--host", default="redis")
+    parser.add_argument("--redis-port", "--port", default="6379")
+    parser.add_argument("--redis-password-bytes", "--password-bytes", type=int, default=32)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -323,6 +456,16 @@ def build_parser() -> argparse.ArgumentParser:
     generate_key = subparsers.add_parser("generate-key", help="generate a base64 AES-256 key")
     generate_key.add_argument("--out", help="write generated key to this file")
     generate_key.set_defaults(func=cmd_generate_key)
+
+    jwt_secret = subparsers.add_parser(
+        "generate-jwt-secret",
+        help="generate a random secret for TOKEN_SECRET",
+    )
+    jwt_secret.add_argument("--bytes", type=int, default=DEFAULT_JWT_SECRET_BYTES)
+    jwt_secret.add_argument("--env-name", default="TOKEN_SECRET")
+    jwt_secret.add_argument("--raw", action="store_true", help="print only the secret value")
+    jwt_secret.add_argument("--out", help="write only the secret value to this file")
+    jwt_secret.set_defaults(func=cmd_generate_jwt_secret)
 
     encrypt = subparsers.add_parser("encrypt", help="encrypt text with AES-256-GCM")
     encrypt.add_argument("--text", help="plain text value to encrypt")
@@ -361,6 +504,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     encrypt_file_and_remove.set_defaults(func=cmd_encrypt_file_and_remove)
 
+    keystone = subparsers.add_parser(
+        "generate-keystone-deployment",
+        help="generate shared database and Keystone Redis secrets",
+    )
+    add_database_args(keystone, ".secrets")
+    keystone.add_argument("--redis-user", default="keystone")
+    keystone.add_argument("--redis-key-prefix", default=DEFAULT_KEYSTONE_REDIS_KEY_PATTERN)
+    keystone.set_defaults(func=cmd_generate_keystone_deployment)
+
     generate_redis = subparsers.add_parser(
         "generate-redis",
         help=(
@@ -368,32 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
             "writing the plain password"
         ),
     )
-    generate_redis.add_argument(
-        "--username",
-        default="keylo",
-        help="Redis ACL username (default: keylo)",
-    )
-    generate_redis.add_argument(
-        "--key-prefix",
-        default="keylo",
-        help="Redis key prefix allowed by ACL (default: keylo)",
-    )
-    generate_redis.add_argument(
-        "--host",
-        default="redis",
-        help="Redis host used in the encrypted URL (default: redis)",
-    )
-    generate_redis.add_argument(
-        "--port",
-        default="6379",
-        help="Redis port used in the encrypted URL (default: 6379)",
-    )
-    generate_redis.add_argument(
-        "--password-bytes",
-        type=int,
-        default=32,
-        help="number of random bytes for the generated password (default: 32)",
-    )
+    add_keylo_redis_args(generate_redis)
     generate_redis.add_argument(
         "--acl-out",
         default=DEFAULT_REDIS_ACL_FILE,
@@ -411,23 +538,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_redis.set_defaults(func=cmd_generate_redis)
 
+    generate_keylo_redis = subparsers.add_parser(
+        "generate-keylo-redis",
+        help="alias for generate-redis",
+    )
+    add_keylo_redis_args(generate_keylo_redis)
+    generate_keylo_redis.add_argument("--acl-out", default="keylo/.secrets/.redis.acl")
+    generate_keylo_redis.add_argument("--key-out", default="keylo/.secrets/.redis_url.key")
+    generate_keylo_redis.add_argument("--enc-out", default="keylo/.secrets/.redis_url.enc")
+    generate_keylo_redis.set_defaults(func=cmd_generate_redis)
+
     generate_deployment = subparsers.add_parser(
         "generate-deployment",
         help="generate database and Redis deployment secrets",
     )
-    generate_deployment.add_argument("--secret-dir", default=".secrets")
-    generate_deployment.add_argument("--password-length", type=int, default=DEFAULT_PASSWORD_LENGTH)
-    generate_deployment.add_argument(
-        "--keep-database-plain",
-        action="store_true",
-        help="keep .secrets/.database_password for first-time database initialization",
-    )
-    generate_deployment.add_argument("--redis-username", default="keylo")
-    generate_deployment.add_argument("--redis-key-prefix", default="keylo")
-    generate_deployment.add_argument("--redis-host", default="redis")
-    generate_deployment.add_argument("--redis-port", default="6379")
-    generate_deployment.add_argument("--redis-password-bytes", type=int, default=32)
+    add_database_args(generate_deployment, ".secrets")
+    add_keylo_redis_args(generate_deployment)
     generate_deployment.set_defaults(func=cmd_generate_deployment)
+
+    generate_keylo_deployment = subparsers.add_parser(
+        "generate-keylo-deployment",
+        help="alias for generate-deployment",
+    )
+    add_database_args(generate_keylo_deployment, "keylo/.secrets")
+    add_keylo_redis_args(generate_keylo_deployment)
+    generate_keylo_deployment.set_defaults(func=cmd_generate_deployment)
 
     generate_rsa = subparsers.add_parser(
         "generate-rsa",
@@ -439,6 +574,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=2048,
         choices=(2048, 3072, 4096),
         help="RSA key size. Default: 2048",
+    )
+    generate_rsa.add_argument(
+        "--format",
+        choices=("pem", "der-env"),
+        default="pem",
+        help="pem writes or prints PEM files; der-env prints KEYSTONE_RSA_* values",
     )
     generate_rsa.add_argument(
         "--out-private",
@@ -454,6 +595,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--stdout",
         action="store_true",
         help="print PEM keys instead of writing files",
+    )
+    generate_rsa.add_argument(
+        "--raw",
+        action="store_true",
+        help="also print raw base64 DER values when using --format der-env",
     )
     generate_rsa.set_defaults(func=cmd_generate_rsa)
 

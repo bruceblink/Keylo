@@ -22,27 +22,21 @@ cp .env.example .env
 如果需要模拟生产签名方式，请先生成 RSA 密钥：
 
 ```bash
-mkdir -p keys
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/private.pem
-openssl rsa -pubout -in keys/private.pem -out keys/public.pem
+python -m pip install cryptography
+python scripts/secret_tool.py generate-rsa
 ```
 
 ### 1.2 启动依赖
 
 ```bash
-mkdir -p secrets
-openssl rand -base64 32 > secrets/postgres_password
+mkdir -p .secrets
 python -m pip install cryptography
-python scripts/secret_tool.py generate-key --out secrets/database_password.key
-python scripts/secret_tool.py encrypt \
-  --text-file secrets/postgres_password \
-  --key-file secrets/database_password.key \
-  --out secrets/postgres_password.enc
+python scripts/secret_tool.py generate-deployment --keep-database-plain
 docker compose up -d postgres redis
 docker compose ps
 ```
 
-本地 Compose 中的 PostgreSQL 首次初始化需要明文密码文件。外部数据库或已初始化数据库场景可以使用 `python scripts/secret_tool.py encrypt-file-and-remove` 删除明文文件。
+本地 Compose 中的 PostgreSQL 首次初始化需要 `.secrets/.database_password` 明文密码文件。确认数据库初始化完成后可以删除该文件；外部数据库或已初始化数据库场景可以直接使用 `python scripts/secret_tool.py generate-deployment`，脚本会生成密文后删除明文文件。
 
 ### 1.3 启动服务
 
@@ -108,9 +102,10 @@ RUST_LOG=keylo=debug,tower_http=info,sqlx=warn cargo run
 
 ```env
 DATABASE_URL=postgres://keylo_user@localhost:5432/keylo
-DATABASE_PASSWORD_ENC_FILE=./secrets/postgres_password.enc
-DATABASE_PASSWORD_KEY_FILE=./secrets/database_password.key
-REDIS_URL=redis://localhost:6379
+DATABASE_PASSWORD_ENC_FILE=./.secrets/.database_password.enc
+DATABASE_PASSWORD_KEY_FILE=./.secrets/.database_password.key
+REDIS_URL_ENC_FILE=./.secrets/.redis_url.enc
+REDIS_URL_KEY_FILE=./.secrets/.redis_url.key
 ADMIN_CLIENT_ID=cli-admin-root
 ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
 TOKEN_EXPIRY_SECONDS=900
@@ -169,8 +164,8 @@ cargo test --test integration_test -- --nocapture
 
 ```bash
 export TEST_DATABASE_URL="postgres://postgres@localhost:5432/keylo_test"
-export DATABASE_PASSWORD_ENC_FILE="./secrets/postgres_password.enc"
-export DATABASE_PASSWORD_KEY_FILE="./secrets/database_password.key"
+export DATABASE_PASSWORD_ENC_FILE="./.secrets/.database_password.enc"
+export DATABASE_PASSWORD_KEY_FILE="./.secrets/.database_password.key"
 ```
 
 ---

@@ -37,10 +37,25 @@ AES-256-GCM 是跨语言支持最好的认证加密方案之一：
 
 ## 生成密钥和密文
 
-推荐统一使用仓库内 Python 工具生成：
+推荐统一使用仓库内 Python 工具生成。当前 `scripts/secret_tool.py` 已合并 Keylo 与 docker-compose-all 使用到的密钥生成能力，统一入口如下：
 
 ```bash
 python -m pip install cryptography
+python scripts/secret_tool.py --help
+```
+
+常用子命令：
+
+- `generate-deployment`：生成 Keylo 数据库密码密文、数据库解密 key、Redis ACL、Redis URL 密文和 Redis URL 解密 key。
+- `generate-redis`：只生成 Keylo Redis ACL、Redis URL 密文和 Redis URL 解密 key。
+- `generate-rsa`：生成 RSA 密钥对；默认 PEM 文件格式，适用于 Keylo JWT 签名。
+- `generate-jwt-secret`：生成对称 JWT secret，供仍使用共享 secret 的周边服务使用。
+- `generate-keystone-deployment`：生成 docker-compose-all / Keystone 部署所需的数据库与 Redis 密钥文件。
+- `generate-key`、`encrypt`、`encrypt-file-and-remove`：低阶 AES key 和密文操作。
+
+Keylo 部署推荐一条命令生成：
+
+```bash
 python scripts/secret_tool.py generate-deployment
 ```
 
@@ -117,6 +132,61 @@ REDIS_URL_KEY_FILE=./.secrets/.redis_url.local.key
 ```
 
 生产环境不要配置 `REDIS_URL` 或 `REDIS_URL_FILE`。它们属于明文来源，只保留给非生产排障和临时调试。
+
+## RSA 与 JWT Secret
+
+Keylo 使用 RS256，推荐生成 PEM 文件：
+
+```bash
+python scripts/secret_tool.py generate-rsa
+```
+
+默认写入：
+
+```text
+keys/private.pem
+keys/public.pem
+```
+
+需要直接打印 PEM 内容时：
+
+```bash
+python scripts/secret_tool.py generate-rsa --stdout
+```
+
+需要给 Keystone 这类使用 base64 DER 环境变量的服务生成值时：
+
+```bash
+python scripts/secret_tool.py generate-rsa --format der-env
+```
+
+仍使用共享 secret 的周边服务可以生成随机 `TOKEN_SECRET`：
+
+```bash
+python scripts/secret_tool.py generate-jwt-secret
+python scripts/secret_tool.py generate-jwt-secret --env-name KEYSTONE_TOKEN_SECRET
+python scripts/secret_tool.py generate-jwt-secret --raw
+```
+
+## Keystone / docker-compose-all 密钥
+
+如果在 docker-compose-all 部署中需要生成 Keystone 侧的共享数据库和 Redis 密钥，可以使用：
+
+```bash
+python scripts/secret_tool.py generate-keystone-deployment --secret-dir .secrets
+```
+
+该命令会生成：
+
+```text
+.secrets/.database_password.enc
+.secrets/.database_password.key
+.secrets/.redis.acl
+.secrets/.redis_password.enc
+.secrets/.redis_password.key
+```
+
+如果 `.secrets/.database_password` 或 `.secrets/.redis_password` 已存在且内容非空，脚本会使用已有明文生成密文；Redis 明文密码不会长期保留在磁盘。
 
 ## 解密流程
 
