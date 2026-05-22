@@ -43,10 +43,9 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 
 - 安装向导默认启用；首次未完成 setup 时访问 `/` 会进入 `/setup`。
 - 不需要安装向导时，可以显式设置 `ENABLE_SETUP_WIZARD=false`。
-- 生产环境必须配置 `SETUP_TOKEN`，所有 setup API 都要求 `Authorization: Bearer <SETUP_TOKEN>`。
-- 非生产环境也建议配置 `SETUP_TOKEN`；未配置时仅适合本地临时调试。
+- 所有 setup API 都要求 `Authorization: Bearer <SETUP_TOKEN>`；未显式配置时，首次未完成 setup 会在启动时生成仅存在内存中的临时 token 并写入日志。
 - 初始化完成后，setup API 返回 403，setup 页面显示已完成状态，不再执行初始化动作。
-- 安装向导不能绕过生产安全基线：生产环境仍要求 Redis、固定 RSA 密钥和有效管理客户端配置。
+- 安装向导不能绕过生产安全基线：生产环境仍要求 Redis 和固定 RSA 密钥。
 - 页面不展示已存在的密钥明文，也不回显管理客户端密钥；只有用户提交或生成时由用户自行保存。
 - 自动生成的 RSA 公钥会通过 `/.well-known/jwks.json` 正常发布。密钥会持久化到文件，避免重启后 token 无法继续验签。
 
@@ -57,7 +56,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 | 配置 | 默认值 | 说明 |
 |---|---|---|
 | `ENABLE_SETUP_WIZARD` | `true` | 是否启用安装向导路由 |
-| `SETUP_TOKEN` | 空 | setup API 访问令牌；生产环境启用安装向导时必填 |
+| `SETUP_TOKEN` | 空 | 可选 setup API 访问令牌；为空时首次 setup 会生成运行时临时 token 并写入日志 |
 | `SETUP_KEYS_DIR` | `./keys` | 生成 RSA 密钥文件的目录 |
 
 前端工程：
@@ -74,7 +73,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 - `JWT_ISSUER`
 - `JWT_KEY_ID`
 - `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`
-- `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`
+- `ADMIN_CLIENT_ID`，`ADMIN_CLIENT_SECRET` 在 setup 页面录入
 
 ## 5. 路由设计
 

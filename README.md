@@ -323,7 +323,6 @@ Cargo.toml           # 项目依赖配置
 | `TRUST_PROXY_HEADERS` | `false` | 是否信任 `X-Forwarded-For` / `X-Real-IP`；关闭时使用连接 peer IP |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173` | 允许浏览器跨域携带凭证访问的 Origin 白名单，逗号分隔 |
 | `ADMIN_CLIENT_ID` | `cli-admin-root` | 管理员客户端 ID |
-| `ADMIN_CLIENT_SECRET` | `` | 管理员客户端密钥（启动必填） |
 | `REDIS_URL_ENC` | `` | AES-256-GCM 加密后的 Redis URL；生产环境必须使用 |
 | `REDIS_URL_ENC_FILE` | `./.secrets/.redis_url.enc` / `/run/secrets/.redis_url.enc` | Redis URL 密文文件路径 |
 | `REDIS_URL_KEY` | `` | Redis URL 解密 key；建议改用文件路径 |
@@ -437,7 +436,6 @@ docker run --rm -p 2345:2345 \
   -v $(pwd)/keys:/app/keys:ro \
   -v $(pwd)/.secrets:/run/secrets:ro \
   -e DATABASE_URL="postgres://keylo_user@db:5432/keylo" \
-  -e ADMIN_CLIENT_SECRET="replace-with-strong-admin-secret" \
   -e REDIS_URL_ENC_FILE="/run/secrets/.redis_url.enc" \
   -e REDIS_URL_KEY_FILE="/run/secrets/.redis_url.key" \
   ghcr.io/bruceblink/keylo:v1.5.1
@@ -465,7 +463,7 @@ docker-compose logs -f postgres
 
 * `keylo` 服务默认监听 `0.0.0.0:2345`
 * compose 与本地统一使用同名变量（如 `DATABASE_URL`），Redis 生产环境通过 `REDIS_URL_ENC_FILE` 和 `REDIS_URL_KEY_FILE` 读取密文配置
-* `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`，部署时只需提供强 `ADMIN_CLIENT_SECRET`
+* `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`，`ADMIN_CLIENT_SECRET` 在首次 setup 页面录入，不写入配置文件
 * 默认挂载 `${JWT_KEYS_DIR:-./keys}` 到 `/app/keys`
 * Redis 默认启用，满足生产环境的限流、登录锁定和 OAuth state 依赖
 * Redis 不映射宿主机端口，只加入 `keylo_redis_network` 专用内部网络；不要让其他服务加入该网络
@@ -506,7 +504,7 @@ docker compose logs -f keylo-service
 
 * 安装向导默认启用；首次未完成 setup 时访问 `/` 会进入 `/setup`
 * 如需关闭安装向导，可设置 `ENABLE_SETUP_WIZARD=false`
-* 生产环境启用安装向导时必须配置 `SETUP_TOKEN`
+* 首次 setup 未完成且未配置 `SETUP_TOKEN` 时，Keylo 会生成仅存在内存中的临时 setup token 并写入日志；使用该 token 登录 `/setup`
 * 未配置 RSA 密钥文件时，Keylo 会自动生成随机 RSA 密钥对并通过 JWKS 发布公钥
 * React 前端位于 `web/`，构建后由 Keylo 托管 `/setup`
 * 设计说明见 [docs/SETUP_WIZARD_DESIGN.md](docs/SETUP_WIZARD_DESIGN.md)
@@ -514,9 +512,9 @@ docker compose logs -f keylo-service
 ### 5. 运维与安全基线
 
 * 启动时自动执行 SQLx 迁移
-* 启动会提前校验 RSA 密钥、管理员客户端、数据库 URL、Token 时长等关键配置；缺失时直接退出
+* 启动会提前校验 RSA 密钥、数据库 URL、Token 时长等关键配置；管理员客户端密钥仅在首次 setup 初始化时录入
 * 生产环境额外强制要求 Redis
-* 非生产环境默认同样对数据库初始化 fail-fast；仅在显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时允许无数据库模式，且仍要求 RSA 密钥和管理员客户端配置
+* 非生产环境默认同样对数据库初始化 fail-fast；仅在显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时允许无数据库模式，且仍要求 RSA 密钥等基础配置
 * Refresh Token 轮换会原子消费旧 token，旧 refresh token 不能再次使用
 * 支持审计日志、限流、登录锁定和 OAuth state 管理
 
@@ -560,7 +558,7 @@ docker compose logs -f keylo-service
 * 使用 RSA 2048 位或更高密钥
 * 私钥只保留在 Keylo 服务端
 * 设置 `ENVIRONMENT=production`
-* 显式配置 `ADMIN_CLIENT_SECRET` 和 Redis 密文配置（`REDIS_URL_ENC_FILE` 与 `REDIS_URL_KEY_FILE`），需要自定义管理客户端 ID 时再覆盖 `ADMIN_CLIENT_ID`
+* 显式配置 Redis 密文配置（`REDIS_URL_ENC_FILE` 与 `REDIS_URL_KEY_FILE`），管理客户端密钥在首次 setup 页面录入
 * 仅在反向代理可信且已覆盖客户端真实地址时设置 `TRUST_PROXY_HEADERS=true`
 * 为外部访问启用 HTTPS 和反向代理
 
