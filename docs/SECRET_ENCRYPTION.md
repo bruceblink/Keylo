@@ -46,8 +46,8 @@ python scripts/secret_tool.py --help
 
 常用子命令：
 
-- `generate-deployment`：生成 Keylo 数据库密码密文、数据库解密 key、Redis ACL、Redis URL 密文和 Redis URL 解密 key。
-- `generate-redis`：只生成 Keylo Redis ACL、Redis URL 密文和 Redis URL 解密 key。
+- `generate-deployment`：生成 Keylo 数据库密码密文、数据库解密 key、Redis ACL、Redis 密码密文和 Redis 密码解密 key。
+- `generate-redis`：只生成 Keylo Redis ACL、Redis 密码密文和 Redis 密码解密 key。
 - `generate-rsa`：生成 RSA 密钥对；默认 PEM 文件格式，适用于 Keylo JWT 签名。
 - `generate-jwt-secret`：生成对称 JWT secret，供仍使用共享 secret 的周边服务使用。
 - `generate-keystone-deployment`：生成 docker-compose-all / Keystone 部署所需的数据库与 Redis 密钥文件。
@@ -63,7 +63,7 @@ python scripts/secret_tool.py generate-deployment
 
 - 如果 `.secrets/.database_password` 存在且内容非空，使用其中的自定义明文密码。
 - 如果 `.secrets/.database_password` 不存在或为空，生成包含字母、数字和特殊字符的随机密码。
-- 生成 `.secrets/.database_password.key`、`.secrets/.database_password.enc`、`.secrets/.redis.acl`、`.secrets/.redis_url.enc` 和 `.secrets/.redis_url.key`。
+- 生成 `.secrets/.database_password.key`、`.secrets/.database_password.enc`、`.secrets/.redis.acl`、`.secrets/.redis_password.enc` 和 `.secrets/.redis_password.key`。
 - 默认删除 `.secrets/.database_password`，避免明文密码长期留在磁盘。
 
 注意：如果使用仓库内置 PostgreSQL 容器首次初始化数据库，PostgreSQL 仍需要读取 `.secrets/.database_password`。这种场景使用：
@@ -112,12 +112,12 @@ python scripts/secret_tool.py decrypt \
 
 验证完成后不要长期保留解出的明文文件。
 
-## Redis URL 与 ACL
+## Redis 密码与 ACL
 
 Redis 有两个配置面：
 
 - Redis 服务启动读取 `.secrets/.redis.acl`，其中只保存密码 SHA-256 hash。
-- Keylo 启动读取 `.secrets/.redis_url.enc` 和 `.secrets/.redis_url.key`，在内存中解密出 Redis URL，再传给 Redis 客户端。
+- Keylo 启动读取 `.secrets/.redis_password.enc` 和 `.secrets/.redis_password.key`，在内存中解密出 Redis 密码；Redis host/port/database 通过普通环境变量配置。
 
 推荐使用专用命令生成，过程中不会把明文 Redis 密码写入文件：
 
@@ -129,25 +129,18 @@ python scripts/secret_tool.py generate-redis
 
 ```text
 .secrets/.redis.acl
-.secrets/.redis_url.enc
-.secrets/.redis_url.key
+.secrets/.redis_password.enc
+.secrets/.redis_password.key
 ```
 
-本地开发时如果 Keylo 运行在宿主机、Redis 通过 `docker-compose.dev.yml` 绑定到 `127.0.0.1:63790`，生成本地密文 URL：
-
-```bash
-python scripts/secret_tool.py generate-redis \
-  --host 127.0.0.1 \
-  --port 63790 \
-  --enc-out .secrets/.redis_url.local.enc \
-  --key-out .secrets/.redis_url.local.key
-```
-
-然后配置：
+本地开发时如果 Keylo 运行在宿主机、Redis 通过 `docker-compose.dev.yml` 绑定到 `127.0.0.1:63790`，直接配置 host/port：
 
 ```env
-REDIS_URL_ENC_FILE=./.secrets/.redis_url.local.enc
-REDIS_URL_KEY_FILE=./.secrets/.redis_url.local.key
+REDIS_HOST=127.0.0.1
+REDIS_PORT=63790
+REDIS_USERNAME=keylo
+REDIS_PASSWORD_ENC_FILE=./.secrets/.redis_password.enc
+REDIS_PASSWORD_KEY_FILE=./.secrets/.redis_password.key
 ```
 
 生产环境不要配置 `REDIS_URL` 或 `REDIS_URL_FILE`。它们属于明文来源，只保留给非生产排障和临时调试。

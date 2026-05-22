@@ -54,8 +54,11 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID}
       ENABLE_SETUP_WIZARD: ${ENABLE_SETUP_WIZARD:-true}
-      REDIS_URL_ENC_FILE: /run/secrets/.redis_url.enc
-      REDIS_URL_KEY_FILE: /run/secrets/.redis_url.key
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_USERNAME: keylo
+      REDIS_PASSWORD_ENC_FILE: /run/secrets/.redis_password.enc
+      REDIS_PASSWORD_KEY_FILE: /run/secrets/.redis_password.key
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       RUST_LOG: ${KEYLO_RUST_LOG:-keylo=debug,axum=info,tower_http=info}
       LOG_TO_FILE: ${LOG_TO_FILE:-true}
@@ -71,10 +74,10 @@ services:
         target: .database_password.enc
       - source: database_password_key
         target: .database_password.key
-      - source: redis_url_enc
-        target: .redis_url.enc
-      - source: redis_url_key
-        target: .redis_url.key
+      - source: redis_password_enc
+        target: .redis_password.enc
+      - source: redis_password_key
+        target: .redis_password.key
     networks:
       - keylo_public_network
       - keylo_db_network
@@ -98,10 +101,10 @@ secrets:
     file: ./.secrets/.database_password.key
   redis_acl:
     file: ./.secrets/.redis.acl
-  redis_url_enc:
-    file: ./.secrets/.redis_url.enc
-  redis_url_key:
-    file: ./.secrets/.redis_url.key
+  redis_password_enc:
+    file: ./.secrets/.redis_password.enc
+  redis_password_key:
+    file: ./.secrets/.redis_password.key
 
 networks:
   keylo_public_network:

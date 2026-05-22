@@ -323,10 +323,14 @@ Cargo.toml           # 项目依赖配置
 | `TRUST_PROXY_HEADERS` | `false` | 是否信任 `X-Forwarded-For` / `X-Real-IP`；关闭时使用连接 peer IP |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173` | 允许浏览器跨域携带凭证访问的 Origin 白名单，逗号分隔 |
 | `ADMIN_CLIENT_ID` | `cli-admin-root` | 管理员客户端 ID |
-| `REDIS_URL_ENC` | `` | AES-256-GCM 加密后的 Redis URL；生产环境必须使用 |
-| `REDIS_URL_ENC_FILE` | `./.secrets/.redis_url.enc` / `/run/secrets/.redis_url.enc` | Redis URL 密文文件路径 |
-| `REDIS_URL_KEY` | `` | Redis URL 解密 key；建议改用文件路径 |
-| `REDIS_URL_KEY_FILE` | `./.secrets/.redis_url.key` / `/run/secrets/.redis_url.key` | Redis URL 解密 key 文件路径 |
+| `REDIS_HOST` | `redis` | Redis 主机名或 IP |
+| `REDIS_PORT` | `6379` | Redis 端口 |
+| `REDIS_USERNAME` | `keylo` | Redis ACL 用户名 |
+| `REDIS_DATABASE` | `` | Redis database 编号（可选） |
+| `REDIS_PASSWORD_ENC` | `` | AES-256-GCM 加密后的 Redis 密码；生产环境必须使用 |
+| `REDIS_PASSWORD_ENC_FILE` | `./.secrets/.redis_password.enc` / `/run/secrets/.redis_password.enc` | Redis 密码密文文件路径 |
+| `REDIS_PASSWORD_KEY` | `` | Redis 密码解密 key；建议改用文件路径 |
+| `REDIS_PASSWORD_KEY_FILE` | `./.secrets/.redis_password.key` / `/run/secrets/.redis_password.key` | Redis 密码解密 key 文件路径 |
 | `REDIS_URL` | `` | 明文 Redis 地址；仅用于非生产调试 |
 | `REDIS_URL_FILE` | `` | 明文 Redis 地址文件；仅用于非生产调试 |
 | `REDIS_KEY_PREFIX` | `keylo` | Redis key 前缀（多环境隔离） |
@@ -436,8 +440,9 @@ docker run --rm -p 2345:2345 \
   -v $(pwd)/keys:/app/keys:ro \
   -v $(pwd)/.secrets:/run/secrets:ro \
   -e DATABASE_URL="postgres://keylo_user@db:5432/keylo" \
-  -e REDIS_URL_ENC_FILE="/run/secrets/.redis_url.enc" \
-  -e REDIS_URL_KEY_FILE="/run/secrets/.redis_url.key" \
+  -e REDIS_HOST="redis" \
+  -e REDIS_PASSWORD_ENC_FILE="/run/secrets/.redis_password.enc" \
+  -e REDIS_PASSWORD_KEY_FILE="/run/secrets/.redis_password.key" \
   ghcr.io/bruceblink/keylo:v1.5.1
 ```
 
@@ -462,12 +467,12 @@ docker-compose logs -f postgres
 当前仓库的 [docker-compose.yml](docker-compose.yml) 默认按生产模板组织：
 
 * `keylo` 服务默认监听 `0.0.0.0:2345`
-* compose 与本地统一使用同名变量（如 `DATABASE_URL`），Redis 生产环境通过 `REDIS_URL_ENC_FILE` 和 `REDIS_URL_KEY_FILE` 读取密文配置
+* compose 与本地统一使用同名变量（如 `DATABASE_URL`），Redis 生产环境通过 `REDIS_PASSWORD_ENC_FILE` 和 `REDIS_PASSWORD_KEY_FILE` 读取密码密文配置
 * `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`，`ADMIN_CLIENT_SECRET` 在首次 setup 页面录入，不写入配置文件
 * 默认挂载 `${JWT_KEYS_DIR:-./keys}` 到 `/app/keys`
 * Redis 默认启用，满足生产环境的限流、登录锁定和 OAuth state 依赖
 * Redis 不映射宿主机端口，只加入 `keylo_redis_network` 专用内部网络；不要让其他服务加入该网络
-* Redis 通过 `./.secrets/.redis.acl` 启用 ACL，Keylo 通过 `./.secrets/.redis_url.enc` 和 `./.secrets/.redis_url.key` 在内存中解密 Redis URL
+* Redis 通过 `./.secrets/.redis.acl` 启用 ACL，Keylo 通过 `./.secrets/.redis_password.enc` 和 `./.secrets/.redis_password.key` 在内存中解密 Redis 密码
 
 首次在服务器部署时，建议先准备 `.env` 或 shell 环境变量，再执行：
 
@@ -558,7 +563,7 @@ docker compose logs -f keylo-service
 * 使用 RSA 2048 位或更高密钥
 * 私钥只保留在 Keylo 服务端
 * 设置 `ENVIRONMENT=production`
-* 显式配置 Redis 密文配置（`REDIS_URL_ENC_FILE` 与 `REDIS_URL_KEY_FILE`），管理客户端密钥在首次 setup 页面录入
+* 显式配置 Redis 密码密文配置（`REDIS_PASSWORD_ENC_FILE` 与 `REDIS_PASSWORD_KEY_FILE`），管理客户端密钥在首次 setup 页面录入
 * 仅在反向代理可信且已覆盖客户端真实地址时设置 `TRUST_PROXY_HEADERS=true`
 * 为外部访问启用 HTTPS 和反向代理
 

@@ -25,7 +25,6 @@ import string
 import stat
 import subprocess
 from pathlib import Path
-from urllib.parse import quote
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -36,8 +35,8 @@ DEFAULT_TEXT_FILE = ".secrets/.database_password"
 DEFAULT_KEY_FILE = ".secrets/.database_password.key"
 DEFAULT_OUT_FILE = ".secrets/.database_password.enc"
 DEFAULT_REDIS_ACL_FILE = ".secrets/.redis.acl"
-DEFAULT_REDIS_URL_KEY_FILE = ".secrets/.redis_url.key"
-DEFAULT_REDIS_URL_ENC_FILE = ".secrets/.redis_url.enc"
+DEFAULT_REDIS_PASSWORD_KEY_FILE = ".secrets/.redis_password.key"
+DEFAULT_REDIS_PASSWORD_ENC_FILE = ".secrets/.redis_password.enc"
 DEFAULT_RSA_PRIVATE_KEY_FILE = "keys/private.pem"
 DEFAULT_RSA_PUBLIC_KEY_FILE = "keys/public.pem"
 PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*()-_=+[]{}:,.?"
@@ -274,10 +273,6 @@ def write_keylo_redis_secret(args: argparse.Namespace) -> tuple[Path, Path, Path
     password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
     username = args.redis_username.strip()
     key_prefix = args.redis_key_prefix.strip()
-    redis_url = (
-        f"redis://{quote(username, safe='')}:"
-        f"{quote(password, safe='')}@{args.redis_host}:{args.redis_port}"
-    )
 
     key_text = generate_key_value()
     acl_text = (
@@ -296,7 +291,7 @@ def write_keylo_redis_secret(args: argparse.Namespace) -> tuple[Path, Path, Path
     acl_file.write_text(acl_text, encoding="utf-8")
     hide_if_dot_path(acl_file)
     write_text(key_file, key_text)
-    write_text(enc_file, encrypt_value(redis_url, decode_key(key_text)))
+    write_text(enc_file, encrypt_value(password, decode_key(key_text)))
 
     return acl_file, key_file, enc_file
 
@@ -354,8 +349,8 @@ def cmd_generate_redis(args: argparse.Namespace) -> None:
     acl_file, key_file, enc_file = write_keylo_redis_secret(args)
 
     print(f"redis_acl: {acl_file}")
-    print(f"redis_url_key: {key_file}")
-    print(f"redis_url_enc: {enc_file}")
+    print(f"redis_password_key: {key_file}")
+    print(f"redis_password_enc: {enc_file}")
     print("plain_password_written: false")
 
 
@@ -371,8 +366,8 @@ def cmd_generate_deployment(args: argparse.Namespace) -> None:
         redis_port=args.redis_port,
         redis_password_bytes=args.redis_password_bytes,
         acl_out=str(Path(args.secret_dir) / ".redis.acl"),
-        key_out=str(Path(args.secret_dir) / ".redis_url.key"),
-        enc_out=str(Path(args.secret_dir) / ".redis_url.enc"),
+        key_out=str(Path(args.secret_dir) / ".redis_password.key"),
+        enc_out=str(Path(args.secret_dir) / ".redis_password.enc"),
     )
     cmd_generate_redis(redis_args)
 
@@ -484,8 +479,8 @@ def add_database_args(parser: argparse.ArgumentParser, default_secret_dir: str) 
 def add_keylo_redis_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--redis-username", "--redis-user", "--username", default="keylo")
     parser.add_argument("--redis-key-prefix", "--key-prefix", default="keylo")
-    parser.add_argument("--redis-host", "--host", default="redis")
-    parser.add_argument("--redis-port", "--port", default="6379")
+    parser.add_argument("--redis-host", "--host", default="redis", help=argparse.SUPPRESS)
+    parser.add_argument("--redis-port", "--port", default="6379", help=argparse.SUPPRESS)
     parser.add_argument("--redis-password-bytes", "--password-bytes", type=int, default=32)
 
 
@@ -564,7 +559,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate_redis = subparsers.add_parser(
         "generate-redis",
         help=(
-            "generate Redis ACL hash, AES key, and encrypted Redis URL without "
+            "generate Redis ACL hash, AES key, and encrypted Redis password without "
             "writing the plain password"
         ),
     )
@@ -576,13 +571,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_redis.add_argument(
         "--key-out",
-        default=DEFAULT_REDIS_URL_KEY_FILE,
-        help=f"AES key output path (default: {DEFAULT_REDIS_URL_KEY_FILE})",
+        default=DEFAULT_REDIS_PASSWORD_KEY_FILE,
+        help=f"AES key output path (default: {DEFAULT_REDIS_PASSWORD_KEY_FILE})",
     )
     generate_redis.add_argument(
         "--enc-out",
-        default=DEFAULT_REDIS_URL_ENC_FILE,
-        help=f"encrypted Redis URL output path (default: {DEFAULT_REDIS_URL_ENC_FILE})",
+        default=DEFAULT_REDIS_PASSWORD_ENC_FILE,
+        help=f"encrypted Redis password output path (default: {DEFAULT_REDIS_PASSWORD_ENC_FILE})",
     )
     generate_redis.set_defaults(func=cmd_generate_redis)
 
@@ -592,8 +587,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_keylo_redis_args(generate_keylo_redis)
     generate_keylo_redis.add_argument("--acl-out", default="keylo/.secrets/.redis.acl")
-    generate_keylo_redis.add_argument("--key-out", default="keylo/.secrets/.redis_url.key")
-    generate_keylo_redis.add_argument("--enc-out", default="keylo/.secrets/.redis_url.enc")
+    generate_keylo_redis.add_argument("--key-out", default="keylo/.secrets/.redis_password.key")
+    generate_keylo_redis.add_argument("--enc-out", default="keylo/.secrets/.redis_password.enc")
     generate_keylo_redis.set_defaults(func=cmd_generate_redis)
 
     generate_deployment = subparsers.add_parser(

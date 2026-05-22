@@ -32,7 +32,7 @@ CORS_ALLOWED_ORIGINS=https://admin.example.com
 - 宿主机存在 PostgreSQL 初始化明文密码文件 `${POSTGRES_PASSWORD_FILE:-./.secrets/.database_password}`，该文件只提供给 PostgreSQL 初始化
 - 宿主机存在 Keylo 运行期数据库密文 `${DATABASE_PASSWORD_ENC_FILE:-./.secrets/.database_password.enc}` 和解密密钥 `${DATABASE_PASSWORD_KEY_FILE:-./.secrets/.database_password.key}`，Keylo 不读取明文数据库密码文件
 - 宿主机存在 Redis ACL 文件 `./.secrets/.redis.acl`，只开启 `keylo` 用户并限制 key 前缀访问
-- 宿主机存在 Redis URL 密文 `./.secrets/.redis_url.enc` 和解密 key `./.secrets/.redis_url.key`，Keylo 通过 `REDIS_URL_ENC_FILE` / `REDIS_URL_KEY_FILE` 读取并在内存中解密
+- 宿主机存在 Redis 密码密文 `./.secrets/.redis_password.enc` 和解密 key `./.secrets/.redis_password.key`，Keylo 通过 `REDIS_PASSWORD_ENC_FILE` / `REDIS_PASSWORD_KEY_FILE` 读取并在内存中解密
 - Docker Compose 中 `SERVER_ADDR` 约定为 `0.0.0.0`，避免容器内只监听回环地址
 - `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`；`ADMIN_CLIENT_SECRET` 在首次 setup 页面录入，不写入配置文件
 - 如需重装数据库，执行 `docker compose down -v --remove-orphans` 删除 PostgreSQL 数据卷后再重建
@@ -42,7 +42,7 @@ CORS_ALLOWED_ORIGINS=https://admin.example.com
 - 生产环境建议提前生成、挂载并备份固定 RSA 密钥。
 - 生产环境要求首次 setup 初始化管理客户端。若未显式配置 `SETUP_TOKEN`，启动日志会输出仅存在内存中的临时 setup token。
 - **1.1.0 起生产环境 Redis 为强制依赖**：若 Redis 不可用，限流中间件将拒绝请求，服务不会降级为内存限流。
-- Redis 不发布宿主机端口，且只加入 Keylo 专用内部网络；生产环境 Redis URL 必须包含 ACL 用户名和密码，并必须通过 `REDIS_URL_ENC` 或 `REDIS_URL_ENC_FILE` 加密配置。
+- Redis 不发布宿主机端口，且只加入 Keylo 专用内部网络；生产环境 Redis 密码必须通过 `REDIS_PASSWORD_ENC` 或 `REDIS_PASSWORD_ENC_FILE` 加密配置。
 - `DB_POOL_SIZE` 控制数据库连接池大小，默认 10；只有需要按部署规模调优时才覆盖。
 - 如果数据库初始化失败，服务会直接失败启动，不再回退到内存模式。
 - 非生产环境默认也会在数据库初始化失败时失败启动；只有显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 才允许无数据库路由。该模式仍会校验基础配置。
@@ -156,7 +156,7 @@ user default off
 user keylo on #<sha256-password-hex> ~keylo:* +@read +@write +@connection
 ```
 
-推荐用工具一次生成 ACL hash、Redis URL 密文和解密 key。该命令不会把 Redis 明文密码写入文件：
+推荐用工具一次生成 ACL hash、Redis 密码密文和解密 key。该命令不会把 Redis 明文密码写入文件：
 
 ```bash
 python scripts/secret_tool.py generate-redis
@@ -165,10 +165,10 @@ python scripts/secret_tool.py generate-redis
 生成结果：
 
 - `./.secrets/.redis.acl`：Redis 启动时读取，包含 `keylo` 用户和密码 hash
-- `./.secrets/.redis_url.enc`：Keylo 读取的 AES-GCM 密文 Redis URL
-- `./.secrets/.redis_url.key`：Keylo 读取的 AES-256 解密 key
+- `./.secrets/.redis_password.enc`：Keylo 读取的 AES-GCM 密文 Redis 密码
+- `./.secrets/.redis_password.key`：Keylo 读取的 AES-256 解密 key
 
-`docker-compose.yml` 会把密文和 key 分别挂载为 `/run/secrets/.redis_url.enc`、`/run/secrets/.redis_url.key`。Keylo 启动时在内存中解密出 Redis URL，再传给 Redis 客户端。生产环境不要配置 `REDIS_URL` 或 `REDIS_URL_FILE`，这类明文来源会触发启动校验失败。
+`docker-compose.yml` 会把密文和 key 分别挂载为 `/run/secrets/.redis_password.enc`、`/run/secrets/.redis_password.key`。Keylo 启动时通过 `REDIS_HOST` / `REDIS_PORT` / `REDIS_USERNAME` 组装 Redis URL，并在内存中解密 Redis 密码。生产环境不要配置 `REDIS_URL` 或 `REDIS_URL_FILE`，这类明文来源会触发启动校验失败。
 
 如果密码包含特殊字符，需要在 URL 中进行 percent-encoding。`REDIS_KEY_PREFIX` 应与 ACL 中的 key pattern 对齐，例如默认 `keylo` 对应 `~keylo:*`。
 
