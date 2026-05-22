@@ -174,16 +174,16 @@ pub async fn setup_status(
         .as_deref()
         .is_some_and(|url| !url.trim().is_empty());
     let jwt_keys_ok = has_jwt_keys(&state);
-    let admin_config_ok = state
+    let admin_id_configured = state
         .config
         .admin_client_id
         .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-        && state
-            .config
-            .admin_client_secret
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
+        .is_some_and(|value| !value.trim().is_empty());
+    let admin_secret_configured = state
+        .config
+        .admin_client_secret
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
 
     let mut checks = vec![
         check(
@@ -224,12 +224,14 @@ pub async fn setup_status(
         check(
             "admin_client_config",
             "Admin Client Config",
-            admin_config_ok,
-            true,
-            if admin_config_ok {
-                "Admin client credentials are configured"
+            admin_id_configured,
+            false,
+            if admin_id_configured && admin_secret_configured {
+                "Admin client credentials are configured for automatic seed"
+            } else if admin_id_configured {
+                "Admin client secret can be provided during setup initialization"
             } else {
-                "Admin client credentials are missing"
+                "Admin client ID can be provided during setup initialization"
             },
         ),
     ];
@@ -314,7 +316,7 @@ pub async fn setup_initialize(
     if state.config.is_production() {
         state
             .config
-            .validate_for_database_startup()
+            .validate_for_setup_initialization()
             .map_err(AuthError::InvalidRequest)?;
     }
 

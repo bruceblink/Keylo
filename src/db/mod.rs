@@ -101,7 +101,8 @@ pub async fn upsert_client(
 pub async fn seed_default_clients(pool: &PgPool, config: &Config) -> Result<()> {
     if config.admin_client_id.is_none() || config.admin_client_secret.is_none() {
         tracing::warn!(
-            "ADMIN_CLIENT_ID or ADMIN_CLIENT_SECRET is not set, skipping admin client seed"
+            "Admin client seed credentials are incomplete; skipping automatic admin client seed. \
+             Complete /setup or provide ADMIN_CLIENT_SECRET only for automatic seed."
         );
     }
     seed_default_clients_with_admin(

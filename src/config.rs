@@ -625,7 +625,7 @@ impl Config {
         let mut errors = Vec::new();
 
         self.validate_common(&mut errors);
-        self.validate_management_client(&mut errors);
+        self.validate_optional_management_client_seed(&mut errors);
 
         if self.database_url.trim().is_empty() {
             errors.push(
@@ -683,7 +683,32 @@ impl Config {
             }
         }
 
-        self.validate_setup_wizard(&mut errors);
+        self.validate_setup_wizard_startup(&mut errors);
+
+        config_result(errors)
+    }
+
+    pub fn validate_for_setup_initialization(&self) -> Result<(), String> {
+        let mut errors = Vec::new();
+
+        self.validate_common(&mut errors);
+        self.validate_optional_management_client_seed(&mut errors);
+
+        if self.database_url.trim().is_empty() {
+            errors.push("DATABASE_URL must be set before setup initialization".to_string());
+        }
+
+        if self.is_production()
+            && self.enable_setup_wizard
+            && option_is_blank(self.setup_token.as_deref())
+        {
+            errors.push(
+                "SETUP_TOKEN must be set for first-time setup initialization in production"
+                    .to_string(),
+            );
+        }
+
+        self.validate_setup_wizard_startup(&mut errors);
 
         config_result(errors)
     }
@@ -692,7 +717,7 @@ impl Config {
         let mut errors = Vec::new();
 
         self.validate_common(&mut errors);
-        self.validate_management_client(&mut errors);
+        self.validate_optional_management_client_seed(&mut errors);
 
         if self.is_production() {
             errors.push("ALLOW_IN_MEMORY_FALLBACK cannot be used in production".to_string());
@@ -705,20 +730,14 @@ impl Config {
             );
         }
 
-        self.validate_setup_wizard(&mut errors);
+        self.validate_setup_wizard_startup(&mut errors);
 
         config_result(errors)
     }
 
-    fn validate_setup_wizard(&self, errors: &mut Vec<String>) {
+    fn validate_setup_wizard_startup(&self, errors: &mut Vec<String>) {
         if !self.enable_setup_wizard {
             return;
-        }
-
-        if self.is_production() && option_is_blank(self.setup_token.as_deref()) {
-            errors.push(
-                "SETUP_TOKEN must be set when ENABLE_SETUP_WIZARD=true in production".to_string(),
-            );
         }
 
         if self.setup_keys_dir.trim().is_empty() {
@@ -726,14 +745,13 @@ impl Config {
         }
     }
 
-    fn validate_management_client(&self, errors: &mut Vec<String>) {
-        if option_is_blank(self.admin_client_id.as_deref()) {
-            errors.push("ADMIN_CLIENT_ID must not be empty".to_string());
-        }
-
-        if option_is_blank(self.admin_client_secret.as_deref()) {
-            errors
-                .push("ADMIN_CLIENT_SECRET must be set to seed the management client".to_string());
+    fn validate_optional_management_client_seed(&self, errors: &mut Vec<String>) {
+        if !option_is_blank(self.admin_client_secret.as_deref())
+            && option_is_blank(self.admin_client_id.as_deref())
+        {
+            errors.push(
+                "ADMIN_CLIENT_ID must not be empty when ADMIN_CLIENT_SECRET is set".to_string(),
+            );
         }
     }
 
@@ -1118,15 +1136,34 @@ mod tests {
     }
 
     #[test]
-    fn database_startup_requires_admin_client_credentials() {
+    fn database_startup_allows_missing_admin_client_credentials() {
         let mut config = valid_config();
-        config.admin_client_id = Some("".to_string());
+        config.admin_client_id = Some("cli-admin-root".to_string());
         config.admin_client_secret = None;
 
-        let err = config.validate_for_database_startup().unwrap_err();
+        assert!(config.validate_for_database_startup().is_ok());
+    }
 
+    #[test]
+    fn database_startup_rejects_admin_secret_without_client_id() {
+        let mut config = valid_config();
+        config.admin_client_id = Some("".to_string());
+        config.admin_client_secret = Some("strong-admin-secret".to_string());
+
+        let err = config.validate_for_database_startup().unwrap_err();
         assert!(err.contains("ADMIN_CLIENT_ID"));
-        assert!(err.contains("ADMIN_CLIENT_SECRET"));
+    }
+
+    #[test]
+    fn production_setup_initialization_requires_setup_token() {
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
+        config.setup_token = None;
+
+        let err = config.validate_for_setup_initialization().unwrap_err();
+
+        assert!(err.contains("SETUP_TOKEN"));
     }
 
     #[test]
@@ -1261,17 +1298,14 @@ mod tests {
     }
 
     #[test]
-    fn in_memory_startup_requires_admin_client_credentials() {
+    fn in_memory_startup_allows_missing_admin_client_credentials() {
         let mut config = valid_config();
         config.allow_in_memory_fallback = true;
-        config.admin_client_id = Some("".to_string());
+        config.admin_client_id = Some("cli-admin-root".to_string());
         config.admin_client_secret = None;
         config.database_url.clear();
 
-        let err = config.validate_for_in_memory_startup().unwrap_err();
-
-        assert!(err.contains("ADMIN_CLIENT_ID"));
-        assert!(err.contains("ADMIN_CLIENT_SECRET"));
+        assert!(config.validate_for_in_memory_startup().is_ok());
     }
 
     #[test]

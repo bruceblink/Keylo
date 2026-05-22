@@ -7,7 +7,10 @@ use axum::http::HeaderValue;
 use axum::middleware;
 use axum::routing::get;
 use axum::Router;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use redis::AsyncCommands;
+use rsa::rand_core::{OsRng, RngCore};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -181,6 +184,31 @@ async fn initialize_database(pool: &sqlx::PgPool, config: &Config) -> Result<(),
     Ok(())
 }
 
+async fn prepare_runtime_setup_token(
+    pool: &sqlx::PgPool,
+    config: &mut Config,
+) -> Result<(), anyhow::Error> {
+    if !config.enable_setup_wizard || config.setup_token.is_some() {
+        return Ok(());
+    }
+
+    if crate::db::setup_completed(pool).await.unwrap_or(false) {
+        return Ok(());
+    }
+
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token = URL_SAFE_NO_PAD.encode(bytes);
+    config.setup_token = Some(token.clone());
+
+    tracing::warn!(
+        setup_token = %token,
+        "First-time setup is incomplete. Use this one-time runtime setup token in /setup; it is not stored in configuration."
+    );
+
+    Ok(())
+}
+
 async fn warn_if_management_client_is_missing(pool: &sqlx::PgPool, config: &Config) {
     if config.is_production() {
         return;
@@ -332,7 +360,7 @@ pub fn init_app_router_with_config(config: Config) -> Router {
 }
 
 pub async fn init_app_router_with_db(
-    config: Config,
+    mut config: Config,
     database_url: &str,
 ) -> Result<Router, anyhow::Error> {
     let database_url = resolve_database_url(database_url)?;
@@ -342,6 +370,7 @@ pub async fn init_app_router_with_db(
 
     let db = connect_postgres_with_retry(&database_url).await?;
     initialize_database(&db, &config).await?;
+    prepare_runtime_setup_token(&db, &mut config).await?;
 
     let cors_allowed_origins = config.cors_allowed_origins.clone();
     let app_state = AppState::new(config, Some(Arc::new(db)))?;
