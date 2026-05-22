@@ -53,9 +53,7 @@ services:
       SERVER_PORT: ${SERVER_PORT:-2345}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID}
-      ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET}
       ENABLE_SETUP_WIZARD: ${ENABLE_SETUP_WIZARD:-true}
-      SETUP_TOKEN: ${SETUP_TOKEN}
       REDIS_URL_ENC_FILE: /run/secrets/.redis_url.enc
       REDIS_URL_KEY_FILE: /run/secrets/.redis_url.key
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
