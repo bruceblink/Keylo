@@ -44,7 +44,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: keylo:latest
+    image: keylo-local:dev
     container_name: keylo-service
     restart: unless-stopped
     environment:
@@ -53,6 +53,9 @@ services:
       SERVER_PORT: ${SERVER_PORT:-2345}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID}
+      # ADMIN_CLIENT_SECRET is intentionally omitted by default.
+      # Complete /setup to persist the admin client secret, or set it explicitly
+      # only when you want automatic admin client seed during startup.
       ENABLE_SETUP_WIZARD: ${ENABLE_SETUP_WIZARD:-true}
       REDIS_HOST: redis
       REDIS_PORT: 6379

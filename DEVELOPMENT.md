@@ -107,7 +107,9 @@ DATABASE_PASSWORD_KEY_FILE=./.secrets/.database_password.key
 REDIS_URL_ENC_FILE=./.secrets/.redis_url.enc
 REDIS_URL_KEY_FILE=./.secrets/.redis_url.key
 ADMIN_CLIENT_ID=cli-admin-root
-ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
+# Optional: only set this when you want automatic admin client seed at startup.
+# Otherwise complete /setup and enter the admin client secret there.
+# ADMIN_CLIENT_SECRET=replace-with-strong-admin-secret
 TOKEN_EXPIRY_SECONDS=900
 DB_POOL_SIZE=20
 ```
@@ -179,7 +181,7 @@ export DATABASE_PASSWORD_KEY_FILE="./.secrets/.database_password.key"
 
 ### 5.2 `No active admin client found ...`
 
-- 检查 `.env` 中是否配置了 `ADMIN_CLIENT_ID` / `ADMIN_CLIENT_SECRET`
+- `ADMIN_CLIENT_ID` 可以保留默认值；`ADMIN_CLIENT_SECRET` 默认不写入 `.env`，首次启动后通过 `/setup` 录入
 - Keylo 启动时会先加载 `.env` 到 `Config`，再用 `Config.admin_client_id` / `Config.admin_client_secret` 初始化管理客户端
 - 检查 `clients` 表中目标客户端是否 `active=true` 且 `is_admin_client=true`
 
