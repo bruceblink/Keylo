@@ -39,11 +39,6 @@ type ApiError = {
   error?: string;
 };
 
-function authHeaders(token: string): HeadersInit {
-  const trimmed = token.trim();
-  return trimmed ? { Authorization: `Bearer ${trimmed}` } : {};
-}
-
 async function readJson<T>(response: Response): Promise<T> {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -55,7 +50,6 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 function App() {
-  const [setupToken, setSetupToken] = useState('');
   const [adminClientId, setAdminClientId] = useState('cli-admin-root');
   const [adminClientSecret, setAdminClientSecret] = useState('');
   const [status, setStatus] = useState<SetupStatus | null>(null);
@@ -66,14 +60,13 @@ function App() {
     () => status?.checks.filter((item) => item.required && !item.ok) ?? [],
     [status]
   );
+  const setupCompleted = status?.completed === true;
 
   async function loadStatus(nextMessage?: string) {
     setLoading(true);
     setMessage(nextMessage ?? '正在读取安装状态...');
     try {
-      const response = await fetch('/setup/status', {
-        headers: authHeaders(setupToken)
-      });
+      const response = await fetch('/setup/status');
       const data = await readJson<SetupStatus>(response);
       setStatus(data);
       setMessage(
@@ -94,8 +87,7 @@ function App() {
       const response = await fetch('/setup/initialize', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders(setupToken)
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           admin_client_id: adminClientId,
@@ -133,7 +125,7 @@ function App() {
         </button>
       </header>
 
-      <div className="layout">
+      <div className={setupCompleted ? 'layout status-layout' : 'layout'}>
         <section className="panel">
           <div className="panel-title">
             <h2>环境检查</h2>
@@ -156,49 +148,45 @@ function App() {
           </div>
         </section>
 
-        <section className="panel">
-          <h2>初始化</h2>
-          <label htmlFor="setup-token">Setup Token</label>
-          <input
-            id="setup-token"
-            type="password"
-            autoComplete="off"
-            placeholder="生产环境必填"
-            value={setupToken}
-            onChange={(event) => setSetupToken(event.target.value)}
-          />
+        {setupCompleted ? (
+          <section className="panel completed-panel">
+            <h2>安装状态</h2>
+            <div className="status-mark">已完成</div>
+            <p>初始化入口已关闭。后续只能查看当前安装状态和接入端点。</p>
+            <p className="status">{message}</p>
+          </section>
+        ) : (
+          <section className="panel">
+            <h2>初始化</h2>
+            <label htmlFor="admin-client-id">Admin Client ID</label>
+            <input
+              id="admin-client-id"
+              autoComplete="off"
+              value={adminClientId}
+              onChange={(event) => setAdminClientId(event.target.value)}
+            />
 
-          <label htmlFor="admin-client-id">Admin Client ID</label>
-          <input
-            id="admin-client-id"
-            autoComplete="off"
-            value={adminClientId}
-            onChange={(event) => setAdminClientId(event.target.value)}
-          />
+            <label htmlFor="admin-client-secret">Admin Client Secret</label>
+            <input
+              id="admin-client-secret"
+              type="password"
+              autoComplete="new-password"
+              value={adminClientSecret}
+              onChange={(event) => setAdminClientSecret(event.target.value)}
+            />
 
-          <label htmlFor="admin-client-secret">Admin Client Secret</label>
-          <input
-            id="admin-client-secret"
-            type="password"
-            autoComplete="new-password"
-            value={adminClientSecret}
-            onChange={(event) => setAdminClientSecret(event.target.value)}
-          />
+            <div className="actions">
+              <button onClick={initialize} disabled={loading || !adminClientSecret.trim()}>
+                执行初始化
+              </button>
+            </div>
 
-          <div className="actions">
-            <button
-              onClick={initialize}
-              disabled={loading || status?.completed || !adminClientSecret.trim()}
-            >
-              执行初始化
-            </button>
-          </div>
-
-          {requiredFailures.length > 0 ? (
-            <p className="hint">仍有必需检查未通过，初始化可能失败。请先修复左侧配置。</p>
-          ) : null}
-          <p className="status">{message}</p>
-        </section>
+            {requiredFailures.length > 0 ? (
+              <p className="hint">仍有必需检查未通过，初始化可能失败。请先修复左侧配置。</p>
+            ) : null}
+            <p className="status">{message}</p>
+          </section>
+        )}
       </div>
 
       <section className="panel endpoints">

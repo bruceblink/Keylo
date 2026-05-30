@@ -62,6 +62,10 @@ p {
   gap: 16px;
 }
 
+.status-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -199,6 +203,19 @@ button:disabled {
 .status {
   min-height: 24px;
   margin-top: 12px;
+}
+
+.status-mark {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  margin-bottom: 12px;
+  border-radius: 999px;
+  padding: 0 10px;
+  background: #ecfdf3;
+  color: var(--ok);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .endpoints {

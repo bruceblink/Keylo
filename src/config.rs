@@ -575,8 +575,6 @@ pub struct Config {
     pub allow_in_memory_fallback: bool,
     /// Enable first-run setup wizard routes.
     pub enable_setup_wizard: bool,
-    /// Bearer token required by setup APIs. Required in production when setup wizard is enabled.
-    pub setup_token: Option<String>,
     /// Directory where setup wizard can generate RSA key files.
     pub setup_keys_dir: String,
 }
@@ -645,7 +643,6 @@ impl Config {
         let log_file_prefix = env::var("LOG_FILE_PREFIX").unwrap_or_else(|_| "keylo".to_string());
         let allow_in_memory_fallback = parse_bool_env("ALLOW_IN_MEMORY_FALLBACK", false);
         let enable_setup_wizard = parse_bool_env("ENABLE_SETUP_WIZARD", true);
-        let setup_token = env_non_empty_or_dotenv("SETUP_TOKEN");
         let setup_keys_dir = env::var("SETUP_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string());
 
         Self {
@@ -683,7 +680,6 @@ impl Config {
             log_file_prefix,
             allow_in_memory_fallback,
             enable_setup_wizard,
-            setup_token,
             setup_keys_dir,
         }
     }
@@ -773,16 +769,6 @@ impl Config {
 
         if self.database_url.trim().is_empty() {
             errors.push("DATABASE_URL must be set before setup initialization".to_string());
-        }
-
-        if self.is_production()
-            && self.enable_setup_wizard
-            && option_is_blank(self.setup_token.as_deref())
-        {
-            errors.push(
-                "SETUP_TOKEN must be set for first-time setup initialization in production"
-                    .to_string(),
-            );
         }
 
         self.validate_setup_wizard_startup(&mut errors);
@@ -1049,7 +1035,6 @@ mod tests {
             log_file_prefix: "keylo".to_string(),
             allow_in_memory_fallback: false,
             enable_setup_wizard: true,
-            setup_token: None,
             setup_keys_dir: "./keys".to_string(),
         }
     }
@@ -1258,15 +1243,12 @@ mod tests {
     }
 
     #[test]
-    fn production_setup_initialization_requires_setup_token() {
+    fn production_setup_initialization_has_no_extra_token_requirement() {
         let mut config = valid_config();
         config.environment = "production".to_string();
         config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
-        config.setup_token = None;
 
-        let err = config.validate_for_setup_initialization().unwrap_err();
-
-        assert!(err.contains("SETUP_TOKEN"));
+        assert!(config.validate_for_setup_initialization().is_ok());
     }
 
     #[test]

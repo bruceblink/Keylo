@@ -75,8 +75,9 @@ mod load_tests {
             match response {
                 Ok(resp) => {
                     assert_eq!(resp.status_code(), StatusCode::OK);
-                    let body = resp.text();
-                    assert_eq!(body, "Welcome to the keylo :)");
+                    let body: serde_json::Value = resp.json();
+                    assert_eq!(body["status"], "ok");
+                    assert_eq!(body["service"], "keylo");
                 }
                 Err(_) => panic!("Request {} timeout", i),
             }

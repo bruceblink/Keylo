@@ -8,6 +8,29 @@ use axum::Json;
 use redis::AsyncCommands;
 use serde_json::{json, Value};
 
+async fn setup_status_value(state: &AppState) -> Value {
+    if !state.config.enable_setup_wizard {
+        return json!({
+            "enabled": false,
+            "completed": null,
+            "state": "disabled"
+        });
+    }
+
+    let completed = match &state.db {
+        Some(db) => crate::db::setup_completed(db.as_ref())
+            .await
+            .unwrap_or(false),
+        None => false,
+    };
+
+    json!({
+        "enabled": true,
+        "completed": completed,
+        "state": if completed { "completed" } else { "pending" }
+    })
+}
+
 pub async fn index(State(state): State<AppState>) -> Response {
     if state.config.enable_setup_wizard {
         let setup_completed = match &state.db {
@@ -22,7 +45,20 @@ pub async fn index(State(state): State<AppState>) -> Response {
         }
     }
 
-    "Welcome to the keylo :)".into_response()
+    Json(json!({
+        "service": "keylo",
+        "status": "ok",
+        "environment": state.config.environment,
+        "setup": setup_status_value(&state).await,
+        "endpoints": {
+            "health": "/healthz",
+            "readiness": "/readyz",
+            "discovery": "/.well-known/keylo-configuration",
+            "jwks": "/.well-known/jwks.json",
+            "setup_status": "/setup/status"
+        }
+    }))
+    .into_response()
 }
 
 pub async fn protected(claims: Claims) -> Result<String, AuthError> {
@@ -46,7 +82,8 @@ pub async fn favicon() -> StatusCode {
 pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let mut checks = json!({
         "database": if state.config.allow_in_memory_fallback { "disabled" } else { "missing" },
-        "redis": "disabled"
+        "redis": "disabled",
+        "setup": setup_status_value(&state).await
     });
 
     if let Some(db) = &state.db {
@@ -77,6 +114,18 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                 "service": "keylo",
                 "checks": checks,
                 "error": "database not configured"
+            })),
+        );
+    }
+
+    if state.config.enable_setup_wizard && checks["setup"]["completed"] == json!(false) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "error",
+                "service": "keylo",
+                "checks": checks,
+                "error": "setup is not completed"
             })),
         );
     }

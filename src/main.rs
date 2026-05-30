@@ -120,7 +120,6 @@ async fn main() -> Result<(), anyhow::Error> {
     );
     tracing::info!(
         setup_wizard_enabled = config.enable_setup_wizard,
-        setup_token_configured = config.setup_token.is_some(),
         "Setup wizard configuration loaded"
     );
     tracing::info!(

@@ -9,10 +9,8 @@ use crate::state::AppState;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::HeaderValue;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Json;
-use axum_extra::headers::{authorization::Bearer, Authorization};
-use axum_extra::TypedHeader;
 use std::path::Path;
 
 const SETUP_DIST_DIR: &str = "web/dist";
@@ -20,28 +18,6 @@ const SETUP_DIST_DIR: &str = "web/dist";
 fn require_setup_enabled(state: &AppState) -> Result<(), AuthError> {
     if !state.config.enable_setup_wizard {
         return Err(AuthError::NotFound);
-    }
-
-    Ok(())
-}
-
-fn authorize_setup(
-    state: &AppState,
-    bearer: Option<TypedHeader<Authorization<Bearer>>>,
-) -> Result<(), AuthError> {
-    let Some(expected) = state.config.setup_token.as_deref() else {
-        if state.config.is_production() {
-            return Err(AuthError::Unauthorized);
-        }
-        return Ok(());
-    };
-
-    let Some(TypedHeader(Authorization(actual))) = bearer else {
-        return Err(AuthError::Unauthorized);
-    };
-
-    if actual.token() != expected {
-        return Err(AuthError::Unauthorized);
     }
 
     Ok(())
@@ -108,11 +84,7 @@ async fn setup_completed(state: &AppState) -> bool {
     db::setup_completed(&pool).await.unwrap_or(false)
 }
 
-pub async fn setup_page(State(state): State<AppState>) -> impl IntoResponse {
-    if !state.config.enable_setup_wizard {
-        return AuthError::NotFound.into_response();
-    }
-
+fn setup_page_html() -> Response {
     match std::fs::read_to_string(Path::new(SETUP_DIST_DIR).join("index.html")) {
         Ok(html) => Html(html).into_response(),
         Err(_) => Html(
@@ -121,6 +93,30 @@ pub async fn setup_page(State(state): State<AppState>) -> impl IntoResponse {
         )
         .into_response(),
     }
+}
+
+pub async fn setup_page(State(state): State<AppState>) -> impl IntoResponse {
+    if !state.config.enable_setup_wizard {
+        return AuthError::NotFound.into_response();
+    }
+
+    if setup_completed(&state).await {
+        return Redirect::to("/setup/status-page").into_response();
+    }
+
+    setup_page_html()
+}
+
+pub async fn setup_status_page(State(state): State<AppState>) -> impl IntoResponse {
+    if !state.config.enable_setup_wizard {
+        return AuthError::NotFound.into_response();
+    }
+
+    if !setup_completed(&state).await {
+        return Redirect::to("/setup").into_response();
+    }
+
+    setup_page_html()
 }
 
 pub async fn setup_asset(
@@ -161,10 +157,9 @@ pub async fn setup_asset(
 
 pub async fn setup_status(
     State(state): State<AppState>,
-    bearer: Option<TypedHeader<Authorization<Bearer>>>,
 ) -> Result<Json<SetupStatusResponse>, AuthError> {
     require_setup_enabled(&state)?;
-    authorize_setup(&state, bearer)?;
+    let completed_before_auth = setup_completed(&state).await;
 
     let database_url_ok = !state.config.database_url.trim().is_empty();
     let redis_required = state.config.is_production();
@@ -236,7 +231,7 @@ pub async fn setup_status(
         ),
     ];
 
-    let mut completed = false;
+    let mut completed = completed_before_auth;
     match database_pool_from_config(&state).await {
         Ok(Some(pool)) => {
             checks.push(check(
@@ -303,11 +298,9 @@ fn normalized_required(field_name: &str, value: Option<String>) -> Result<String
 
 pub async fn setup_initialize(
     State(state): State<AppState>,
-    bearer: Option<TypedHeader<Authorization<Bearer>>>,
     Json(payload): Json<SetupInitializeRequest>,
 ) -> Result<Json<SetupInitializeResponse>, AuthError> {
     require_setup_enabled(&state)?;
-    authorize_setup(&state, bearer)?;
 
     if setup_completed(&state).await {
         return Err(AuthError::Forbidden);

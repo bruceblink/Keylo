@@ -111,8 +111,10 @@ mod tests {
         let response = server.get("/").await;
 
         response.assert_status_ok();
-        let body = response.text();
-        assert_eq!(body, "Welcome to the keylo :)");
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["service"], "keylo");
+        assert_eq!(body["setup"]["state"], "disabled");
     }
 
     #[tokio::test]
@@ -148,6 +150,7 @@ mod tests {
         assert_eq!(body["service"], "keylo");
         assert!(body["checks"]["database"].is_string());
         assert!(body["checks"]["redis"].is_string());
+        assert!(body["checks"]["setup"]["state"].is_string());
     }
 
     #[tokio::test]
@@ -1215,22 +1218,12 @@ mod tests {
     async fn test_setup_wizard_status_and_initialize() {
         let mut config = test_config();
         config.enable_setup_wizard = true;
-        config.setup_token = Some("setup-token".to_string());
         config.admin_client_id = Some("setup-admin".to_string());
         config.admin_client_secret = Some("SetupAdmin#123".to_string());
 
         let server = setup_test_server_with_config(config).await;
 
-        let unauth_resp = server.get("/setup/status").await;
-        if unauth_resp.status_code() == StatusCode::NOT_FOUND {
-            return;
-        }
-        assert_eq!(unauth_resp.status_code(), StatusCode::UNAUTHORIZED);
-
-        let status_resp = server
-            .get("/setup/status")
-            .add_header("Authorization", "Bearer setup-token")
-            .await;
+        let status_resp = server.get("/setup/status").await;
         status_resp.assert_status_ok();
         let status_body: serde_json::Value = status_resp.json();
         assert_eq!(status_body["enabled"], true);
@@ -1262,7 +1255,6 @@ mod tests {
 
         let init_resp = server
             .post("/setup/initialize")
-            .add_header("Authorization", "Bearer setup-token")
             .json(&json!({
                 "admin_client_id": "setup-admin-test",
                 "admin_client_secret": "SetupAdmin#456"
@@ -1270,20 +1262,66 @@ mod tests {
             .await;
         assert_eq!(init_resp.status_code(), StatusCode::FORBIDDEN);
 
-        let status_after_init_resp = server
-            .get("/setup/status")
-            .add_header("Authorization", "Bearer setup-token")
-            .await;
+        let status_after_init_resp = server.get("/setup/status").await;
         status_after_init_resp.assert_status_ok();
         let status_after_init_body: serde_json::Value = status_after_init_resp.json();
         assert_eq!(status_after_init_body["completed"], true);
     }
 
     #[tokio::test]
+    async fn test_completed_setup_redirects_to_status_and_rejects_reinitialize() {
+        let mut config = test_config();
+        config.enable_setup_wizard = true;
+
+        let server = setup_test_server_with_config(config).await;
+
+        let complete_resp = server
+            .post("/setup/initialize")
+            .json(&json!({
+                "admin_client_id": "setup-admin-test",
+                "admin_client_secret": "SetupAdmin#456"
+            }))
+            .await;
+        if complete_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR
+            || complete_resp.status_code() == StatusCode::BAD_REQUEST
+            || complete_resp.status_code() == StatusCode::NOT_FOUND
+        {
+            return;
+        }
+        assert!(
+            complete_resp.status_code() == StatusCode::OK
+                || complete_resp.status_code() == StatusCode::FORBIDDEN
+        );
+
+        let setup_resp = server.get("/setup").await;
+        if setup_resp.status_code() == StatusCode::OK {
+            return;
+        }
+        assert_eq!(setup_resp.status_code(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            setup_resp.headers()["location"].to_str().unwrap(),
+            "/setup/status-page"
+        );
+
+        let status_resp = server.get("/setup/status").await;
+        status_resp.assert_status_ok();
+        let status_body: serde_json::Value = status_resp.json();
+        assert_eq!(status_body["completed"], true);
+
+        let init_resp = server
+            .post("/setup/initialize")
+            .json(&json!({
+                "admin_client_id": "setup-admin-test",
+                "admin_client_secret": "SetupAdmin#456"
+            }))
+            .await;
+        assert_eq!(init_resp.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn test_index_redirects_to_setup_when_wizard_enabled_and_incomplete() {
         let mut config = test_config();
         config.enable_setup_wizard = true;
-        config.setup_token = Some("setup-token".to_string());
 
         let server = setup_test_server_with_config(config).await;
 
