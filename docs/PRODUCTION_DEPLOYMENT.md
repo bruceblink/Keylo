@@ -40,7 +40,7 @@ CORS_ALLOWED_ORIGINS=https://admin.example.com
 说明：
 
 - 生产环境建议提前生成、挂载并备份固定 RSA 密钥。
-- 生产环境要求首次 setup 初始化管理客户端。若未显式配置 `SETUP_TOKEN`，启动日志会输出仅存在内存中的临时 setup token。
+- 生产环境要求首次 setup 初始化管理客户端。首次未完成 setup 时访问 `/` 会进入 `/setup`，完成后 `/` 返回服务状态 JSON。
 - **1.1.0 起生产环境 Redis 为强制依赖**：若 Redis 不可用，限流中间件将拒绝请求，服务不会降级为内存限流。
 - Redis 不发布宿主机端口，且只加入 Keylo 专用内部网络；生产环境 Redis 密码必须通过 `REDIS_PASSWORD_ENC` 或 `REDIS_PASSWORD_ENC_FILE` 加密配置。
 - `DB_POOL_SIZE` 控制数据库连接池大小，默认 10；只有需要按部署规模调优时才覆盖。

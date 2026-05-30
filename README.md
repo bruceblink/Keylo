@@ -509,7 +509,7 @@ docker compose logs -f keylo-service
 
 * 安装向导默认启用；首次未完成 setup 时访问 `/` 会进入 `/setup`
 * 如需关闭安装向导，可设置 `ENABLE_SETUP_WIZARD=false`
-* 首次 setup 未完成且未配置 `SETUP_TOKEN` 时，Keylo 会生成仅存在内存中的临时 setup token 并写入日志；使用该 token 登录 `/setup`
+* 首次 setup 未完成时访问 `/` 会进入 `/setup`；初始化完成后 `/` 返回服务状态 JSON
 * 未配置 RSA 密钥文件时，Keylo 会自动生成随机 RSA 密钥对并通过 JWKS 发布公钥
 * React 前端位于 `web/`，构建后由 Keylo 托管 `/setup`
 * 设计说明见 [docs/SETUP_WIZARD_DESIGN.md](docs/SETUP_WIZARD_DESIGN.md)
