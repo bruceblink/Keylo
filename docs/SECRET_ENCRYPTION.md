@@ -48,10 +48,13 @@ python scripts/secret_tool.py --help
 
 - `generate-deployment`：生成 Keylo 数据库密码密文、数据库解密 key、Redis ACL、Redis 密码密文和 Redis 密码解密 key。
 - `generate-redis`：只生成 Keylo Redis ACL、Redis 密码密文和 Redis 密码解密 key。
+- `generate-keylo-deployment`、`generate-keylo-redis`：与上面两个 Keylo 命令等价，命名上与 Keystone 命令保持区分。
 - `generate-rsa`：生成 RSA 密钥对；默认 PEM 文件格式，适用于 Keylo JWT 签名。
 - `generate-jwt-secret`：生成对称 JWT secret，供仍使用共享 secret 的周边服务使用。
 - `generate-keystone-deployment`：生成 docker-compose-all / Keystone 部署所需的数据库与 Redis 密钥文件。
 - `generate-key`、`encrypt`、`decrypt`、`encrypt-file-and-remove`：低阶 AES key、加密、解密和明文清理操作。
+
+Keylo 和 Keystone 的 Redis secret 使用方式保持一致：Redis 服务读取 `.redis.acl`，应用读取 `.redis_password.enc` 和 `.redis_password.key`，密文内容都是 Redis 密码本身，不是完整 Redis URL。
 
 Keylo 部署推荐一条命令生成：
 
@@ -118,6 +121,7 @@ Redis 有两个配置面：
 
 - Redis 服务启动读取 `.secrets/.redis.acl`，其中只保存密码 SHA-256 hash。
 - Keylo 启动读取 `.secrets/.redis_password.enc` 和 `.secrets/.redis_password.key`，在内存中解密出 Redis 密码；Redis host/port/database 通过普通环境变量配置。
+- 生成的 ACL 会显式允许 `INFO` 命令，即包含 `+info`，用于健康检查、客户端库或运维探测读取 Redis 基础状态。
 
 推荐使用专用命令生成，过程中不会把明文 Redis 密码写入文件：
 
@@ -131,6 +135,13 @@ python scripts/secret_tool.py generate-redis
 .secrets/.redis.acl
 .secrets/.redis_password.enc
 .secrets/.redis_password.key
+```
+
+`.redis.acl` 形如：
+
+```text
+user default off
+user keylo on #<sha256-password-hex> ~keylo:* +@read +@write +@connection +info
 ```
 
 本地开发时如果 Keylo 运行在宿主机、Redis 通过 `docker-compose.dev.yml` 绑定到 `127.0.0.1:63790`，直接配置 host/port：
@@ -199,6 +210,13 @@ python scripts/secret_tool.py generate-keystone-deployment --secret-dir .secrets
 ```
 
 如果 `.secrets/.database_password` 或 `.secrets/.redis_password` 已存在且内容非空，脚本会使用已有明文生成密文；Redis 明文密码不会长期保留在磁盘。
+
+Keystone Redis ACL 同样显式允许 `INFO` 命令，默认形如：
+
+```text
+user default off
+user keystone on #<sha256-password-hex> ~* +@read +@write +@connection +@scripting +info
+```
 
 ## 解密流程
 

@@ -97,7 +97,7 @@ python scripts/secret_tool.py generate-redis
 
 ```text
 user default off
-user keylo on #<sha256-password-hex> ~keylo:* +@read +@write +@connection
+user keylo on #<sha256-password-hex> ~keylo:* +@read +@write +@connection +info
 ```
 
 `.secrets/.redis_password.enc` 存 AES-GCM 密文密码，`.secrets/.redis_password.key` 存解密 key。Keylo 启动时读取 `REDIS_HOST` / `REDIS_PORT` / `REDIS_USERNAME`，并在内存中解密 Redis 密码后连接 Redis。

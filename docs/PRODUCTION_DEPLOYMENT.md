@@ -153,7 +153,7 @@ Docker Compose 主配置中 Redis 不映射到宿主机端口，并只加入 `ke
 
 ```text
 user default off
-user keylo on #<sha256-password-hex> ~keylo:* +@read +@write +@connection
+user keylo on #<sha256-password-hex> ~keylo:* +@read +@write +@connection +info
 ```
 
 推荐用工具一次生成 ACL hash、Redis 密码密文和解密 key。该命令不会把 Redis 明文密码写入文件：
