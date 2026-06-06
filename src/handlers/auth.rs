@@ -248,6 +248,15 @@ fn extract_client_ip(
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+fn extract_user_agent(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(512).collect())
+}
+
 fn normalize_ip(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V6(value) => value
@@ -270,6 +279,7 @@ pub async fn auth_token(
     }
 
     let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
+    let user_agent = extract_user_agent(&headers);
     let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
     let global_rate_key = format!("global:{}", client_ip);
 
@@ -438,6 +448,8 @@ pub async fn auth_token(
                 refresh_token_id: &refresh_claims.jti,
                 refresh_token: &refresh_token,
                 access_jti: &access_claims.jti,
+                login_ip: Some(&client_ip),
+                user_agent: user_agent.as_deref(),
                 expires_at: refresh_claims.exp,
             },
         )
@@ -464,6 +476,7 @@ pub async fn admin_token(
     }
 
     let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
+    let user_agent = extract_user_agent(&headers);
     let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
     let global_rate_key = format!("global:{}", client_ip);
 
@@ -587,6 +600,8 @@ pub async fn admin_token(
                 refresh_token_id: &refresh_claims.jti,
                 refresh_token: &refresh_token,
                 access_jti: &access_claims.jti,
+                login_ip: Some(&client_ip),
+                user_agent: user_agent.as_deref(),
                 expires_at: refresh_claims.exp,
             },
         )
@@ -1166,6 +1181,8 @@ pub async fn auth_refresh(
             refresh_token_id: &migrated_refresh_claims.jti,
             refresh_token: &migrated_refresh_token,
             access_jti: &access_claims.jti,
+            login_ip: None,
+            user_agent: None,
             expires_at: migrated_refresh_claims.exp,
         },
     )

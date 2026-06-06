@@ -1478,6 +1478,7 @@ mod tests {
 
         let login_resp = server
             .post("/v1/auth/token")
+            .add_header("User-Agent", "KeyloIntegrationTest/1.0")
             .json(&json!({
                 "client_id": username,
                 "client_secret": password
@@ -1679,12 +1680,28 @@ mod tests {
             .first()
             .and_then(|session| session["id"].as_str())
             .unwrap();
+        assert_eq!(
+            sessions_body["data"][0]["user_agent"],
+            "KeyloIntegrationTest/1.0"
+        );
+
+        let global_sessions_resp = server
+            .get(&format!(
+                "/v1/admin/refresh-sessions?principal_id={}",
+                principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        global_sessions_resp.assert_status_ok();
+        let global_sessions_body: serde_json::Value = global_sessions_resp.json();
+        assert!(global_sessions_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["id"].as_str() == Some(session_id)));
 
         let revoke_resp = server
-            .delete(&format!(
-                "/v1/admin/principals/{}/refresh-sessions/{}",
-                principal_id, session_id
-            ))
+            .delete(&format!("/v1/admin/refresh-sessions/{}", session_id))
             .add_header("Authorization", format!("Bearer {}", access_token))
             .await;
         revoke_resp.assert_status_ok();

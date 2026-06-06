@@ -414,6 +414,8 @@
 | GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false` | Principal refresh session 列表 |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions` | 撤销该 Principal 的所有 refresh session |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions/{session_id}` | 撤销单个 refresh session |
+| GET | `/v1/admin/refresh-sessions?include_revoked=false&principal_id=&client_id=&login_ip=&limit=&offset=` | 全局 refresh session 列表 |
+| DELETE | `/v1/admin/refresh-sessions/{session_id}` | 按 session ID 强制撤销 refresh session |
 
 绑定角色请求体：
 
@@ -471,6 +473,7 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - 每次刷新固定轮换 refresh token。
 - 旧 refresh token 重放会撤销所属 session。
 - 管理员可以按 Principal 或单个 session 撤销 refresh session。
+- 管理员可以通过全局 refresh session 列表替代 Keystone 在线用户列表和强制退出功能。列表项包含 `id`、`principal_id`、`client_id`、`login_ip`、`user_agent`、`issued_at`、`rotated_at`、`expires_at`、`revoked_at`、`revoke_reason`。
 
 会话策略通过 `SESSION_POLICY` 配置：
 

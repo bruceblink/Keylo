@@ -142,6 +142,17 @@ POST /v1/authorize/check
 
 返回 `allowed=false` 时 Keystone 应返回 403。
 
+### 阶段 6：在线会话治理
+
+Keystone 原 `/monitor/onlineUsers` 和 `/monitor/onlineUser/{tokenId}` 可迁移为 Keylo refresh session 管理：
+
+```http
+GET    /v1/admin/refresh-sessions?principal_id=&client_id=&login_ip=
+DELETE /v1/admin/refresh-sessions/{session_id}
+```
+
+列表返回 `principal_id`、`client_id`、`login_ip`、`user_agent`、`issued_at`、`expires_at` 和撤销状态。强制退出时撤销对应 refresh session，后续 refresh token 会失效。
+
 ## 3. 服务 Token 接入规则
 
 Keystone 调用 Keylo 或其他内部服务时，应使用 `/v1/service/token` 申请 `service_access` token。申请 token 时仍受 `allowed_scopes` 和 `allowed_audiences` 约束；实际能否访问 Keystone API 由服务 Principal 的角色权限决定。
@@ -176,3 +187,4 @@ Keylo 2.0 用户登录会返回 refresh token。Keystone Web/BFF 需要：
 - 未绑定 Keystone 角色的服务 Principal 调用 Keystone 管理 API 返回 403。
 - 旧 refresh token 重放会失败，客户端保存的新 refresh token 可以继续刷新。
 - 客户端可以使用 refresh token 调用 `/v1/auth/logout-refresh-token` 主动释放 Keylo refresh session。
+- 管理员可以通过 `/v1/admin/refresh-sessions` 查询在线会话，并通过 `DELETE /v1/admin/refresh-sessions/{session_id}` 强制退出。

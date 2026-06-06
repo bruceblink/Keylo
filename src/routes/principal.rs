@@ -19,6 +19,14 @@ pub fn principal_admin_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/admin/principals", get(list_principals_handler))
         .route(
+            "/v1/admin/refresh-sessions",
+            get(list_refresh_sessions_handler),
+        )
+        .route(
+            "/v1/admin/refresh-sessions/{session_id}",
+            delete(revoke_refresh_session_handler),
+        )
+        .route(
             "/v1/admin/principals/{principal_id}",
             get(get_principal_handler),
         )
@@ -55,6 +63,11 @@ pub fn principal_admin_routes() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 struct RefreshSessionListQuery {
     include_revoked: Option<bool>,
+    principal_id: Option<String>,
+    client_id: Option<String>,
+    login_ip: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 async fn list_principals_handler(
@@ -78,6 +91,62 @@ async fn list_principals_handler(
     Ok(Json(json!({
         "success": true,
         "data": principals
+    })))
+}
+
+async fn list_refresh_sessions_handler(
+    State(state): State<AppState>,
+    Query(query): Query<RefreshSessionListQuery>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let sessions = crate::db::list_refresh_sessions(
+        db,
+        query.include_revoked.unwrap_or(false),
+        query.principal_id.as_deref(),
+        query.client_id.as_deref(),
+        query.login_ip.as_deref(),
+        query.limit.unwrap_or(50).clamp(1, 200),
+        query.offset.unwrap_or(0).max(0),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": sessions
+    })))
+}
+
+async fn revoke_refresh_session_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let revoked = crate::db::revoke_refresh_session(db, &session_id, Some("admin_revoked"))
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    if !revoked {
+        return Err(AuthError::NotFound);
+    }
+    crate::db::create_audit_log(
+        db,
+        "refresh_session.revoked",
+        Some(&claims.sub),
+        Some(&format!("session_id={}", session_id)),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Refresh session revoked successfully"
     })))
 }
 

@@ -8,6 +8,8 @@ pub struct RefreshSessionInfo {
     pub id: String,
     pub principal_id: String,
     pub client_id: String,
+    pub login_ip: Option<String>,
+    pub user_agent: Option<String>,
     pub current_access_jti: String,
     pub issued_at: i64,
     pub rotated_at: Option<i64>,
@@ -38,6 +40,8 @@ pub struct CreateRefreshSessionParams<'a> {
     pub refresh_token_id: &'a str,
     pub refresh_token: &'a str,
     pub access_jti: &'a str,
+    pub login_ip: Option<&'a str>,
+    pub user_agent: Option<&'a str>,
     pub expires_at: i64,
 }
 
@@ -51,8 +55,9 @@ pub async fn create_refresh_session(
     sqlx::query(
         r#"
         INSERT INTO refresh_sessions
-            (id, principal_id, client_id, current_refresh_token_id, current_access_jti, expires_at)
-        VALUES ($1, $2, $3, $4, $5, to_timestamp($6))
+            (id, principal_id, client_id, current_refresh_token_id, current_access_jti,
+             login_ip, user_agent, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8))
         "#,
     )
     .bind(params.session_id)
@@ -60,6 +65,8 @@ pub async fn create_refresh_session(
     .bind(params.client_id)
     .bind(params.refresh_token_id)
     .bind(params.access_jti)
+    .bind(params.login_ip)
+    .bind(params.user_agent)
     .bind(params.expires_at)
     .execute(&mut *tx)
     .await?;
@@ -296,6 +303,8 @@ pub async fn list_refresh_sessions_for_principal(
             id,
             principal_id,
             client_id,
+            login_ip,
+            user_agent,
             current_access_jti,
             extract(epoch from issued_at)::bigint AS issued_at,
             extract(epoch from rotated_at)::bigint AS rotated_at,
@@ -319,6 +328,67 @@ pub async fn list_refresh_sessions_for_principal(
             id: row.get("id"),
             principal_id: row.get("principal_id"),
             client_id: row.get("client_id"),
+            login_ip: row.get("login_ip"),
+            user_agent: row.get("user_agent"),
+            current_access_jti: row.get("current_access_jti"),
+            issued_at: row.get("issued_at"),
+            rotated_at: row.get("rotated_at"),
+            expires_at: row.get("expires_at"),
+            revoked_at: row.get("revoked_at"),
+            revoke_reason: row.get("revoke_reason"),
+        })
+        .collect())
+}
+
+pub async fn list_refresh_sessions(
+    pool: &PgPool,
+    include_revoked: bool,
+    principal_id: Option<&str>,
+    client_id: Option<&str>,
+    login_ip: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<RefreshSessionInfo>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            id,
+            principal_id,
+            client_id,
+            login_ip,
+            user_agent,
+            current_access_jti,
+            extract(epoch from issued_at)::bigint AS issued_at,
+            extract(epoch from rotated_at)::bigint AS rotated_at,
+            extract(epoch from expires_at)::bigint AS expires_at,
+            extract(epoch from revoked_at)::bigint AS revoked_at,
+            revoke_reason
+        FROM refresh_sessions
+        WHERE ($1 OR revoked_at IS NULL)
+          AND ($2::text IS NULL OR principal_id = $2)
+          AND ($3::text IS NULL OR client_id = $3)
+          AND ($4::text IS NULL OR login_ip = $4)
+        ORDER BY issued_at DESC
+        LIMIT $5 OFFSET $6
+        "#,
+    )
+    .bind(include_revoked)
+    .bind(principal_id)
+    .bind(client_id)
+    .bind(login_ip)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| RefreshSessionInfo {
+            id: row.get("id"),
+            principal_id: row.get("principal_id"),
+            client_id: row.get("client_id"),
+            login_ip: row.get("login_ip"),
+            user_agent: row.get("user_agent"),
             current_access_jti: row.get("current_access_jti"),
             issued_at: row.get("issued_at"),
             rotated_at: row.get("rotated_at"),
