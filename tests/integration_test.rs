@@ -1459,6 +1459,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_user_refresh_token_rotates_and_replay_is_rejected() {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("root_refresh_{}", ts);
+        let password = "RootRefresh#123";
+        let config = Config {
+            enable_super_admin_bootstrap: true,
+            super_admin_username: Some(username.clone()),
+            super_admin_email: Some(format!("{}@example.com", username)),
+            super_admin_password: Some(password.to_string()),
+            ..test_config()
+        };
+
+        let server = setup_test_server_with_config(config).await;
+
+        let login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": password
+            }))
+            .await;
+
+        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        login_resp.assert_status_ok();
+        let login_body: serde_json::Value = login_resp.json();
+        let refresh_token = login_body["refresh_token"].as_str().unwrap();
+
+        let refresh_resp = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": refresh_token }))
+            .await;
+        refresh_resp.assert_status_ok();
+        let refresh_body: serde_json::Value = refresh_resp.json();
+        assert!(refresh_body["access_token"].as_str().is_some());
+        let rotated_refresh_token = refresh_body["refresh_token"].as_str().unwrap();
+        assert_ne!(rotated_refresh_token, refresh_token);
+
+        let replay_resp = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": refresh_token }))
+            .await;
+        assert_eq!(replay_resp.status_code(), StatusCode::UNAUTHORIZED);
+
+        let revoked_session_resp = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": rotated_refresh_token }))
+            .await;
+        assert_eq!(revoked_session_resp.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_third_party_user_migration_import_is_idempotent() {
         let server = setup_test_server().await;
         let admin_login_resp = server

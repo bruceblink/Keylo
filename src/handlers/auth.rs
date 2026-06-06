@@ -1,8 +1,9 @@
+use crate::db::refresh_session::ConsumeRefreshSessionResult;
 use crate::db::user::get_user_by_username;
 use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
     AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest,
-    CreateClientRequest, IntrospectTokenRequest, KeyloConfiguration, MeResponse,
+    CreateClientRequest, IntrospectTokenRequest, KeyloConfiguration, MeResponse, Principal,
     RefreshTokenRequest, RotateClientSecretRequest, TokenIntrospectResponse, UpdateClientRequest,
 };
 use crate::state::AppState;
@@ -94,6 +95,64 @@ async fn audit_event(
         if let Err(err) = crate::db::create_audit_log(db, event_type, actor, detail).await {
             tracing::warn!("Failed to write audit log: {}", err);
         }
+    }
+}
+
+async fn access_claims_for_principal(
+    state: &AppState,
+    db: &sqlx::PgPool,
+    principal: &Principal,
+    now: i64,
+    jti: String,
+) -> Result<Claims, AuthError> {
+    match principal.principal_type.as_str() {
+        "user" => {
+            let user = crate::db::user::get_user_by_id(db, &principal.ref_id)
+                .await
+                .map_err(|_| AuthError::DatabaseError("Failed to get user".to_string()))?
+                .filter(|user| user.active)
+                .ok_or(AuthError::InvalidToken)?;
+            let is_admin_user = is_user_admin(db, &user.id).await;
+            Ok(Claims {
+                sub: format!("user:{}", user.username),
+                uid: Some(user.id),
+                principal_id: Some(principal.id.clone()),
+                principal_type: Some("user".to_string()),
+                iss: state.config.jwt_issuer.clone(),
+                aud: "admin-backend".to_string(),
+                scope: access_scope("user", is_admin_user),
+                role: claim_role("user", is_admin_user),
+                iat: now,
+                exp: now + state.config.token_expiry_seconds,
+                jti,
+                token_type: "access".to_string(),
+            })
+        }
+        "client" => {
+            let is_admin_client = match crate::db::get_client_auth_info(db, &principal.ref_id).await
+            {
+                Ok(Some((_, is_admin))) => is_admin,
+                _ => false,
+            };
+            if !is_admin_client {
+                return Err(AuthError::InsufficientRole);
+            }
+            Ok(Claims {
+                sub: format!("client:{}", principal.ref_id),
+                uid: None,
+                principal_id: Some(principal.id.clone()),
+                principal_type: Some("client".to_string()),
+                iss: state.config.jwt_issuer.clone(),
+                aud: "admin-backend".to_string(),
+                scope: access_scope("client", true),
+                role: claim_role("client", true),
+                iat: now,
+                exp: now + state.config.token_expiry_seconds,
+                jti,
+                token_type: "access".to_string(),
+            })
+        }
+        _ => Err(AuthError::TokenTypeInvalid),
     }
 }
 fn audit_event_background(
@@ -306,10 +365,44 @@ pub async fn auth_token(
 
     let access_token = state.jwt_keys.sign_token(&access_claims)?;
 
+    let refresh_claims = Claims {
+        sub: format!("{}:{}", subject_prefix, payload.client_id),
+        uid: user_id.clone(),
+        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_type: Some("user".to_string()),
+        iss: state.config.jwt_issuer.clone(),
+        aud: "admin-backend".to_string(),
+        scope: vec!["refresh".into()],
+        role: claim_role(subject_prefix, is_admin_user),
+        iat: now,
+        exp: now + state.config.refresh_token_expiry_seconds,
+        jti: utils::generate_jti(),
+        token_type: "refresh".to_string(),
+    };
+    let refresh_token = state.jwt_keys.sign_token(&refresh_claims)?;
+    if let Some(principal) = principal.as_ref() {
+        let session_id = utils::generate_jti();
+        let refresh_client_id = format!("user:{}", payload.client_id);
+        crate::db::create_refresh_session(
+            db,
+            crate::db::CreateRefreshSessionParams {
+                session_id: &session_id,
+                principal_id: &principal.id,
+                client_id: &refresh_client_id,
+                refresh_token_id: &refresh_claims.jti,
+                refresh_token: &refresh_token,
+                access_jti: &access_claims.jti,
+                expires_at: refresh_claims.exp,
+            },
+        )
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to create refresh session".to_string()))?;
+    }
+
     // Send the authorized tokens
     Ok(Json(AuthBody::new(
         access_token,
-        None,
+        Some(refresh_token),
         state.config.token_expiry_seconds,
     )))
 }
@@ -432,6 +525,24 @@ pub async fn admin_token(
 
     let access_token = state.jwt_keys.sign_token(&access_claims)?;
     let refresh_token = state.jwt_keys.sign_token(&refresh_claims)?;
+
+    if let Some(principal) = principal.as_ref() {
+        let session_id = utils::generate_jti();
+        crate::db::create_refresh_session(
+            db,
+            crate::db::CreateRefreshSessionParams {
+                session_id: &session_id,
+                principal_id: &principal.id,
+                client_id: &payload.client_id,
+                refresh_token_id: &refresh_claims.jti,
+                refresh_token: &refresh_token,
+                access_jti: &access_claims.jti,
+                expires_at: refresh_claims.exp,
+            },
+        )
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to create refresh session".to_string()))?;
+    }
 
     crate::db::create_refresh_token(
         db,
@@ -628,6 +739,11 @@ pub async fn auth_rotate_client_secret(
             .map_err(|_| {
                 AuthError::DatabaseError("Failed to revoke existing refresh tokens".to_string())
             })?;
+        crate::db::revoke_client_refresh_sessions(db, &client_id, Some("client_secret_rotated"))
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to revoke existing refresh sessions".to_string())
+            })?;
     }
 
     audit_event(
@@ -769,6 +885,8 @@ pub async fn auth_update_client(
 
     if payload.active == Some(false) {
         let _ = crate::db::revoke_client_refresh_tokens(db, &client_id).await;
+        let _ = crate::db::revoke_client_refresh_sessions(db, &client_id, Some("client_disabled"))
+            .await;
     }
 
     audit_event(
@@ -886,100 +1004,135 @@ pub async fn auth_refresh(
     // Validate JWT token_type before touching the database to prevent
     // access tokens from being accepted as refresh tokens.
     let refresh_claims = state.jwt_keys.decode_token(&payload.refresh_token);
-    match refresh_claims {
+    let refresh_claims = match refresh_claims {
         Ok(ref c) if c.token_type != "refresh" => return Err(AuthError::TokenTypeInvalid),
         Err(_) => return Err(AuthError::InvalidToken),
-        Ok(_) => {}
-    }
-
-    // Check if refresh token exists and is not revoked
-    let client_id = if let Some(db) = &state.db {
-        match crate::db::consume_refresh_token(db, &payload.refresh_token).await {
-            Ok(Some((_id, client_id))) => client_id,
-            _ => return Err(AuthError::InvalidToken),
-        }
-    } else {
-        return Err(AuthError::DatabaseError(
-            "Database not available".to_string(),
-        ));
+        Ok(claims) => claims,
     };
 
+    let db = require_db(&state)?;
     let now = Utc::now().timestamp();
-
-    let is_admin_client = if let Some(db) = &state.db {
-        match crate::db::get_client_auth_info(db, &client_id).await {
-            Ok(Some((_, is_admin))) => is_admin,
-            _ => false,
-        }
-    } else {
-        false
+    let access_jti = utils::generate_jti();
+    let refresh_jti = utils::generate_jti();
+    let new_refresh_claims = Claims {
+        sub: refresh_claims.sub.clone(),
+        uid: refresh_claims.uid.clone(),
+        principal_id: refresh_claims.principal_id.clone(),
+        principal_type: refresh_claims.principal_type.clone(),
+        iss: state.config.jwt_issuer.clone(),
+        aud: refresh_claims.aud.clone(),
+        scope: vec!["refresh".into()],
+        role: refresh_claims.role.clone(),
+        iat: now,
+        exp: refresh_claims.exp,
+        jti: refresh_jti.clone(),
+        token_type: "refresh".to_string(),
     };
+    let new_refresh_token = state.jwt_keys.sign_token(&new_refresh_claims)?;
 
-    if !is_admin_client {
-        return Err(AuthError::InsufficientRole);
+    match crate::db::consume_and_rotate_refresh_session(
+        db,
+        &payload.refresh_token,
+        &refresh_jti,
+        &new_refresh_token,
+        &access_jti,
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Failed to consume refresh session".to_string()))?
+    {
+        ConsumeRefreshSessionResult::Consumed(session) => {
+            let principal = crate::db::get_principal_by_id(db, &session.principal_id)
+                .await
+                .map_err(|_| AuthError::DatabaseError("Failed to get principal".to_string()))?
+                .filter(|principal| principal.active)
+                .ok_or(AuthError::InvalidToken)?;
+            let access_claims =
+                access_claims_for_principal(&state, db, &principal, now, access_jti).await?;
+            let access_token = state.jwt_keys.sign_token(&access_claims)?;
+
+            audit_event(
+                &state,
+                "auth.refresh.success",
+                Some(&principal.subject),
+                Some(&format!("session_id={}", session.session_id)),
+            )
+            .await;
+
+            return Ok(Json(AuthBody::new(
+                access_token,
+                Some(new_refresh_token),
+                state.config.token_expiry_seconds,
+            )));
+        }
+        ConsumeRefreshSessionResult::Replayed { session_id } => {
+            audit_event(
+                &state,
+                "auth.refresh.replay",
+                Some(refresh_claims.sub.as_str()),
+                Some(&format!("session_id={}", session_id)),
+            )
+            .await;
+            return Err(AuthError::InvalidToken);
+        }
+        ConsumeRefreshSessionResult::NotFound => {}
     }
 
-    let principal = if let Some(db) = &state.db {
-        crate::db::ensure_client_principal(db, &client_id)
-            .await
-            .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?
-    } else {
-        None
+    // Compatibility path for refresh tokens issued before refresh_sessions existed.
+    let client_id = match crate::db::consume_refresh_token(db, &payload.refresh_token).await {
+        Ok(Some((_id, client_id))) => client_id,
+        _ => return Err(AuthError::InvalidToken),
     };
 
-    // Create new access token claims
-    let access_claims = Claims {
-        sub: format!("client:{}", client_id),
-        uid: None,
-        principal_id: principal.as_ref().map(|value| value.id.clone()),
-        principal_type: Some("client".to_string()),
-        iss: state.config.jwt_issuer.clone(),
-        aud: "admin-backend".to_string(),
-        scope: access_scope("client", is_admin_client),
-        role: claim_role("client", is_admin_client),
-        iat: now,
-        exp: now + state.config.token_expiry_seconds,
-        jti: utils::generate_jti(),
-        token_type: "access".to_string(),
-    };
+    let principal = crate::db::ensure_client_principal(db, &client_id)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?
+        .ok_or(AuthError::InvalidToken)?;
+    let access_claims =
+        access_claims_for_principal(&state, db, &principal, now, access_jti).await?;
+    let access_token = state.jwt_keys.sign_token(&access_claims)?;
 
-    // Create new refresh token claims
-    let new_refresh_claims = Claims {
+    let migrated_refresh_claims = Claims {
         sub: format!("client:{}", client_id),
         uid: None,
-        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_id: Some(principal.id.clone()),
         principal_type: Some("client".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
-        role: claim_role("client", is_admin_client),
+        role: claim_role("client", true),
         iat: now,
         exp: now + state.config.refresh_token_expiry_seconds,
-        jti: utils::generate_jti(),
+        jti: refresh_jti,
         token_type: "refresh".to_string(),
     };
+    let migrated_refresh_token = state.jwt_keys.sign_token(&migrated_refresh_claims)?;
+    let session_id = utils::generate_jti();
+    crate::db::create_refresh_session(
+        db,
+        crate::db::CreateRefreshSessionParams {
+            session_id: &session_id,
+            principal_id: &principal.id,
+            client_id: &client_id,
+            refresh_token_id: &migrated_refresh_claims.jti,
+            refresh_token: &migrated_refresh_token,
+            access_jti: &access_claims.jti,
+            expires_at: migrated_refresh_claims.exp,
+        },
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Failed to create refresh session".to_string()))?;
 
-    // Create new tokens
-    let access_token = state.jwt_keys.sign_token(&access_claims)?;
-
-    let new_refresh_token = state.jwt_keys.sign_token(&new_refresh_claims)?;
-
-    // Store new refresh token
-    if let Some(db) = &state.db {
-        crate::db::create_refresh_token(
-            db,
-            &new_refresh_claims.jti,
-            &client_id,
-            &new_refresh_token,
-            new_refresh_claims.exp,
-        )
-        .await
-        .map_err(|_| AuthError::DatabaseError("Failed to create refresh token".to_string()))?;
-    }
+    audit_event(
+        &state,
+        "auth.refresh.migrated",
+        Some(&principal.subject),
+        Some(&format!("session_id={}", session_id)),
+    )
+    .await;
 
     Ok(Json(AuthBody::new(
         access_token,
-        Some(new_refresh_token),
+        Some(migrated_refresh_token),
         state.config.token_expiry_seconds,
     )))
 }
