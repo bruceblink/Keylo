@@ -430,11 +430,23 @@
   "parent_id": null,
   "display_order": 10,
   "description": "Keystone user management menu",
+  "metadata": {
+    "router_name": "SystemUser",
+    "path": "/system/user",
+    "component": "system/user/index",
+    "meta": {
+      "title": "用户管理",
+      "icon": "user",
+      "showLink": true
+    }
+  },
   "permission_ids": ["permission-id"]
 }
 ```
 
-资源通过 `resource_permissions` 绑定到权限点。`/v1/principals/me/resource-tree` 只返回当前 Principal 通过角色权限可见的资源节点，并包含必要祖先节点。若 Principal 拥有 `*:*:*` 权限，则返回指定 `app` 和 `type` 下的全部 active 资源。
+`metadata` 可选，用于保存资源服务自己的展示或路由元数据。Keystone 菜单迁移时可以在这里保存 `router_name`、`path`、`component`、`meta` 等字段，再由 Keystone BFF 或前端映射为原 `RouterDTO`。
+
+资源通过 `resource_permissions` 绑定到权限点。`/v1/principals/me/resource-tree` 只返回当前 Principal 通过角色权限可见的资源节点，并包含必要祖先节点。若 Principal 拥有 `*:*:*` 权限，则返回指定 `app` 和 `type` 下的全部 active 资源。资源树响应会保留 `metadata`。
 
 ### 7.5 Refresh Session 与会话策略
 

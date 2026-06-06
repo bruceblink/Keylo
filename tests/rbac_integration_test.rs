@@ -532,6 +532,16 @@ mod tests {
                 "resource_type": "menu",
                 "code": resource_code,
                 "name": "用户管理",
+                "metadata": {
+                    "router_name": "SystemUser",
+                    "path": "/system/user",
+                    "component": "system/user/index",
+                    "meta": {
+                        "title": "用户管理",
+                        "icon": "user",
+                        "showLink": true
+                    }
+                },
                 "permission_ids": [permission_id]
             }))
             .await;
@@ -564,11 +574,20 @@ mod tests {
             .await;
         tree_resp.assert_status_ok();
         let tree_body: serde_json::Value = tree_resp.json();
-        assert!(tree_body["data"]
+        let user_menu_node = tree_body["data"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|node| node["resource"]["code"] == resource_code));
+            .find(|node| node["resource"]["code"] == resource_code)
+            .unwrap();
+        assert_eq!(
+            user_menu_node["resource"]["metadata"]["path"],
+            "/system/user"
+        );
+        assert_eq!(
+            user_menu_node["resource"]["metadata"]["meta"]["title"],
+            "用户管理"
+        );
     }
 
     #[tokio::test]

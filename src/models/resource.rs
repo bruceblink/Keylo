@@ -11,6 +11,7 @@ pub struct Resource {
     pub parent_id: Option<String>,
     pub display_order: i32,
     pub description: Option<String>,
+    pub metadata: Option<serde_json::Value>,
     pub active: bool,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
@@ -25,6 +26,7 @@ pub struct CreateResourceRequest {
     pub parent_id: Option<String>,
     pub display_order: Option<i32>,
     pub description: Option<String>,
+    pub metadata: Option<serde_json::Value>,
     pub permission_ids: Option<Vec<String>>,
 }
 

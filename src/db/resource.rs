@@ -13,27 +13,29 @@ pub struct CreateResourceParams<'a> {
     pub parent_id: Option<&'a str>,
     pub display_order: i32,
     pub description: Option<&'a str>,
+    pub metadata: Option<&'a serde_json::Value>,
     pub permission_ids: &'a [String],
 }
 
 fn select_resource_sql() -> &'static str {
-    "SELECT id, app, resource_type, code, name, parent_id, display_order, description, active, created_at, updated_at FROM resources"
+    "SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata, active, created_at, updated_at FROM resources"
 }
 
 pub async fn create_resource(pool: &PgPool, params: CreateResourceParams<'_>) -> Result<Resource> {
     let resource = sqlx::query_as::<_, Resource>(
         r#"
         INSERT INTO resources
-            (id, app, resource_type, code, name, parent_id, display_order, description)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            (id, app, resource_type, code, name, parent_id, display_order, description, metadata)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (app, resource_type, code) DO UPDATE
         SET name = EXCLUDED.name,
             parent_id = EXCLUDED.parent_id,
             display_order = EXCLUDED.display_order,
             description = EXCLUDED.description,
+            metadata = EXCLUDED.metadata,
             active = TRUE,
             updated_at = NOW()
-        RETURNING id, app, resource_type, code, name, parent_id, display_order, description,
+        RETURNING id, app, resource_type, code, name, parent_id, display_order, description, metadata,
                   active, created_at, updated_at
         "#,
     )
@@ -45,6 +47,7 @@ pub async fn create_resource(pool: &PgPool, params: CreateResourceParams<'_>) ->
     .bind(params.parent_id)
     .bind(params.display_order)
     .bind(params.description)
+    .bind(params.metadata.cloned())
     .fetch_one(pool)
     .await?;
 
@@ -63,7 +66,7 @@ pub async fn list_resources(
 ) -> Result<Vec<Resource>> {
     Ok(sqlx::query_as::<_, Resource>(
         r#"
-        SELECT id, app, resource_type, code, name, parent_id, display_order, description,
+        SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata,
                active, created_at, updated_at
         FROM resources
         WHERE ($1::text IS NULL OR app = $1)
@@ -146,7 +149,7 @@ pub async fn authorized_resources_for_principal(
     let rows = if wildcard {
         sqlx::query(
             r#"
-            SELECT id, app, resource_type, code, name, parent_id, display_order, description,
+            SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata,
                    active, created_at, updated_at
             FROM resources
             WHERE app = $1 AND resource_type = $2 AND active = TRUE
@@ -179,7 +182,7 @@ pub async fn authorized_resources_for_principal(
                 INNER JOIN visible child ON child.parent_id = parent.id
                 WHERE parent.active = TRUE
             )
-            SELECT id, app, resource_type, code, name, parent_id, display_order, description,
+            SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata,
                    active, created_at, updated_at
             FROM visible
             ORDER BY display_order, code
@@ -203,6 +206,7 @@ pub async fn authorized_resources_for_principal(
             parent_id: row.get("parent_id"),
             display_order: row.get("display_order"),
             description: row.get("description"),
+            metadata: row.get("metadata"),
             active: row.get("active"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),

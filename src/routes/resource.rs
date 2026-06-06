@@ -77,6 +77,7 @@ async fn create_resource_handler(
             parent_id: payload.parent_id.as_deref(),
             display_order: payload.display_order.unwrap_or(0),
             description: payload.description.as_deref(),
+            metadata: payload.metadata.as_ref(),
             permission_ids: &permission_ids,
         },
     )

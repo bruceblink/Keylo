@@ -50,6 +50,16 @@ POST /v1/admin/resources
   "code": "system:user",
   "name": "用户管理",
   "display_order": 10,
+  "metadata": {
+    "router_name": "SystemUser",
+    "path": "/system/user",
+    "component": "system/user/index",
+    "meta": {
+      "title": "用户管理",
+      "icon": "user",
+      "showLink": true
+    }
+  },
   "permission_ids": ["permission-id-for-keystone-system-user-list"]
 }
 ```
@@ -91,6 +101,18 @@ GET /v1/principals/me/resource-tree?app=keystone&type=button
 ```
 
 返回结果只用于 UI 呈现和预检。后端 API 仍必须做最终授权检查。
+
+Keystone 原 `RouterDTO` 字段可从 Keylo resource tree 映射：
+
+| Keystone `RouterDTO` | Keylo resource tree |
+|---|---|
+| `name` | `resource.metadata.router_name` |
+| `path` | `resource.metadata.path` |
+| `component` | `resource.metadata.component` |
+| `rank` | `resource.display_order` 或 `resource.metadata.rank` |
+| `meta` | `resource.metadata.meta` |
+| `meta.auths` | `permissions[].name` |
+| `children` | `children` |
 
 ### 阶段 5：API 权限检查
 
