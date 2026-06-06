@@ -425,4 +425,113 @@ mod tests {
         let denied_check_body: serde_json::Value = denied_check_resp.json();
         assert_eq!(denied_check_body["data"]["allowed"], false);
     }
+
+    #[tokio::test]
+    async fn test_keylo_2_0_user_menu_resource_tree_flow() {
+        let Some(server) = setup_test_server().await else {
+            return;
+        };
+        let admin_token = get_access_token(&server).await;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let role_name = format!("keystone_operator_{}", ts);
+        let permission_name = format!("keystone:system:user:list:{}", ts);
+        let username = format!("keystone_user_{}", ts);
+        let email = format!("keystone_user_{}@example.com", ts);
+        let password = "KeystoneUser123!";
+        let resource_code = format!("system:user:{}", ts);
+
+        let role_resp = server
+            .post("/api/rbac/roles")
+            .add_header("Authorization", format!("Bearer {}", admin_token))
+            .json(&json!({
+                "name": role_name,
+                "description": "Keystone operator",
+                "assignable_to": "user"
+            }))
+            .await;
+        role_resp.assert_status_ok();
+        let role_body: serde_json::Value = role_resp.json();
+        let role_id = role_body["data"]["id"].as_str().unwrap().to_string();
+
+        let permission_resp = server
+            .post("/api/rbac/permissions")
+            .add_header("Authorization", format!("Bearer {}", admin_token))
+            .json(&json!({
+                "name": permission_name,
+                "description": "Keystone user list"
+            }))
+            .await;
+        permission_resp.assert_status_ok();
+        let permission_body: serde_json::Value = permission_resp.json();
+        let permission_id = permission_body["data"]["id"].as_str().unwrap().to_string();
+
+        let bind_permission_resp = server
+            .post(&format!("/api/rbac/roles/{}/permissions", role_id))
+            .add_header("Authorization", format!("Bearer {}", admin_token))
+            .json(&json!({ "permission_id": permission_id }))
+            .await;
+        bind_permission_resp.assert_status_ok();
+
+        let provision_resp = server
+            .post("/v1/admin/users/provision")
+            .add_header("Authorization", format!("Bearer {}", admin_token))
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": password,
+                "role_ids": [role_id]
+            }))
+            .await;
+        provision_resp.assert_status_ok();
+
+        let resource_resp = server
+            .post("/v1/admin/resources")
+            .add_header("Authorization", format!("Bearer {}", admin_token))
+            .json(&json!({
+                "app": "keystone",
+                "resource_type": "menu",
+                "code": resource_code,
+                "name": "用户管理",
+                "permission_ids": [permission_id]
+            }))
+            .await;
+        resource_resp.assert_status_ok();
+
+        let login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": password
+            }))
+            .await;
+        login_resp.assert_status_ok();
+        let login_body: serde_json::Value = login_resp.json();
+        let user_token = login_body["access_token"].as_str().unwrap();
+        assert!(login_body["refresh_token"].as_str().is_some());
+
+        let check_resp = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {}", user_token))
+            .json(&json!({ "permission": permission_name }))
+            .await;
+        check_resp.assert_status_ok();
+        let check_body: serde_json::Value = check_resp.json();
+        assert_eq!(check_body["data"]["allowed"], true);
+
+        let tree_resp = server
+            .get("/v1/principals/me/resource-tree?app=keystone&type=menu")
+            .add_header("Authorization", format!("Bearer {}", user_token))
+            .await;
+        tree_resp.assert_status_ok();
+        let tree_body: serde_json::Value = tree_resp.json();
+        assert!(tree_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["resource"]["code"] == resource_code));
+    }
 }
