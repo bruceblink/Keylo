@@ -2,7 +2,7 @@
 mod tests {
     use axum_test::TestServer;
     use keylo::config::Config;
-    use keylo::startup::init_app_router_with_db;
+    use keylo::startup::init_app_router_with_db_and_admin;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -46,9 +46,6 @@ wwIDAQAB
 -----END PUBLIC KEY-----"#;
 
     async fn setup_test_server() -> Option<TestServer> {
-        std::env::set_var("ADMIN_CLIENT_ID", "cli");
-        std::env::set_var("ADMIN_CLIENT_SECRET", "cli-secret");
-
         let config = Config {
             jwt_private_key_pem: TEST_JWT_PRIVATE_KEY_PEM.to_string(),
             jwt_public_key_pem: TEST_JWT_PUBLIC_KEY_PEM.to_string(),
@@ -59,7 +56,7 @@ wwIDAQAB
         let db_url = std::env::var("TEST_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
 
-        match init_app_router_with_db(config, &db_url).await {
+        match init_app_router_with_db_and_admin(config, &db_url, "cli", "cli-secret").await {
             Ok(router) => Some(TestServer::new(router)),
             Err(e) => {
                 println!("Skipping test: failed to initialize test server: {}", e);

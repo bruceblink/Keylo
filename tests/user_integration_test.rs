@@ -2,7 +2,7 @@
 mod tests {
     use axum_test::TestServer;
     use keylo::config::Config;
-    use keylo::startup::init_app_router_with_db;
+    use keylo::startup::init_app_router_with_db_and_admin;
     use serde_json::json;
 
     const TEST_JWT_PRIVATE_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
@@ -62,7 +62,14 @@ wwIDAQAB
         let db_url = std::env::var("TEST_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
 
-        match init_app_router_with_db(config, &db_url).await {
+        match init_app_router_with_db_and_admin(
+            config,
+            &db_url,
+            "user-test-admin",
+            "UserTestAdmin#123",
+        )
+        .await
+        {
             Ok(router) => {
                 println!("Test server initialized successfully");
                 Some(TestServer::new(router))
