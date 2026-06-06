@@ -250,4 +250,179 @@ mod tests {
         let prefix_body: serde_json::Value = prefix_resp.json();
         assert!(prefix_body["data"].is_array());
     }
+
+    #[tokio::test]
+    async fn test_keylo_2_0_service_principal_authorization_flow() {
+        let Some(server) = setup_test_server().await else {
+            return;
+        };
+        let token = get_access_token(&server).await;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let service_id = format!("svc-2-0-{}", ts);
+        let denied_service_id = format!("svc-2-0-denied-{}", ts);
+        let service_secret = "ServiceSecret123!";
+        let role_name = format!("crawler_service_{}", ts);
+        let permission_name = format!("service:crawler:invoke:{}", ts);
+        let resource_code = format!("crawler:invoke:{}", ts);
+
+        let role_resp = server
+            .post("/api/rbac/roles")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "name": role_name,
+                "description": "Crawler service role",
+                "assignable_to": "service"
+            }))
+            .await;
+        role_resp.assert_status_ok();
+        let role_body: serde_json::Value = role_resp.json();
+        let role_id = role_body["data"]["id"].as_str().unwrap().to_string();
+
+        let permission_resp = server
+            .post("/api/rbac/permissions")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "name": permission_name,
+                "description": "Invoke crawler service"
+            }))
+            .await;
+        permission_resp.assert_status_ok();
+        let permission_body: serde_json::Value = permission_resp.json();
+        let permission_id = permission_body["data"]["id"].as_str().unwrap().to_string();
+
+        let bind_permission_resp = server
+            .post(&format!("/api/rbac/roles/{}/permissions", role_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "permission_id": permission_id }))
+            .await;
+        bind_permission_resp.assert_status_ok();
+
+        for id in [&service_id, &denied_service_id] {
+            let service_resp = server
+                .post("/v1/admin/services")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({
+                    "service_id": id,
+                    "service_secret": service_secret,
+                    "name": id,
+                    "allowed_scopes": ["read"],
+                    "allowed_audiences": ["admin-backend"]
+                }))
+                .await;
+            service_resp.assert_status_ok();
+        }
+
+        let principals_resp = server
+            .get("/v1/admin/principals?principal_type=service")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        principals_resp.assert_status_ok();
+        let principals_body: serde_json::Value = principals_resp.json();
+        let service_principal_id = principals_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|principal| principal["ref_id"] == service_id)
+            .and_then(|principal| principal["id"].as_str())
+            .unwrap()
+            .to_string();
+
+        let assign_role_resp = server
+            .post(&format!(
+                "/v1/admin/principals/{}/roles",
+                service_principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "role_id": role_id }))
+            .await;
+        assign_role_resp.assert_status_ok();
+
+        let effective_resp = server
+            .get(&format!(
+                "/v1/admin/principals/{}/effective-permissions",
+                service_principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        effective_resp.assert_status_ok();
+        let effective_body: serde_json::Value = effective_resp.json();
+        assert!(effective_body["data"]["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|permission| permission["name"] == permission_name));
+
+        let resource_resp = server
+            .post("/v1/admin/resources")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "app": "crawler",
+                "resource_type": "service",
+                "code": resource_code,
+                "name": "Crawler invoke",
+                "permission_ids": [permission_id]
+            }))
+            .await;
+        resource_resp.assert_status_ok();
+
+        let service_token_resp = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": service_secret,
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        service_token_resp.assert_status_ok();
+        let service_token_body: serde_json::Value = service_token_resp.json();
+        let service_token = service_token_body["access_token"].as_str().unwrap();
+
+        let check_resp = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {}", service_token))
+            .json(&json!({ "permission": permission_name }))
+            .await;
+        check_resp.assert_status_ok();
+        let check_body: serde_json::Value = check_resp.json();
+        assert_eq!(check_body["data"]["allowed"], true);
+
+        let tree_resp = server
+            .get("/v1/principals/me/resource-tree?app=crawler&type=service")
+            .add_header("Authorization", format!("Bearer {}", service_token))
+            .await;
+        tree_resp.assert_status_ok();
+        let tree_body: serde_json::Value = tree_resp.json();
+        assert!(tree_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["resource"]["code"] == resource_code));
+
+        let denied_token_resp = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": denied_service_id,
+                "service_secret": service_secret,
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        denied_token_resp.assert_status_ok();
+        let denied_token_body: serde_json::Value = denied_token_resp.json();
+        let denied_token = denied_token_body["access_token"].as_str().unwrap();
+
+        let denied_check_resp = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {}", denied_token))
+            .json(&json!({ "permission": permission_name }))
+            .await;
+        denied_check_resp.assert_status_ok();
+        let denied_check_body: serde_json::Value = denied_check_resp.json();
+        assert_eq!(denied_check_body["data"]["allowed"], false);
+    }
 }
