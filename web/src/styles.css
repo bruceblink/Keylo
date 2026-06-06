@@ -200,6 +200,10 @@ button:disabled {
   font-size: 13px;
 }
 
+.hint.ok {
+  color: var(--ok);
+}
+
 .status {
   min-height: 24px;
   margin-top: 12px;

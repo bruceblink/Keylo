@@ -53,9 +53,7 @@ services:
       SERVER_PORT: ${SERVER_PORT:-2345}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID}
-      # ADMIN_CLIENT_SECRET is intentionally omitted by default.
-      # Complete /setup to persist the admin client secret, or set it explicitly
-      # only when you want automatic admin client seed during startup.
+      ADMIN_CLIENT_SECRET: ${ADMIN_CLIENT_SECRET:-}
       ENABLE_SETUP_WIZARD: ${ENABLE_SETUP_WIZARD:-true}
       REDIS_HOST: redis
       REDIS_PORT: 6379

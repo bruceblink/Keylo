@@ -24,6 +24,7 @@ pub struct SetupStatusResponse {
     pub enabled: bool,
     pub completed: bool,
     pub environment: String,
+    pub admin_client_secret_configured: bool,
     pub checks: Vec<SetupCheck>,
     pub endpoints: SetupEndpoints,
 }

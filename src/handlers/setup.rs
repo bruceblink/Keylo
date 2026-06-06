@@ -275,6 +275,7 @@ pub async fn setup_status(
         enabled: true,
         completed,
         environment: state.config.environment.clone(),
+        admin_client_secret_configured: admin_secret_configured,
         checks,
         endpoints: setup_endpoints(&state),
     }))
@@ -296,6 +297,16 @@ fn normalized_required(field_name: &str, value: Option<String>) -> Result<String
     Ok(trimmed.to_string())
 }
 
+fn first_non_blank(primary: Option<String>, fallback: Option<&str>) -> Option<String> {
+    primary
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            fallback
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
 pub async fn setup_initialize(
     State(state): State<AppState>,
     Json(payload): Json<SetupInitializeRequest>,
@@ -315,19 +326,17 @@ pub async fn setup_initialize(
 
     let admin_client_id = normalized_required(
         "admin_client_id",
-        payload
-            .admin_client_id
-            .or_else(|| state.config.admin_client_id.as_deref().map(str::to_string)),
+        first_non_blank(
+            payload.admin_client_id,
+            state.config.admin_client_id.as_deref(),
+        ),
     )?;
     let admin_client_secret = normalized_required(
         "admin_client_secret",
-        payload.admin_client_secret.or_else(|| {
-            state
-                .config
-                .admin_client_secret
-                .as_deref()
-                .map(str::to_string)
-        }),
+        first_non_blank(
+            payload.admin_client_secret,
+            state.config.admin_client_secret.as_deref(),
+        ),
     )?;
 
     let pool = database_pool_from_config(&state)
@@ -380,4 +389,25 @@ pub async fn setup_initialize(
         admin_client_id,
         endpoints: setup_endpoints(&state),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_non_blank;
+
+    #[test]
+    fn first_non_blank_uses_configured_fallback_for_blank_payload() {
+        assert_eq!(
+            first_non_blank(Some("   ".to_string()), Some("Configured#123")).as_deref(),
+            Some("Configured#123")
+        );
+    }
+
+    #[test]
+    fn first_non_blank_prefers_submitted_value() {
+        assert_eq!(
+            first_non_blank(Some("Submitted#123".to_string()), Some("Configured#123")).as_deref(),
+            Some("Submitted#123")
+        );
+    }
 }

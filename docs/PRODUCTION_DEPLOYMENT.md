@@ -34,7 +34,7 @@ CORS_ALLOWED_ORIGINS=https://admin.example.com
 - 宿主机存在 Redis ACL 文件 `./.secrets/.redis.acl`，只开启 `keylo` 用户并限制 key 前缀访问
 - 宿主机存在 Redis 密码密文 `./.secrets/.redis_password.enc` 和解密 key `./.secrets/.redis_password.key`，Keylo 通过 `REDIS_PASSWORD_ENC_FILE` / `REDIS_PASSWORD_KEY_FILE` 读取并在内存中解密
 - Docker Compose 中 `SERVER_ADDR` 约定为 `0.0.0.0`，避免容器内只监听回环地址
-- `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`；`ADMIN_CLIENT_SECRET` 在首次 setup 页面录入，不写入配置文件
+- `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`；`ADMIN_CLIENT_SECRET` 可在 `.env` 中配置，未配置时在首次 setup 页面录入
 - 如需重装数据库，执行 `docker compose down -v --remove-orphans` 删除 PostgreSQL 数据卷后再重建
 
 说明：

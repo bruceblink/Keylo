@@ -472,7 +472,7 @@ docker-compose logs -f postgres
 
 * `keylo` 服务默认监听 `0.0.0.0:2345`
 * compose 与本地统一使用同名变量（如 `DATABASE_URL`），Redis 生产环境通过 `REDIS_PASSWORD_ENC_FILE` 和 `REDIS_PASSWORD_KEY_FILE` 读取密码密文配置
-* `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`，`ADMIN_CLIENT_SECRET` 在首次 setup 页面录入，不写入配置文件
+* `ADMIN_CLIENT_ID` 默认是 `cli-admin-root`；`ADMIN_CLIENT_SECRET` 可在 `.env` 中配置，未配置时在首次 setup 页面录入
 * 默认挂载 `${JWT_KEYS_DIR:-./keys}` 到 `/app/keys`
 * Redis 默认启用，满足生产环境的限流、登录锁定和 OAuth state 依赖
 * Redis 不映射宿主机端口，只加入 `keylo_redis_network` 专用内部网络；不要让其他服务加入该网络
@@ -521,7 +521,7 @@ docker compose logs -f keylo-service
 ### 5. 运维与安全基线
 
 * 启动时自动执行 SQLx 迁移
-* 启动会提前校验 RSA 密钥、数据库 URL、Token 时长等关键配置；管理员客户端密钥仅在首次 setup 初始化时录入
+* 启动会提前校验 RSA 密钥、数据库 URL、Token 时长等关键配置；管理员客户端密钥可从 `.env` 读取，未配置时在首次 setup 初始化时录入
 * 生产环境额外强制要求 Redis
 * 非生产环境默认同样对数据库初始化 fail-fast；仅在显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时允许无数据库模式，且仍要求 RSA 密钥等基础配置
 * Refresh Token 轮换会原子消费旧 token，旧 refresh token 不能再次使用
@@ -567,7 +567,7 @@ docker compose logs -f keylo-service
 * 使用 RSA 2048 位或更高密钥
 * 私钥只保留在 Keylo 服务端
 * 设置 `ENVIRONMENT=production`
-* 显式配置 Redis 密码密文配置（`REDIS_PASSWORD_ENC_FILE` 与 `REDIS_PASSWORD_KEY_FILE`），管理客户端密钥在首次 setup 页面录入
+* 显式配置 Redis 密码密文配置（`REDIS_PASSWORD_ENC_FILE` 与 `REDIS_PASSWORD_KEY_FILE`）；管理客户端密钥可在 `.env` 中配置，未配置时在首次 setup 页面录入
 * 仅在反向代理可信且已覆盖客户端真实地址时设置 `TRUST_PROXY_HEADERS=true`
 * 为外部访问启用 HTTPS 和反向代理
 

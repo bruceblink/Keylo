@@ -72,7 +72,8 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 - `JWT_ISSUER`
 - `JWT_KEY_ID`
 - `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`
-- `ADMIN_CLIENT_ID`，`ADMIN_CLIENT_SECRET` 在 setup 页面录入
+- `ADMIN_CLIENT_ID`
+- `ADMIN_CLIENT_SECRET` 可在环境配置中提供；未配置时在 setup 页面录入
 
 ## 5. 路由设计
 
@@ -92,6 +93,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
   "enabled": true,
   "completed": false,
   "environment": "development",
+  "admin_client_secret_configured": false,
   "checks": [
     {
       "key": "database_url",
@@ -120,6 +122,8 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
   "admin_client_secret": "replace-with-strong-secret"
 }
 ```
+
+`admin_client_secret` 可省略；省略时 Keylo 会使用环境配置中的 `ADMIN_CLIENT_SECRET`。如果环境配置也未提供，则初始化请求会返回 `400`。
 
 行为：
 

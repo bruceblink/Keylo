@@ -24,6 +24,7 @@ type SetupStatus = {
   enabled: boolean;
   completed: boolean;
   environment: string;
+  admin_client_secret_configured: boolean;
   checks: SetupCheck[];
   endpoints: SetupEndpoints;
 };
@@ -61,6 +62,11 @@ function App() {
     [status]
   );
   const setupCompleted = status?.completed === true;
+  const adminClientSecretConfigured = status?.admin_client_secret_configured === true;
+  const canInitialize =
+    !loading &&
+    adminClientId.trim().length > 0 &&
+    (adminClientSecretConfigured || adminClientSecret.trim().length > 0);
 
   async function loadStatus(nextMessage?: string) {
     setLoading(true);
@@ -83,16 +89,20 @@ function App() {
   async function initialize() {
     setLoading(true);
     setMessage('正在初始化...');
+    const payload: { admin_client_id: string; admin_client_secret?: string } = {
+      admin_client_id: adminClientId
+    };
+    if (adminClientSecret.trim()) {
+      payload.admin_client_secret = adminClientSecret;
+    }
+
     try {
       const response = await fetch('/setup/initialize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          admin_client_id: adminClientId,
-          admin_client_secret: adminClientSecret
-        })
+        body: JSON.stringify(payload)
       });
       const data = await readJson<SetupInitializeResponse>(response);
       setStatus((current) =>
@@ -172,11 +182,21 @@ function App() {
               type="password"
               autoComplete="new-password"
               value={adminClientSecret}
+              placeholder={
+                adminClientSecretConfigured ? '已从环境配置读取，可留空' : '请输入首次初始化密钥'
+              }
               onChange={(event) => setAdminClientSecret(event.target.value)}
             />
+            {adminClientSecretConfigured ? (
+              <p className="hint ok">
+                已检测到环境配置中的 Admin Client Secret，初始化时可不填写此项。
+              </p>
+            ) : (
+              <p className="hint">未检测到环境配置中的 Admin Client Secret，需要在此填写。</p>
+            )}
 
             <div className="actions">
-              <button onClick={initialize} disabled={loading || !adminClientSecret.trim()}>
+              <button onClick={initialize} disabled={!canInitialize}>
                 执行初始化
               </button>
             </div>
