@@ -156,6 +156,7 @@ Keylo 2.0 用户登录会返回 refresh token。Keystone Web/BFF 需要：
 - 避免并发刷新同一个 refresh token。
 - 如果部署启用 `SESSION_POLICY=single_user_session`，第二次登录默认会返回 409。
 - 用户确认接管后，再用 `force=true` 重新登录。
+- access token 不可用时，可调用 `POST /v1/auth/logout-refresh-token` 撤销 refresh session，用于替代 Keystone `/logout-refresh-token`。
 
 ## 5. 回退策略
 
@@ -174,3 +175,4 @@ Keylo 2.0 用户登录会返回 refresh token。Keystone Web/BFF 需要：
 - Keystone API 权限由 `/v1/authorize/check` 返回结果驱动。
 - 未绑定 Keystone 角色的服务 Principal 调用 Keystone 管理 API 返回 403。
 - 旧 refresh token 重放会失败，客户端保存的新 refresh token 可以继续刷新。
+- 客户端可以使用 refresh token 调用 `/v1/auth/logout-refresh-token` 主动释放 Keylo refresh session。

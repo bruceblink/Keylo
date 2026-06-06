@@ -2,8 +2,8 @@ use crate::handlers::user::{jit_register_user, register_user};
 use crate::handlers::{
     admin_token, auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client,
     auth_get_audit_logs, auth_get_blacklisted_tokens, auth_introspect, auth_jwks,
-    auth_list_clients, auth_logout, auth_me, auth_refresh, auth_rotate_client_secret, auth_token,
-    auth_update_client, keylo_configuration,
+    auth_list_clients, auth_logout, auth_logout_refresh_token, auth_me, auth_refresh,
+    auth_rotate_client_secret, auth_token, auth_update_client, keylo_configuration,
 };
 use crate::state::AppState;
 use axum::routing::{get, post, put};
@@ -49,4 +49,8 @@ pub fn public_router() -> Router<AppState> {
         .route("/v1/auth/token", post(auth_token))
         .route("/v1/admin/token", post(admin_token))
         .route("/v1/auth/refresh", post(auth_refresh))
+        .route(
+            "/v1/auth/logout-refresh-token",
+            post(auth_logout_refresh_token),
+        )
 }

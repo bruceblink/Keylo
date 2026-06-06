@@ -231,6 +231,60 @@ pub async fn revoke_refresh_session(
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn revoke_refresh_session_by_token(
+    pool: &PgPool,
+    refresh_token: &str,
+    reason: Option<&str>,
+) -> Result<Option<String>> {
+    let mut tx = pool.begin().await?;
+    let refresh_token_hash = token_hash(refresh_token);
+
+    let row = sqlx::query(
+        r#"
+        SELECT session_id
+        FROM refresh_session_tokens
+        WHERE token_hash = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(&refresh_token_hash)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(row) = row else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    let session_id: String = row.get("session_id");
+    sqlx::query(
+        r#"
+        UPDATE refresh_session_tokens
+        SET revoked_at = COALESCE(revoked_at, NOW())
+        WHERE token_hash = $1
+        "#,
+    )
+    .bind(&refresh_token_hash)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE refresh_sessions
+        SET revoked_at = COALESCE(revoked_at, NOW()),
+            revoke_reason = COALESCE(revoke_reason, $2)
+        WHERE id = $1
+        "#,
+    )
+    .bind(&session_id)
+    .bind(reason)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(session_id))
+}
+
 pub async fn list_refresh_sessions_for_principal(
     pool: &PgPool,
     principal_id: &str,

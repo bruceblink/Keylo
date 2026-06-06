@@ -152,7 +152,22 @@
 - 鉴权：是（access）
 - 作用：将当前 access token 拉黑
 
-### 3.6 用户注册
+### 3.6 通过 Refresh Token 退出登录
+
+- **POST** `/v1/auth/logout-refresh-token`
+- 鉴权：否
+- 作用：在 access token 已失效或不可用时，通过 refresh token 撤销对应 refresh session。
+- 请求体：
+
+```json
+{
+  "refresh_token": "..."
+}
+```
+
+撤销后，该 refresh token 不能再用于 `/v1/auth/refresh`。如果 refresh token 属于 refresh session，Keylo 会撤销整个 session。
+
+### 3.7 用户注册
 
 - **POST** `/v1/auth/register`
 - 鉴权：否
@@ -166,13 +181,13 @@
 }
 ```
 
-### 3.7 第三方 JIT 迁移注册
+### 3.8 第三方 JIT 迁移注册
 
 - **POST** `/v1/auth/migrations/jit-register`
 - 鉴权：否
 - 请求体：`provider`、`external_user_id`、`username`、`email`、`password?`、`active?`、`roles?`、`metadata?`
 
-### 3.8 Token 内省（授权中心集成）
+### 3.9 Token 内省（授权中心集成）
 
 - **POST** `/v1/auth/introspect`
 - 鉴权：是（service_access + `read` + `aud=admin-backend`）

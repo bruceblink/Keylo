@@ -1515,6 +1515,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_refresh_token_logout_revokes_session_without_access_token() {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("root_refresh_logout_{}", ts);
+        let password = "RootRefreshLogout#123";
+        let config = Config {
+            enable_super_admin_bootstrap: true,
+            super_admin_username: Some(username.clone()),
+            super_admin_email: Some(format!("{}@example.com", username)),
+            super_admin_password: Some(password.to_string()),
+            ..test_config()
+        };
+
+        let server = setup_test_server_with_config(config).await;
+
+        let login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": password
+            }))
+            .await;
+
+        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        login_resp.assert_status_ok();
+        let login_body: serde_json::Value = login_resp.json();
+        let refresh_token = login_body["refresh_token"].as_str().unwrap();
+
+        let logout_resp = server
+            .post("/v1/auth/logout-refresh-token")
+            .json(&json!({ "refresh_token": refresh_token }))
+            .await;
+        logout_resp.assert_status_ok();
+
+        let refresh_resp = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": refresh_token }))
+            .await;
+        assert_eq!(refresh_resp.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_single_user_session_requires_explicit_takeover() {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)

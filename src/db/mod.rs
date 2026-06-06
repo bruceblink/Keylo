@@ -506,6 +506,18 @@ pub async fn revoke_refresh_token(pool: &PgPool, token_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn revoke_refresh_token_by_token(pool: &PgPool, token: &str) -> Result<bool> {
+    let token_hash = token_hash(token);
+    let result = sqlx::query(
+        "UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE token_hash = $1",
+    )
+    .bind(token_hash)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// 撤销客户端的所有 Refresh Token
 pub async fn revoke_client_refresh_tokens(pool: &PgPool, client_id: &str) -> Result<()> {
     sqlx::query(

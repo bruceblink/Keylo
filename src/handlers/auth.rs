@@ -1187,6 +1187,50 @@ pub async fn auth_refresh(
     )))
 }
 
+pub async fn auth_logout_refresh_token(
+    State(state): State<AppState>,
+    Json(payload): Json<RefreshTokenRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let refresh_claims = state.jwt_keys.decode_token(&payload.refresh_token);
+    let refresh_claims = match refresh_claims {
+        Ok(ref claims) if claims.token_type != "refresh" => {
+            return Err(AuthError::TokenTypeInvalid)
+        }
+        Err(_) => return Err(AuthError::InvalidToken),
+        Ok(claims) => claims,
+    };
+
+    let db = require_db(&state)?;
+    let revoked_session =
+        crate::db::revoke_refresh_session_by_token(db, &payload.refresh_token, Some("user_logout"))
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to revoke refresh session".to_string())
+            })?;
+
+    if revoked_session.is_none() {
+        let _ = crate::db::revoke_refresh_token_by_token(db, &payload.refresh_token)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to revoke refresh token".to_string()))?;
+    }
+
+    audit_event(
+        &state,
+        "auth.refresh_session.logout",
+        Some(refresh_claims.sub.as_str()),
+        revoked_session
+            .as_ref()
+            .map(|session_id| format!("session_id={}", session_id))
+            .as_deref(),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Refresh token session revoked"
+    })))
+}
+
 pub async fn auth_logout(
     State(state): State<AppState>,
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
