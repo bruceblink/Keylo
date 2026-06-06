@@ -4,6 +4,7 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
@@ -37,6 +38,23 @@ pub fn principal_admin_routes() -> Router<AppState> {
             "/v1/admin/principals/{principal_id}/effective-permissions",
             get(get_principal_effective_permissions_handler),
         )
+        .route(
+            "/v1/admin/principals/{principal_id}/refresh-sessions",
+            get(list_principal_refresh_sessions_handler),
+        )
+        .route(
+            "/v1/admin/principals/{principal_id}/refresh-sessions",
+            delete(revoke_principal_refresh_sessions_handler),
+        )
+        .route(
+            "/v1/admin/principals/{principal_id}/refresh-sessions/{session_id}",
+            delete(revoke_principal_refresh_session_handler),
+        )
+}
+
+#[derive(Debug, Deserialize)]
+struct RefreshSessionListQuery {
+    include_revoked: Option<bool>,
 }
 
 async fn list_principals_handler(
@@ -190,5 +208,106 @@ async fn get_principal_effective_permissions_handler(
             roles,
             permissions,
         }
+    })))
+}
+
+async fn list_principal_refresh_sessions_handler(
+    State(state): State<AppState>,
+    Path(principal_id): Path<String>,
+    Query(query): Query<RefreshSessionListQuery>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    if crate::db::get_principal_by_id(db, &principal_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .is_none()
+    {
+        return Err(AuthError::NotFound);
+    }
+
+    let sessions = crate::db::list_refresh_sessions_for_principal(
+        db,
+        &principal_id,
+        query.include_revoked.unwrap_or(false),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": sessions
+    })))
+}
+
+async fn revoke_principal_refresh_sessions_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(principal_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let revoked =
+        crate::db::revoke_principal_refresh_sessions(db, &principal_id, Some("admin_revoked"))
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    crate::db::create_audit_log(
+        db,
+        "principal.refresh_sessions_revoked",
+        Some(&claims.sub),
+        Some(&format!(
+            "principal_id={}, revoked={}",
+            principal_id, revoked
+        )),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "revoked": revoked
+    })))
+}
+
+async fn revoke_principal_refresh_session_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((principal_id, session_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let sessions = crate::db::list_refresh_sessions_for_principal(db, &principal_id, true)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    if !sessions.iter().any(|session| session.id == session_id) {
+        return Err(AuthError::NotFound);
+    }
+    let revoked = crate::db::revoke_refresh_session(db, &session_id, Some("admin_revoked"))
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    if !revoked {
+        return Err(AuthError::NotFound);
+    }
+    crate::db::create_audit_log(
+        db,
+        "principal.refresh_session_revoked",
+        Some(&claims.sub),
+        Some(&format!(
+            "principal_id={}, session_id={}",
+            principal_id, session_id
+        )),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Refresh session revoked successfully"
     })))
 }

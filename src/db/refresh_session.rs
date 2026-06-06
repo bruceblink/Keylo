@@ -3,6 +3,19 @@ use sqlx::{PgPool, Row};
 
 use crate::db::token_hash;
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RefreshSessionInfo {
+    pub id: String,
+    pub principal_id: String,
+    pub client_id: String,
+    pub current_access_jti: String,
+    pub issued_at: i64,
+    pub rotated_at: Option<i64>,
+    pub expires_at: i64,
+    pub revoked_at: Option<i64>,
+    pub revoke_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumedRefreshSession {
     pub session_id: String,
@@ -216,6 +229,50 @@ pub async fn revoke_refresh_session(
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+pub async fn list_refresh_sessions_for_principal(
+    pool: &PgPool,
+    principal_id: &str,
+    include_revoked: bool,
+) -> Result<Vec<RefreshSessionInfo>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            id,
+            principal_id,
+            client_id,
+            current_access_jti,
+            extract(epoch from issued_at)::bigint AS issued_at,
+            extract(epoch from rotated_at)::bigint AS rotated_at,
+            extract(epoch from expires_at)::bigint AS expires_at,
+            extract(epoch from revoked_at)::bigint AS revoked_at,
+            revoke_reason
+        FROM refresh_sessions
+        WHERE principal_id = $1
+          AND ($2 OR revoked_at IS NULL)
+        ORDER BY issued_at DESC
+        "#,
+    )
+    .bind(principal_id)
+    .bind(include_revoked)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| RefreshSessionInfo {
+            id: row.get("id"),
+            principal_id: row.get("principal_id"),
+            client_id: row.get("client_id"),
+            current_access_jti: row.get("current_access_jti"),
+            issued_at: row.get("issued_at"),
+            rotated_at: row.get("rotated_at"),
+            expires_at: row.get("expires_at"),
+            revoked_at: row.get("revoked_at"),
+            revoke_reason: row.get("revoke_reason"),
+        })
+        .collect())
 }
 
 pub async fn revoke_principal_refresh_sessions(

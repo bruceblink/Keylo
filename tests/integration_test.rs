@@ -1577,6 +1577,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_admin_can_list_and_revoke_principal_refresh_session() {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("root_session_admin_{}", ts);
+        let password = "RootSessionAdmin#123";
+        let config = Config {
+            enable_super_admin_bootstrap: true,
+            super_admin_username: Some(username.clone()),
+            super_admin_email: Some(format!("{}@example.com", username)),
+            super_admin_password: Some(password.to_string()),
+            ..test_config()
+        };
+
+        let server = setup_test_server_with_config(config).await;
+
+        let login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": password
+            }))
+            .await;
+
+        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        login_resp.assert_status_ok();
+        let login_body: serde_json::Value = login_resp.json();
+        let access_token = login_body["access_token"].as_str().unwrap();
+        let refresh_token = login_body["refresh_token"].as_str().unwrap();
+
+        let me_resp = server
+            .get("/v1/auth/me")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        me_resp.assert_status_ok();
+        let me_body: serde_json::Value = me_resp.json();
+        let principal_id = me_body["principal_id"].as_str().unwrap();
+
+        let sessions_resp = server
+            .get(&format!(
+                "/v1/admin/principals/{}/refresh-sessions",
+                principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        sessions_resp.assert_status_ok();
+        let sessions_body: serde_json::Value = sessions_resp.json();
+        let session_id = sessions_body["data"]
+            .as_array()
+            .unwrap()
+            .first()
+            .and_then(|session| session["id"].as_str())
+            .unwrap();
+
+        let revoke_resp = server
+            .delete(&format!(
+                "/v1/admin/principals/{}/refresh-sessions/{}",
+                principal_id, session_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        revoke_resp.assert_status_ok();
+
+        let refresh_resp = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": refresh_token }))
+            .await;
+        assert_eq!(refresh_resp.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_third_party_user_migration_import_is_idempotent() {
         let server = setup_test_server().await;
         let admin_login_resp = server
