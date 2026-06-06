@@ -4,6 +4,80 @@ use uuid::Uuid;
 
 use crate::models::*;
 
+pub fn valid_role_assignable_to(assignable_to: &str) -> bool {
+    matches!(assignable_to, "user" | "service" | "client" | "all")
+}
+
+pub fn ensure_role_assignable_to_principal_type(
+    role_id: &str,
+    assignable_to: &str,
+    principal_type: &str,
+) -> Result<()> {
+    if !valid_role_assignable_to(assignable_to) {
+        anyhow::bail!("invalid_role_assignable_to: role={}", role_id);
+    }
+
+    if assignable_to != "all" && assignable_to != principal_type {
+        anyhow::bail!(
+            "role_not_assignable_to_principal_type: role={}, principal_type={}",
+            role_id,
+            principal_type
+        );
+    }
+
+    Ok(())
+}
+
+async fn ensure_role_assignable_to_update_is_compatible(
+    pool: &PgPool,
+    role_id: &str,
+    assignable_to: &str,
+) -> Result<()> {
+    if assignable_to == "all" {
+        return Ok(());
+    }
+
+    if assignable_to != "user" {
+        let user_role = sqlx::query("SELECT 1 FROM user_roles WHERE role_id = $1 LIMIT 1")
+            .bind(role_id)
+            .fetch_optional(pool)
+            .await?;
+        if user_role.is_some() {
+            anyhow::bail!(
+                "role_assignable_to_conflicts_with_existing_assignments: role={}, assignable_to={}, existing_principal_type=user",
+                role_id,
+                assignable_to
+            );
+        }
+    }
+
+    let conflicting_principal = sqlx::query(
+        r#"
+        SELECT p.principal_type
+        FROM principal_roles pr
+        INNER JOIN principals p ON p.id = pr.principal_id
+        WHERE pr.role_id = $1 AND p.principal_type <> $2
+        LIMIT 1
+        "#,
+    )
+    .bind(role_id)
+    .bind(assignable_to)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(row) = conflicting_principal {
+        let principal_type: String = row.get("principal_type");
+        anyhow::bail!(
+            "role_assignable_to_conflicts_with_existing_assignments: role={}, assignable_to={}, existing_principal_type={}",
+            role_id,
+            assignable_to,
+            principal_type
+        );
+    }
+
+    Ok(())
+}
+
 /// 角色相关数据库操作
 /// 创建角色
 pub async fn create_role(pool: &PgPool, name: &str, description: Option<&str>) -> Result<Role> {
@@ -17,6 +91,10 @@ pub async fn create_role_with_options(
     assignable_to: &str,
     system: bool,
 ) -> Result<Role> {
+    if !valid_role_assignable_to(assignable_to) {
+        anyhow::bail!("invalid_assignable_to");
+    }
+
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().naive_utc();
 
@@ -84,6 +162,13 @@ pub async fn update_role(
     assignable_to: Option<&str>,
     system: Option<bool>,
 ) -> Result<Option<Role>> {
+    if let Some(assignable_to) = assignable_to {
+        if !valid_role_assignable_to(assignable_to) {
+            anyhow::bail!("invalid_assignable_to");
+        }
+        ensure_role_assignable_to_update_is_compatible(pool, role_id, assignable_to).await?;
+    }
+
     let now = chrono::Local::now().naive_utc();
 
     let role = sqlx::query_as::<_, Role>(
@@ -241,6 +326,11 @@ pub async fn delete_permission(pool: &PgPool, permission_id: &str) -> Result<boo
 /// 用户角色关系操作
 /// 为用户分配角色
 pub async fn assign_role_to_user(pool: &PgPool, user_id: &str, role_id: &str) -> Result<()> {
+    let role = get_role_by_id(pool, role_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("role_not_found"))?;
+    ensure_role_assignable_to_principal_type(role_id, &role.assignable_to, "user")?;
+
     sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(user_id)
         .bind(role_id)

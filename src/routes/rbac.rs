@@ -99,6 +99,46 @@ fn error_response(
     )
 }
 
+fn invalid_assignable_to_response() -> (StatusCode, Json<serde_json::Value>) {
+    error_response(
+        StatusCode::BAD_REQUEST,
+        "invalid_assignable_to",
+        "assignable_to must be one of: user, service, client, all",
+    )
+}
+
+fn role_assignment_error_response(err: &anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
+    let message = err.to_string();
+    if message.starts_with("role_not_assignable_to_principal_type")
+        || message.starts_with("invalid_role_assignable_to")
+    {
+        return error_response(StatusCode::BAD_REQUEST, "invalid_role_assignment", &message);
+    }
+
+    if message == "role_not_found" {
+        return error_response(StatusCode::NOT_FOUND, "role_not_found", "Role not found");
+    }
+
+    error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "role_assignment_failed",
+        &format!("Failed to assign role to user: {}", err),
+    )
+}
+
+fn role_update_error_response(err: &anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
+    let message = err.to_string();
+    if message.starts_with("role_assignable_to_conflicts_with_existing_assignments") {
+        return error_response(StatusCode::CONFLICT, "role_assignment_conflict", &message);
+    }
+
+    error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "role_update_failed",
+        &format!("Failed to update role: {}", err),
+    )
+}
+
 /// 获取所有角色
 async fn get_roles(State(state): State<AppState>) -> ApiResponse {
     match get_all_roles(require_db(&state)?).await {
@@ -122,11 +162,16 @@ async fn create_role_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateRoleRequest>,
 ) -> ApiResponse {
+    let assignable_to = req.assignable_to.as_deref().unwrap_or("all");
+    if !valid_role_assignable_to(assignable_to) {
+        return Err(invalid_assignable_to_response());
+    }
+
     match create_role_with_options(
         require_db(&state)?,
         &req.name,
         req.description.as_deref(),
-        req.assignable_to.as_deref().unwrap_or("all"),
+        assignable_to,
         req.system.unwrap_or(false),
     )
     .await
@@ -211,6 +256,12 @@ async fn update_role_handler(
     Path(role_id): Path<String>,
     Json(req): Json<UpdateRoleRequest>,
 ) -> ApiResponse {
+    if let Some(assignable_to) = req.assignable_to.as_deref() {
+        if !valid_role_assignable_to(assignable_to) {
+            return Err(invalid_assignable_to_response());
+        }
+    }
+
     match update_role(
         require_db(&state)?,
         &role_id,
@@ -251,13 +302,7 @@ async fn update_role_handler(
                     })),
                 ))
             } else {
-                Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "success": false,
-                        "error": format!("Failed to update role: {}", e)
-                    })),
-                ))
+                Err(role_update_error_response(&e))
             }
         }
     }
@@ -537,13 +582,7 @@ async fn assign_role_to_user_handler(
                 "message": "Role assigned to user successfully"
             })))
         }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Failed to assign role to user: {}", e)
-            })),
-        )),
+        Err(e) => Err(role_assignment_error_response(&e)),
     }
 }
 

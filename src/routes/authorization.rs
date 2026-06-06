@@ -54,6 +54,9 @@ async fn principal_from_bearer(
     if service_claims.token_type != "service_access" {
         return Err(AuthError::TokenTypeInvalid);
     }
+    if service_claims.aud != "admin-backend" && service_claims.aud != "*" {
+        return Err(AuthError::InvalidAudience);
+    }
     if let Some(db) = &state.db {
         if crate::db::is_token_blacklisted(db, token)
             .await

@@ -288,6 +288,145 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_user_role_assignment_rejects_service_only_roles_without_lingering_binding() {
+        let Some(server) = setup_test_server().await else {
+            return;
+        };
+        let token = get_access_token(&server).await;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let role_name = format!("service_only_{}", ts);
+        let role_resp = server
+            .post("/api/rbac/roles")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "name": role_name,
+                "description": "service-only role",
+                "assignable_to": "service"
+            }))
+            .await;
+        role_resp.assert_status_ok();
+        let role_body: serde_json::Value = role_resp.json();
+        let role_id = role_body["data"]["id"].as_str().unwrap().to_string();
+
+        let rejected_provision_resp = server
+            .post("/v1/admin/users/provision")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "username": format!("invalid_prov_{}", ts),
+                "email": format!("invalid_prov_{}@example.com", ts),
+                "password": "ProvisionPass123!",
+                "role_ids": [role_id.clone()]
+            }))
+            .await;
+        assert_eq!(
+            rejected_provision_resp.status_code(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        let rejected_provision_body: serde_json::Value = rejected_provision_resp.json();
+        assert_eq!(rejected_provision_body["error"], "invalid_role_assignment");
+
+        let provision_resp = server
+            .post("/v1/admin/users/provision")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "username": format!("assign_target_{}", ts),
+                "email": format!("assign_target_{}@example.com", ts),
+                "password": "ProvisionPass123!"
+            }))
+            .await;
+        provision_resp.assert_status_ok();
+        let provision_body: serde_json::Value = provision_resp.json();
+        let user_id = provision_body["data"]["user"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let assign_resp = server
+            .post(&format!("/api/rbac/users/{}/roles", user_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "role_id": role_id.clone() }))
+            .await;
+        assert_eq!(
+            assign_resp.status_code(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        let assign_body: serde_json::Value = assign_resp.json();
+        assert_eq!(assign_body["error"], "invalid_role_assignment");
+
+        let roles_resp = server
+            .get(&format!("/api/rbac/users/{}/roles", user_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        roles_resp.assert_status_ok();
+        let roles_body: serde_json::Value = roles_resp.json();
+        assert!(!roles_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|role| role["id"] == role_id));
+    }
+
+    #[tokio::test]
+    async fn test_role_assignable_to_update_rejects_existing_incompatible_bindings() {
+        let Some(server) = setup_test_server().await else {
+            return;
+        };
+        let token = get_access_token(&server).await;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let role_name = format!("user_bound_then_service_{}", ts);
+        let role_resp = server
+            .post("/api/rbac/roles")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "name": role_name,
+                "description": "role with existing user binding"
+            }))
+            .await;
+        role_resp.assert_status_ok();
+        let role_body: serde_json::Value = role_resp.json();
+        let role_id = role_body["data"]["id"].as_str().unwrap().to_string();
+
+        let provision_resp = server
+            .post("/v1/admin/users/provision")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "username": format!("role_update_target_{}", ts),
+                "email": format!("role_update_target_{}@example.com", ts),
+                "password": "ProvisionPass123!",
+                "role_ids": [role_id.clone()]
+            }))
+            .await;
+        provision_resp.assert_status_ok();
+
+        let update_resp = server
+            .put(&format!("/api/rbac/roles/{}", role_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "assignable_to": "service"
+            }))
+            .await;
+        assert_eq!(update_resp.status_code(), axum::http::StatusCode::CONFLICT);
+        let update_body: serde_json::Value = update_resp.json();
+        assert_eq!(update_body["error"], "role_assignment_conflict");
+
+        let get_role_resp = server
+            .get(&format!("/api/rbac/roles/{}", role_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        get_role_resp.assert_status_ok();
+        let get_role_body: serde_json::Value = get_role_resp.json();
+        assert_eq!(get_role_body["data"]["role"]["assignable_to"], "all");
+    }
+
+    #[tokio::test]
     async fn test_keylo_2_0_service_principal_authorization_flow() {
         let Some(server) = setup_test_server().await else {
             return;
@@ -337,6 +476,7 @@ mod tests {
             .await;
         bind_permission_resp.assert_status_ok();
 
+        let wrong_audience_service_id = format!("svc-2-0-wrong-aud-{}", ts);
         for id in [&service_id, &denied_service_id] {
             let service_resp = server
                 .post("/v1/admin/services")
@@ -351,6 +491,19 @@ mod tests {
                 .await;
             service_resp.assert_status_ok();
         }
+
+        let wrong_audience_service_resp = server
+            .post("/v1/admin/services")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "service_id": wrong_audience_service_id,
+                "service_secret": service_secret,
+                "name": wrong_audience_service_id,
+                "allowed_scopes": ["read"],
+                "allowed_audiences": ["inventory-svc"]
+            }))
+            .await;
+        wrong_audience_service_resp.assert_status_ok();
 
         let principals_resp = server
             .get("/v1/admin/principals?principal_type=service")
@@ -460,6 +613,31 @@ mod tests {
         denied_check_resp.assert_status_ok();
         let denied_check_body: serde_json::Value = denied_check_resp.json();
         assert_eq!(denied_check_body["data"]["allowed"], false);
+
+        let wrong_audience_token_resp = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": wrong_audience_service_id,
+                "service_secret": service_secret,
+                "audience": "inventory-svc",
+                "scope": "read"
+            }))
+            .await;
+        wrong_audience_token_resp.assert_status_ok();
+        let wrong_audience_token_body: serde_json::Value = wrong_audience_token_resp.json();
+        let wrong_audience_token = wrong_audience_token_body["access_token"].as_str().unwrap();
+
+        let wrong_audience_check_resp = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {}", wrong_audience_token))
+            .json(&json!({ "permission": permission_name }))
+            .await;
+        assert_eq!(
+            wrong_audience_check_resp.status_code(),
+            axum::http::StatusCode::UNAUTHORIZED
+        );
+        let wrong_audience_check_body: serde_json::Value = wrong_audience_check_resp.json();
+        assert_eq!(wrong_audience_check_body["error"], "invalid_audience");
     }
 
     #[tokio::test]

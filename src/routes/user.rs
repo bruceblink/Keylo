@@ -183,6 +183,17 @@ async fn provision_user_handler(
                         "message": message,
                     })),
                 ))
+            } else if message.starts_with("role_not_assignable_to_principal_type")
+                || message.starts_with("invalid_role_assignable_to")
+            {
+                Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "success": false,
+                        "error": "invalid_role_assignment",
+                        "message": message,
+                    })),
+                ))
             } else {
                 Err((
                     StatusCode::INTERNAL_SERVER_ERROR,

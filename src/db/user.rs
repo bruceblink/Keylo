@@ -375,6 +375,33 @@ pub async fn provision_user_with_roles(
     normalized_role_ids.sort();
     normalized_role_ids.dedup();
 
+    if !normalized_role_ids.is_empty() {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, assignable_to
+            FROM roles
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(&normalized_role_ids)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let mut assignable_by_role_id = std::collections::HashMap::new();
+        for row in rows {
+            let role_id: String = row.get("id");
+            let assignable_to: String = row.get("assignable_to");
+            assignable_by_role_id.insert(role_id, assignable_to);
+        }
+
+        for role_id in &normalized_role_ids {
+            let Some(assignable_to) = assignable_by_role_id.get(role_id) else {
+                anyhow::bail!("role_not_bound: role id not found: {}", role_id);
+            };
+            crate::db::ensure_role_assignable_to_principal_type(role_id, assignable_to, "user")?;
+        }
+    }
+
     for role_id in normalized_role_ids {
         sqlx::query(
             "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",

@@ -151,7 +151,7 @@ impl IntoResponse for AuthError {
                 "Insufficient role".to_string(),
             ),
             AuthError::InvalidAudience => (
-                StatusCode::FORBIDDEN,
+                StatusCode::UNAUTHORIZED,
                 1016,
                 "invalid_audience",
                 "Invalid audience".to_string(),
@@ -224,5 +224,17 @@ mod tests {
 
         assert_eq!(json["error"], "conflict");
         assert_eq!(json["message"], message);
+    }
+
+    #[tokio::test]
+    async fn invalid_audience_is_an_authentication_failure() {
+        let response = AuthError::InvalidAudience.into_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["error"], "invalid_audience");
     }
 }

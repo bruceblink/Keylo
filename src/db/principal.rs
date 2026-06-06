@@ -16,13 +16,6 @@ fn select_principal_sql() -> &'static str {
     "SELECT id, principal_type, subject, ref_id, display_name, active, created_at, updated_at FROM principals"
 }
 
-fn normalize_assignable_to(assignable_to: &str) -> &str {
-    match assignable_to {
-        "user" | "service" | "client" | "all" => assignable_to,
-        _ => "all",
-    }
-}
-
 pub async fn upsert_principal(
     pool: &PgPool,
     principal_type: &str,
@@ -197,14 +190,7 @@ pub async fn assign_role_to_principal(
 
     let principal_type: String = row.get("principal_type");
     let assignable_to: String = row.get("assignable_to");
-    let assignable_to = normalize_assignable_to(&assignable_to);
-    if assignable_to != "all" && assignable_to != principal_type {
-        anyhow::bail!(
-            "role_not_assignable_to_principal_type: role={}, principal_type={}",
-            role_id,
-            principal_type
-        );
-    }
+    crate::db::ensure_role_assignable_to_principal_type(role_id, &assignable_to, &principal_type)?;
 
     sqlx::query(
         "INSERT INTO principal_roles (principal_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -225,9 +211,11 @@ pub async fn sync_user_roles_to_principal(pool: &PgPool, user_id: &str) -> Resul
     sqlx::query(
         r#"
         INSERT INTO principal_roles (principal_id, role_id, assigned_at)
-        SELECT $1, role_id, assigned_at
-        FROM user_roles
-        WHERE user_id = $2
+        SELECT $1, ur.role_id, ur.assigned_at
+        FROM user_roles ur
+        INNER JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id = $2
+          AND r.assignable_to IN ('all', 'user')
         ON CONFLICT DO NOTHING
         "#,
     )
