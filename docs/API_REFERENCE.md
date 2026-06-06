@@ -286,6 +286,8 @@
 
 说明：`GET /api/rbac/permissions` 支持 `prefix` 查询参数，如：`?prefix=ssc.`
 
+权限名 `*:*:*` 保留为超级权限通配符。它必须像普通权限一样显式创建并绑定到角色；绑定后，该 Principal 的 `/v1/authorize/check` 对任意权限 code 返回允许。
+
 ### 6.3 用户角色管理
 
 | 方法 | 路径 |
@@ -432,7 +434,7 @@
 }
 ```
 
-资源通过 `resource_permissions` 绑定到权限点。`/v1/principals/me/resource-tree` 只返回当前 Principal 通过角色权限可见的资源节点，并包含必要祖先节点。
+资源通过 `resource_permissions` 绑定到权限点。`/v1/principals/me/resource-tree` 只返回当前 Principal 通过角色权限可见的资源节点，并包含必要祖先节点。若 Principal 拥有 `*:*:*` 权限，则返回指定 `app` 和 `type` 下的全部 active 资源。
 
 ### 7.5 Refresh Session 与会话策略
 

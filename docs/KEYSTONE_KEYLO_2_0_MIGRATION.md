@@ -11,7 +11,7 @@ Keystone 在目标状态下应满足：
 - 菜单、按钮、API 和服务能力由 Keylo resource + permission 建模。
 - 权限判断由 `/v1/authorize/check` 或 `/v1/authorize/batch-check` 驱动。
 - 未授权 Keylo service token 不能访问 Keystone 管理接口。
-- 不再把“Keylo token 验证通过”映射为 `*:*:*`。
+- 不再把“Keylo token 验证通过”映射为 `*:*:*`；只有在 Keylo RBAC 中显式绑定了 `*:*:*` 权限的 Principal 才拥有超级权限。
 
 ## 2. 推荐迁移阶段
 
@@ -63,6 +63,8 @@ keystone:system:user:edit
 keystone:system:user:remove
 keystone:system:dept:list
 ```
+
+Keystone 既有超级管理员语义可以迁移为 Keylo 权限 `*:*:*`。该权限需要显式创建并绑定到超级管理员角色；它会允许任意 `/v1/authorize/check` 权限 code，并让 `/v1/principals/me/resource-tree` 返回指定 `app/type` 下全部 active 资源。
 
 ### 阶段 3：绑定 Principal 角色
 
@@ -139,7 +141,7 @@ Keylo 2.0 用户登录会返回 refresh token。Keystone Web/BFF 需要：
 
 - 写入降级审计日志。
 - 不把未知 Keylo service token 视为管理员。
-- 不授予 `*:*:*` 临时权限。
+- 不把验签成功或授权检查失败直接升级为 `*:*:*`。
 - 在恢复后重新切回 Keylo 授权结果。
 
 ## 6. 验收清单

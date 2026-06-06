@@ -142,38 +142,55 @@ pub async fn authorized_resources_for_principal(
     app: &str,
     resource_type: &str,
 ) -> Result<Vec<ResourceTreeNode>> {
-    let rows = sqlx::query(
-        r#"
-        WITH RECURSIVE permitted AS (
-            SELECT DISTINCT r.*
-            FROM resources r
-            INNER JOIN resource_permissions rperm ON rperm.resource_id = r.id
-            INNER JOIN role_permissions rp ON rp.permission_id = rperm.permission_id
-            INNER JOIN principal_roles pr ON pr.role_id = rp.role_id
-            WHERE pr.principal_id = $1
-              AND r.app = $2
-              AND r.resource_type = $3
-              AND r.active = TRUE
-        ),
-        visible AS (
-            SELECT * FROM permitted
-            UNION
-            SELECT parent.*
-            FROM resources parent
-            INNER JOIN visible child ON child.parent_id = parent.id
-            WHERE parent.active = TRUE
+    let wildcard = crate::db::principal_has_wildcard_permission(pool, principal_id).await?;
+    let rows = if wildcard {
+        sqlx::query(
+            r#"
+            SELECT id, app, resource_type, code, name, parent_id, display_order, description,
+                   active, created_at, updated_at
+            FROM resources
+            WHERE app = $1 AND resource_type = $2 AND active = TRUE
+            ORDER BY display_order, code
+            "#,
         )
-        SELECT id, app, resource_type, code, name, parent_id, display_order, description,
-               active, created_at, updated_at
-        FROM visible
-        ORDER BY display_order, code
-        "#,
-    )
-    .bind(principal_id)
-    .bind(app)
-    .bind(resource_type)
-    .fetch_all(pool)
-    .await?;
+        .bind(app)
+        .bind(resource_type)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            r#"
+            WITH RECURSIVE permitted AS (
+                SELECT DISTINCT r.*
+                FROM resources r
+                INNER JOIN resource_permissions rperm ON rperm.resource_id = r.id
+                INNER JOIN role_permissions rp ON rp.permission_id = rperm.permission_id
+                INNER JOIN principal_roles pr ON pr.role_id = rp.role_id
+                WHERE pr.principal_id = $1
+                  AND r.app = $2
+                  AND r.resource_type = $3
+                  AND r.active = TRUE
+            ),
+            visible AS (
+                SELECT * FROM permitted
+                UNION
+                SELECT parent.*
+                FROM resources parent
+                INNER JOIN visible child ON child.parent_id = parent.id
+                WHERE parent.active = TRUE
+            )
+            SELECT id, app, resource_type, code, name, parent_id, display_order, description,
+                   active, created_at, updated_at
+            FROM visible
+            ORDER BY display_order, code
+            "#,
+        )
+        .bind(principal_id)
+        .bind(app)
+        .bind(resource_type)
+        .fetch_all(pool)
+        .await?
+    };
 
     let mut resources = Vec::with_capacity(rows.len());
     for row in rows {

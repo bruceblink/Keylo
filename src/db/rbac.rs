@@ -416,7 +416,7 @@ pub async fn user_has_permission(
         FROM user_roles ur
         INNER JOIN role_permissions rp ON ur.role_id = rp.role_id
         INNER JOIN permissions p ON rp.permission_id = p.id
-        WHERE ur.user_id = $1 AND p.name = $2
+        WHERE ur.user_id = $1 AND (p.name = $2 OR p.name = '*:*:*')
         "#,
     )
     .bind(user_id)

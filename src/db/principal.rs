@@ -299,12 +299,30 @@ pub async fn principal_has_permission(
         FROM principal_roles pr
         INNER JOIN role_permissions rp ON rp.role_id = pr.role_id
         INNER JOIN permissions p ON p.id = rp.permission_id
-        WHERE pr.principal_id = $1 AND p.name = $2
+        WHERE pr.principal_id = $1 AND (p.name = $2 OR p.name = '*:*:*')
         LIMIT 1
         "#,
     )
     .bind(principal_id)
     .bind(permission_name)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.is_some())
+}
+
+pub async fn principal_has_wildcard_permission(pool: &PgPool, principal_id: &str) -> Result<bool> {
+    let row = sqlx::query(
+        r#"
+        SELECT 1
+        FROM principal_roles pr
+        INNER JOIN role_permissions rp ON rp.role_id = pr.role_id
+        INNER JOIN permissions p ON p.id = rp.permission_id
+        WHERE pr.principal_id = $1 AND p.name = '*:*:*'
+        LIMIT 1
+        "#,
+    )
+    .bind(principal_id)
     .fetch_optional(pool)
     .await?;
 
