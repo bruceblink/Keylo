@@ -304,6 +304,13 @@ fn parse_u32_env(key: &str, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
+fn parse_usize_env(key: &str, default: usize) -> usize {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
 pub fn database_password_from_env_result() -> Result<Option<String>, String> {
     let encrypted_password =
         read_env_or_file("DATABASE_PASSWORD_ENC", "DATABASE_PASSWORD_ENC_FILE")
@@ -573,6 +580,8 @@ pub struct Config {
     pub log_dir: String,
     /// 日志文件名前缀
     pub log_file_prefix: String,
+    /// Maximum bytes of request/response body content written into HTTP access logs.
+    pub http_log_body_max_bytes: usize,
     /// Allow non-production startup to fall back to a no-database router.
     pub allow_in_memory_fallback: bool,
     /// Enable first-run setup wizard routes.
@@ -652,6 +661,7 @@ impl Config {
         let log_to_file = parse_bool_env("LOG_TO_FILE", true);
         let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "./logs".to_string());
         let log_file_prefix = env::var("LOG_FILE_PREFIX").unwrap_or_else(|_| "keylo".to_string());
+        let http_log_body_max_bytes = parse_usize_env("HTTP_LOG_BODY_MAX_BYTES", 8192);
         let allow_in_memory_fallback = parse_bool_env("ALLOW_IN_MEMORY_FALLBACK", false);
         let enable_setup_wizard = parse_bool_env("ENABLE_SETUP_WIZARD", true);
         let setup_keys_dir = env::var("SETUP_KEYS_DIR").unwrap_or_else(|_| "./keys".to_string());
@@ -690,6 +700,7 @@ impl Config {
             log_to_file,
             log_dir,
             log_file_prefix,
+            http_log_body_max_bytes,
             allow_in_memory_fallback,
             enable_setup_wizard,
             setup_keys_dir,
@@ -1052,6 +1063,7 @@ mod tests {
             log_to_file: false,
             log_dir: "./logs".to_string(),
             log_file_prefix: "keylo".to_string(),
+            http_log_body_max_bytes: 8192,
             allow_in_memory_fallback: false,
             enable_setup_wizard: true,
             setup_keys_dir: "./keys".to_string(),

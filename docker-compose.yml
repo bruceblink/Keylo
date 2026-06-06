@@ -61,10 +61,11 @@ services:
       REDIS_PASSWORD_ENC_FILE: /run/secrets/.redis_password.enc
       REDIS_PASSWORD_KEY_FILE: /run/secrets/.redis_password.key
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
-      RUST_LOG: ${KEYLO_RUST_LOG:-keylo=debug,axum=info,tower_http=info}
+      RUST_LOG: ${KEYLO_RUST_LOG:-keylo=debug,axum=info}
       LOG_TO_FILE: ${LOG_TO_FILE:-true}
       LOG_DIR: /app/logs
       LOG_FILE_PREFIX: ${LOG_FILE_PREFIX:-keylo}
+      HTTP_LOG_BODY_MAX_BYTES: ${HTTP_LOG_BODY_MAX_BYTES:-8192}
     ports:
       - "${SERVER_PORT:-2345}:2345"
     volumes:

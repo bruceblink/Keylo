@@ -191,10 +191,11 @@ Keylo 默认同时输出 stdout 和文件日志。Docker Compose 中日志目录
 建议生产环境保留以下日志级别，便于排查请求是否到达服务、响应状态和耗时：
 
 ```bash
-RUST_LOG=keylo=info,axum=info,tower_http=info
+RUST_LOG=keylo=info,axum=info
+HTTP_LOG_BODY_MAX_BYTES=8192
 ```
 
-HTTP 访问日志只记录 method、uri、status、latency 等元数据，不记录 `Authorization` 请求头。
+HTTP 访问日志记录请求者 IP、method、uri、status、latency、请求头摘要、请求体和响应体。`Authorization`、Cookie、密码、secret、access token、refresh token 等敏感字段会在写入日志前脱敏；`HTTP_LOG_BODY_MAX_BYTES=0` 可关闭报文体记录。
 
 部署成功后至少验证：
 

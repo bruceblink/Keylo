@@ -1,6 +1,6 @@
 use crate::config::{build_database_url, database_password_from_env_result, Config};
 use crate::handlers::{favicon, healthz, index, protected, readyz};
-use crate::middleware::auth;
+use crate::middleware::{auth, http_log};
 use crate::routes;
 use crate::state::AppState;
 use axum::http::HeaderValue;
@@ -12,8 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
-use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
-use tracing::Level;
 
 const STARTUP_RETRY_ATTEMPTS: u32 = 30;
 const STARTUP_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -42,18 +40,6 @@ fn is_allowed_cors_origin(origin: &HeaderValue, allowed_origins: &[String]) -> b
     }
 
     allowed_origins.iter().any(|allowed| allowed == origin_str)
-}
-
-fn access_log_layer() -> TraceLayer<
-    tower_http::classify::SharedClassifier<tower_http::classify::ServerErrorsAsFailures>,
-    DefaultMakeSpan,
-    DefaultOnRequest,
-    DefaultOnResponse,
-> {
-    TraceLayer::new_for_http()
-        .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
-        .on_request(DefaultOnRequest::new().level(Level::INFO))
-        .on_response(DefaultOnResponse::new().level(Level::INFO))
 }
 
 fn cors_layer(cors_allowed_origins: Vec<String>) -> CorsLayer {
@@ -308,8 +294,11 @@ fn database_router(app_state: AppState, cors_allowed_origins: Vec<String>) -> Ro
         .merge(routes::setup::setup_routes())
         .merge(service_protected_routes(&app_state))
         .merge(protected_routes(&app_state))
-        .layer(access_log_layer())
         .layer(cors_layer(cors_allowed_origins))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            http_log::request_response_logging_middleware,
+        ))
         .with_state(app_state)
 }
 
@@ -322,8 +311,11 @@ pub fn init_app_router() -> Router {
         .merge(base_public_routes(false))
         .merge(in_memory_protected_routes())
         .merge(routes::setup::setup_routes())
-        .layer(access_log_layer())
         .layer(cors_layer(cors_allowed_origins))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            http_log::request_response_logging_middleware,
+        ))
         .with_state(app_state)
 }
 
@@ -335,8 +327,11 @@ pub fn init_app_router_with_config(config: Config) -> Router {
         .merge(base_public_routes(true))
         .merge(in_memory_protected_routes())
         .merge(routes::setup::setup_routes())
-        .layer(access_log_layer())
         .layer(cors_layer(cors_allowed_origins))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            http_log::request_response_logging_middleware,
+        ))
         .with_state(app_state)
 }
 
@@ -483,6 +478,7 @@ wwIDAQAB
             log_to_file: false,
             log_dir: "./logs".to_string(),
             log_file_prefix: "keylo".to_string(),
+            http_log_body_max_bytes: 8192,
             allow_in_memory_fallback: false,
             enable_setup_wizard: false,
             setup_keys_dir: "./keys".to_string(),
