@@ -7,6 +7,8 @@ pub struct Role {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub assignable_to: String,
+    pub system: bool,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
@@ -16,6 +18,8 @@ pub struct Role {
 pub struct CreateRoleRequest {
     pub name: String,
     pub description: Option<String>,
+    pub assignable_to: Option<String>,
+    pub system: Option<bool>,
 }
 
 /// 更新角色的请求
@@ -23,6 +27,8 @@ pub struct CreateRoleRequest {
 pub struct UpdateRoleRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub assignable_to: Option<String>,
+    pub system: Option<bool>,
 }
 
 /// 权限模型

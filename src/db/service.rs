@@ -72,6 +72,8 @@ pub async fn create_service_client(
     .execute(pool)
     .await?;
 
+    let _ = crate::db::ensure_service_principal(pool, params.service_id).await?;
+
     Ok(())
 }
 
@@ -218,6 +220,10 @@ pub async fn update_service_client(
     .execute(pool)
     .await?;
 
+    if result.rows_affected() > 0 {
+        let _ = crate::db::ensure_service_principal(pool, params.service_id).await?;
+    }
+
     Ok(result.rows_affected() > 0)
 }
 
@@ -253,6 +259,10 @@ pub async fn rotate_service_secret(
     .bind(&new_hash)
     .execute(pool)
     .await?;
+
+    if result.rows_affected() > 0 {
+        let _ = crate::db::ensure_service_principal(pool, service_id).await?;
+    }
 
     Ok(result.rows_affected() > 0)
 }

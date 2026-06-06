@@ -122,7 +122,15 @@ async fn create_role_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateRoleRequest>,
 ) -> ApiResponse {
-    match create_role(require_db(&state)?, &req.name, req.description.as_deref()).await {
+    match create_role_with_options(
+        require_db(&state)?,
+        &req.name,
+        req.description.as_deref(),
+        req.assignable_to.as_deref().unwrap_or("all"),
+        req.system.unwrap_or(false),
+    )
+    .await
+    {
         Ok(role) => {
             audit_event(
                 &state,
@@ -208,6 +216,8 @@ async fn update_role_handler(
         &role_id,
         req.name.as_deref(),
         req.description.as_deref(),
+        req.assignable_to.as_deref(),
+        req.system,
     )
     .await
     {

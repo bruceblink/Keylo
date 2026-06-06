@@ -7,19 +7,31 @@ use crate::models::*;
 /// 角色相关数据库操作
 /// 创建角色
 pub async fn create_role(pool: &PgPool, name: &str, description: Option<&str>) -> Result<Role> {
+    create_role_with_options(pool, name, description, "all", false).await
+}
+
+pub async fn create_role_with_options(
+    pool: &PgPool,
+    name: &str,
+    description: Option<&str>,
+    assignable_to: &str,
+    system: bool,
+) -> Result<Role> {
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().naive_utc();
 
     let role = sqlx::query_as::<_, Role>(
         r#"
-        INSERT INTO roles (id, name, description, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, name, description, created_at, updated_at
+        INSERT INTO roles (id, name, description, assignable_to, system, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, name, description, assignable_to, system, created_at, updated_at
         "#,
     )
     .bind(&id)
     .bind(name)
     .bind(description)
+    .bind(assignable_to)
+    .bind(system)
     .bind(now)
     .bind(now)
     .fetch_one(pool)
@@ -31,7 +43,7 @@ pub async fn create_role(pool: &PgPool, name: &str, description: Option<&str>) -
 /// 获取所有角色
 pub async fn get_all_roles(pool: &PgPool) -> Result<Vec<Role>> {
     let roles = sqlx::query_as::<_, Role>(
-        "SELECT id, name, description, created_at, updated_at FROM roles ORDER BY name",
+        "SELECT id, name, description, assignable_to, system, created_at, updated_at FROM roles ORDER BY name",
     )
     .fetch_all(pool)
     .await?;
@@ -42,7 +54,7 @@ pub async fn get_all_roles(pool: &PgPool) -> Result<Vec<Role>> {
 /// 根据ID获取角色
 pub async fn get_role_by_id(pool: &PgPool, role_id: &str) -> Result<Option<Role>> {
     let role = sqlx::query_as::<_, Role>(
-        "SELECT id, name, description, created_at, updated_at FROM roles WHERE id = $1",
+        "SELECT id, name, description, assignable_to, system, created_at, updated_at FROM roles WHERE id = $1",
     )
     .bind(role_id)
     .fetch_optional(pool)
@@ -54,7 +66,7 @@ pub async fn get_role_by_id(pool: &PgPool, role_id: &str) -> Result<Option<Role>
 /// 根据名称获取角色
 pub async fn get_role_by_name(pool: &PgPool, name: &str) -> Result<Option<Role>> {
     let role = sqlx::query_as::<_, Role>(
-        "SELECT id, name, description, created_at, updated_at FROM roles WHERE name = $1",
+        "SELECT id, name, description, assignable_to, system, created_at, updated_at FROM roles WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(pool)
@@ -69,6 +81,8 @@ pub async fn update_role(
     role_id: &str,
     name: Option<&str>,
     description: Option<&str>,
+    assignable_to: Option<&str>,
+    system: Option<bool>,
 ) -> Result<Option<Role>> {
     let now = chrono::Local::now().naive_utc();
 
@@ -77,14 +91,18 @@ pub async fn update_role(
         UPDATE roles
         SET name = COALESCE($2, name),
             description = COALESCE($3, description),
-            updated_at = $4
+            assignable_to = COALESCE($4, assignable_to),
+            system = COALESCE($5, system),
+            updated_at = $6
         WHERE id = $1
-        RETURNING id, name, description, created_at, updated_at
+        RETURNING id, name, description, assignable_to, system, created_at, updated_at
         "#,
     )
     .bind(role_id)
     .bind(name)
     .bind(description)
+    .bind(assignable_to)
+    .bind(system)
     .bind(now)
     .fetch_optional(pool)
     .await?;
@@ -229,6 +247,10 @@ pub async fn assign_role_to_user(pool: &PgPool, user_id: &str, role_id: &str) ->
         .execute(pool)
         .await?;
 
+    if let Some(principal) = crate::db::ensure_user_principal(pool, user_id).await? {
+        crate::db::assign_role_to_principal(pool, &principal.id, role_id).await?;
+    }
+
     Ok(())
 }
 
@@ -253,6 +275,10 @@ pub async fn revoke_role_from_user(pool: &PgPool, user_id: &str, role_id: &str) 
         .execute(pool)
         .await?;
 
+    if let Some(principal) = crate::db::get_principal_by_ref(pool, "user", user_id).await? {
+        let _ = crate::db::revoke_role_from_principal(pool, &principal.id, role_id).await?;
+    }
+
     Ok(result.rows_affected() > 0)
 }
 
@@ -260,7 +286,7 @@ pub async fn revoke_role_from_user(pool: &PgPool, user_id: &str, role_id: &str) 
 pub async fn get_user_roles(pool: &PgPool, user_id: &str) -> Result<Vec<Role>> {
     let roles = sqlx::query_as::<_, Role>(
         r#"
-        SELECT r.id, r.name, r.description, r.created_at, r.updated_at
+        SELECT r.id, r.name, r.description, r.assignable_to, r.system, r.created_at, r.updated_at
         FROM roles r
         INNER JOIN user_roles ur ON r.id = ur.role_id
         WHERE ur.user_id = $1

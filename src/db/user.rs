@@ -97,6 +97,8 @@ pub async fn create_user(
     .fetch_one(pool)
     .await?;
 
+    crate::db::ensure_user_principal(pool, &user.id).await?;
+
     Ok(user)
 }
 
@@ -136,6 +138,10 @@ pub async fn update_user(
     .bind(now)
     .fetch_optional(pool)
     .await?;
+
+    if let Some(user) = &user {
+        crate::db::ensure_user_principal(pool, &user.id).await?;
+    }
 
     Ok(user)
 }
@@ -381,6 +387,8 @@ pub async fn provision_user_with_roles(
 
     tx.commit().await?;
 
+    crate::db::sync_user_roles_to_principal(pool, &user_id).await?;
+
     let roles = crate::db::get_user_roles(pool, &user_id).await?;
     let permissions = crate::db::get_user_permissions(pool, &user_id).await?;
 
@@ -392,7 +400,13 @@ pub async fn get_effective_permissions(
     pool: &PgPool,
     user_id: &str,
 ) -> Result<(Vec<crate::models::Role>, Vec<crate::models::Permission>)> {
-    let roles = crate::db::get_user_roles(pool, user_id).await?;
-    let permissions = crate::db::get_user_permissions(pool, user_id).await?;
+    crate::db::sync_user_roles_to_principal(pool, user_id).await?;
+
+    let Some(principal) = crate::db::get_principal_by_ref(pool, "user", user_id).await? else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+
+    let roles = crate::db::get_principal_roles(pool, &principal.id).await?;
+    let permissions = crate::db::get_principal_permissions(pool, &principal.id).await?;
     Ok((roles, permissions))
 }

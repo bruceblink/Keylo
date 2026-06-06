@@ -9,14 +9,18 @@ use uuid::Uuid;
 
 pub mod identity;
 pub mod oauth;
+pub mod principal;
 pub mod rbac;
+pub mod resource;
 pub mod service;
 pub mod settings;
 pub mod user;
 
 pub use identity::*;
 pub use oauth::*;
+pub use principal::*;
 pub use rbac::*;
+pub use resource::*;
 pub use service::*;
 pub use settings::*;
 pub use user::*;
@@ -94,6 +98,8 @@ pub async fn upsert_client(
     .execute(pool)
     .await?;
 
+    let _ = ensure_client_principal(pool, client_id).await?;
+
     Ok(())
 }
 
@@ -149,6 +155,8 @@ pub async fn seed_default_clients_with_admin(
         .bind(&hashed_admin_secret)
         .execute(pool)
         .await?;
+
+        let _ = ensure_client_principal(pool, id).await?;
     }
 
     Ok(())
@@ -294,6 +302,10 @@ pub async fn rotate_client_secret(
     .execute(pool)
     .await?;
 
+    if result.rows_affected() > 0 {
+        let _ = ensure_client_principal(pool, client_id).await?;
+    }
+
     Ok(result.rows_affected() > 0)
 }
 
@@ -346,6 +358,8 @@ pub async fn create_management_client(
     .execute(pool)
     .await?;
 
+    let _ = ensure_client_principal(pool, client_id).await?;
+
     Ok(())
 }
 
@@ -375,6 +389,10 @@ pub async fn update_management_client(
     .bind(active)
     .execute(pool)
     .await?;
+
+    if result.rows_affected() > 0 {
+        let _ = ensure_client_principal(pool, client_id).await?;
+    }
 
     Ok(result.rows_affected() > 0)
 }
