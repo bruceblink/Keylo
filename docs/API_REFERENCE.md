@@ -8,6 +8,8 @@
 
 > 多客户端统一用户池与权限模型落地步骤请参考：[MULTI_CLIENT_RBAC_INTEGRATION.md](MULTI_CLIENT_RBAC_INTEGRATION.md)
 
+> Keylo 2.0 Keystone 迁移与客户端 refresh/session 保存策略请参考：[KEYSTONE_KEYLO_2_0_MIGRATION.md](KEYSTONE_KEYLO_2_0_MIGRATION.md) 和 [KEYLO_2_0_CLIENT_GUIDE.md](KEYLO_2_0_CLIENT_GUIDE.md)
+
 ## 1. 鉴权约定
 
 ### 1.1 Token 类型
@@ -73,7 +75,7 @@
   "user_token_endpoint": "http://127.0.0.1:2345/v1/auth/token",
   "admin_token_endpoint": "http://127.0.0.1:2345/v1/admin/token",
   "supported_token_types": ["access", "refresh", "service_access"],
-  "supported_claims": ["iss", "sub", "aud", "exp", "iat", "jti", "scope", "role", "token_type", "uid"],
+  "supported_claims": ["iss", "sub", "aud", "exp", "iat", "jti", "scope", "role", "token_type", "uid", "principal_id", "principal_type"],
   "supported_signing_algorithms": ["RS256"],
   "supported_audiences": ["admin-backend", "crawler"],
   "documentation_uri": "http://127.0.0.1:2345/docs/THIRD_PARTY_INTEGRATION.md"
@@ -93,7 +95,8 @@
 ```json
 {
   "client_id": "alice",
-  "client_secret": "Alice#12345"
+  "client_secret": "Alice#12345",
+  "force": false
 }
 ```
 
@@ -102,10 +105,13 @@
 ```json
 {
   "access_token": "...",
+  "refresh_token": "...",
   "token_type": "Bearer",
   "expires_in": 900
 }
 ```
+
+`force` 可选，默认 `false`。仅当 `SESSION_POLICY=single_user_session` 或 `SESSION_POLICY=single_principal_session` 且认证成功后，`force=true` 才会撤销同一 Principal 的旧 refresh session 并接管登录。
 
 ### 3.2 获取管理 Token
 
@@ -127,16 +133,18 @@
 ```
 
 - `POST /v1/auth/refresh` 的 `refresh_token` 来源说明：
-  - 通过 `POST /v1/admin/token` 获取（该接口会返回 `refresh_token`）
-  - `POST /v1/auth/token` 当前仅返回 `access_token`，不返回 `refresh_token`
-- 刷新时旧 `refresh_token` 会被数据库原子消费；并发或重复使用同一个 refresh token 只允许一个请求成功。
+  - 通过 `POST /v1/auth/token` 获取
+  - 通过 `POST /v1/admin/token` 获取
+- 刷新时旧 `refresh_token` 会被 refresh session 原子消费并固定轮换。
+- 并发或重复使用同一个 refresh token 只允许一个请求成功。
+- 旧 refresh token 重放会撤销所属 refresh session，并写入审计日志。
 
 ### 3.4 当前用户信息
 
 - **GET** `/v1/auth/me`
 - 鉴权：是（access）
-- 响应字段：`sub`、`uid`、`scope[]`、`role[]`、`aud`、`exp`、`iss`、`jti`
-- 字段说明：`uid` 为 `users` 表主键（稳定用户 ID），`sub` 为主体标识字符串。
+- 响应字段：`sub`、`uid`、`principal_id`、`principal_type`、`scope[]`、`role[]`、`aud`、`exp`、`iss`、`jti`
+- 字段说明：`uid` 为 `users` 表主键（稳定用户 ID），`principal_id` 为 Keylo 2.0 统一 Principal 主键，`sub` 为主体标识字符串。
 
 ### 3.5 退出登录
 
@@ -253,6 +261,19 @@
 | PUT | `/api/rbac/roles/{role_id}` |
 | DELETE | `/api/rbac/roles/{role_id}` |
 
+`POST /api/rbac/roles` 请求体：
+
+```json
+{
+  "name": "crawler_service",
+  "description": "Crawler service role",
+  "assignable_to": "service",
+  "system": false
+}
+```
+
+`assignable_to` 可选，支持 `user`、`service`、`client`、`all`，默认 `all`。它用于限制角色可以绑定到哪类 Principal。
+
 ### 6.2 权限管理
 
 | 方法 | 路径 |
@@ -310,16 +331,140 @@
 
 ---
 
-## 7. OAuth 接口
+## 7. Keylo 2.0 Principal、资源树与授权 API
 
-### 7.1 公开 OAuth 登录流程
+### 7.1 Principal 自助查询
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/v1/principals/me/effective-permissions` | access 或 service_access | 当前 Principal 的最终权限 |
+| GET | `/v1/principals/me/resource-tree?app=&type=` | access 或 service_access | 当前 Principal 可见资源树 |
+
+`resource-tree` 的 `type` 支持 `menu`、`button`、`api`、`service`、`data_scope`。用户通常消费 `menu/button/data_scope`，服务通常消费 `api/service`。
+
+### 7.2 统一授权检查
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| POST | `/v1/authorize/check` | access 或 service_access | 单点授权检查 |
+| POST | `/v1/authorize/batch-check` | access 或 service_access | 批量授权检查 |
+
+按权限 code 检查：
+
+```json
+{
+  "permission": "keystone:system:user:list"
+}
+```
+
+按资源解析权限后检查：
+
+```json
+{
+  "app": "crawler",
+  "resource_type": "service",
+  "resource_code": "crawler:news:sync"
+}
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "allowed": true,
+    "principal_id": "service-crawler",
+    "matched_permission": "service:crawler:sync"
+  }
+}
+```
+
+未知 Principal、禁用 Principal、未绑定角色、无匹配权限时默认 `allowed=false`。
+
+### 7.3 Principal 管理
+
+> 统一要求：admin access token
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/admin/principals?principal_type=&active=&limit=&offset=` | Principal 列表 |
+| GET | `/v1/admin/principals/{principal_id}` | Principal 详情 |
+| GET | `/v1/admin/principals/{principal_id}/roles` | Principal 角色 |
+| POST | `/v1/admin/principals/{principal_id}/roles` | 给 Principal 绑定角色 |
+| DELETE | `/v1/admin/principals/{principal_id}/roles/{role_id}` | 撤销 Principal 角色 |
+| GET | `/v1/admin/principals/{principal_id}/effective-permissions` | Principal 最终权限 |
+| GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false` | Principal refresh session 列表 |
+| DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions` | 撤销该 Principal 的所有 refresh session |
+| DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions/{session_id}` | 撤销单个 refresh session |
+
+绑定角色请求体：
+
+```json
+{
+  "role_id": "role-id"
+}
+```
+
+### 7.4 Resource 管理
+
+> 统一要求：admin access token
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/admin/resources?app=&type=&active=` | 资源列表 |
+| POST | `/v1/admin/resources` | 创建或更新资源 |
+| GET | `/v1/admin/resources/{resource_id}/permissions` | 查询资源绑定的权限 |
+| POST | `/v1/admin/resources/{resource_id}/permissions` | 给资源绑定权限 |
+
+创建资源请求体：
+
+```json
+{
+  "app": "keystone",
+  "resource_type": "menu",
+  "code": "system:user",
+  "name": "用户管理",
+  "parent_id": null,
+  "display_order": 10,
+  "description": "Keystone user management menu",
+  "permission_ids": ["permission-id"]
+}
+```
+
+资源通过 `resource_permissions` 绑定到权限点。`/v1/principals/me/resource-tree` 只返回当前 Principal 通过角色权限可见的资源节点，并包含必要祖先节点。
+
+### 7.5 Refresh Session 与会话策略
+
+Keylo 2.0 使用 refresh session 作为稳定会话索引：
+
+- refresh token 只保存 hash，不保存明文。
+- 每次刷新固定轮换 refresh token。
+- 旧 refresh token 重放会撤销所属 session。
+- 管理员可以按 Principal 或单个 session 撤销 refresh session。
+
+会话策略通过 `SESSION_POLICY` 配置：
+
+| 值 | 说明 |
+|---|---|
+| `multi_session` | 默认允许多会话 |
+| `single_user_session` | 同一用户只允许一个活动 refresh session |
+| `single_principal_session` | 同一 Principal 只允许一个活动 refresh session |
+
+单会话策略命中时，第二次登录默认返回 `409 conflict`。认证成功后传入 `force=true` 可显式接管并撤销旧 session。
+
+---
+
+## 8. OAuth 接口
+
+### 8.1 公开 OAuth 登录流程
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
 | GET | `/v1/auth/oauth/login/{provider}` | 否 | 跳转到 OAuth 提供方 |
 | GET | `/v1/auth/oauth/callback/{provider}` | 否 | OAuth 回调并签发系统 token |
 
-### 7.2 OAuth 管理接口（admin）
+### 8.2 OAuth 管理接口（admin）
 
 > 路径前缀：`/api/oauth`
 
@@ -334,7 +479,7 @@
 | POST | `/api/oauth/link` |
 | DELETE | `/api/oauth/unlink/{provider}` |
 
-### 7.3 统一身份源注册中心（admin）
+### 8.3 统一身份源注册中心（admin）
 
 身份源注册中心用于统一登记 Keylo 可接入的身份来源元数据，包括本地密码、OAuth2、OIDC upstream 和 LDAP。当前接口只提供注册与配置管理能力，不改变现有 `/v1/auth/oauth/*` 登录执行路径。
 
@@ -382,9 +527,9 @@
 
 ---
 
-## 8. 服务间认证接口
+## 9. 服务间认证接口
 
-### 8.1 公开接口
+### 9.1 公开接口
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
@@ -414,7 +559,7 @@
 
 `expires_in` 优先使用服务客户端的 `token_ttl_seconds`；未配置时使用全局 `SERVICE_TOKEN_EXPIRY_SECONDS`。
 
-### 8.2 服务受保护接口
+### 9.2 服务受保护接口
 
 | 方法 | 路径 | 鉴权 |
 |---|---|---|
@@ -428,7 +573,7 @@
 }
 ```
 
-### 8.3 服务管理接口（admin）
+### 9.3 服务管理接口（admin）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -481,7 +626,7 @@
 - 省略 `new_secret` 时服务端生成新密钥，并在响应的 `new_secret` 字段中一次性返回。
 - 响应包含 `secret_generated`。
 
-## 8.4 运行时安全约定
+### 9.4 运行时安全约定
 
 - 登录和内省接口按客户端 IP 限流。默认使用 TCP peer IP；只有 `TRUST_PROXY_HEADERS=true` 时才信任 `X-Forwarded-For` / `X-Real-IP`。
 - 浏览器跨域请求按 `CORS_ALLOWED_ORIGINS` 白名单校验 Origin；配置值必须是 scheme + host + 可选端口，不应包含路径。
@@ -489,9 +634,9 @@
 
 ---
 
-## 9. 通用响应格式
+## 10. 通用响应格式
 
-### 9.1 业务接口（多数）
+### 10.1 业务接口（多数）
 
 成功：
 
@@ -512,7 +657,7 @@
 }
 ```
 
-### 9.2 认证错误（`AuthError`）
+### 10.2 认证错误（`AuthError`）
 
 ```json
 {
@@ -524,12 +669,14 @@
 
 ---
 
-## 10. Claims 参考
+## 11. Claims 参考
 
 Access token 关键字段：
 
 - `sub`：主体标识（Subject）。通常为 `user:<username>`、`client:<client_id>` 或特定主体 ID，用于后端识别请求发起方，不建议作为用户表主键使用。
 - `uid`：用户主键 ID（`users.id`）。当 token 代表用户主体时应优先使用 `uid` 进行用户关联与数据查询。
+- `principal_id`：Keylo 2.0 统一 Principal ID。用户、服务和客户端都应能映射到该 ID。
+- `principal_type`：Principal 类型，当前为 `user`、`service` 或 `client`。
 - `iss`：签发方（Issuer）。用于校验 token 来源是否可信，需与服务端配置的发行者一致。
 - `aud`：受众（Audience）。标识 token 目标服务（如 `admin-backend`）；后端应校验是否匹配当前资源服务。
 - `token_type`：令牌类型。当前常见为 `access`（访问令牌）或 `refresh`（刷新令牌）；受保护接口只接受 `access`。
@@ -539,17 +686,17 @@ Access token 关键字段：
 - `iat`：签发时间（Unix 时间戳，秒）。可用于排查时钟漂移、审计与会话时序分析。
 - `jti`：令牌唯一 ID（JWT ID）。用于黑名单吊销、幂等追踪与审计定位。
 
-### 10.1 稳定契约与扩展字段
+### 11.1 稳定契约与扩展字段
 
-第三方服务应只把以下字段作为稳定契约消费：`iss`、`sub`、`aud`、`exp`、`iat`、`jti`、`scope`、`role`、`token_type`、`uid`。
+第三方服务应只把以下字段作为稳定契约消费：`iss`、`sub`、`aud`、`exp`、`iat`、`jti`、`scope`、`role`、`token_type`、`uid`、`principal_id`、`principal_type`。
 
 Keylo 后续可能在 token 中增加更多字段。第三方服务应忽略未知 claims，避免将未文档化字段作为授权依据。
 
-### 10.2 Audience 配置
+### 11.2 Audience 配置
 
 Keylo 使用 `JWT_AUDIENCES` 配置用户/管理 access token 可接受的 audience 白名单，默认值为 `admin-backend,crawler`。新增资源服务时，建议先把服务标识加入 `JWT_AUDIENCES` 或通过服务客户端的 `allowed_audiences` 管理服务 token 的目标 audience。
 
-## 11. 后端校验建议顺序（推荐）
+## 12. 后端校验建议顺序（推荐）
 
 为保证安全性与可观测性，建议后端按以下顺序做统一校验：
 
@@ -564,14 +711,14 @@ Keylo 使用 `JWT_AUDIENCES` 配置用户/管理 access token 可接受的 audie
 
 说明：高敏接口可叠加内省（introspect）作为防御纵深。
 
-## 12. 前端使用建议（非安全边界）
+## 13. 前端使用建议（非安全边界）
 
 - 前端可使用 `scope` 与 `role` 做导航、按钮、页面块的显示控制。
 - 前端隐藏仅用于体验优化，**不作为安全边界**。
 - 真正访问控制必须由后端再次校验 token claims。
 - 当权限变更后，应引导前端刷新 token，以拿到最新 claims。
 
-## 13. 权限变更生效策略
+## 14. 权限变更生效策略
 
 - 角色/权限变更后，对“新签发 token”立即生效。
 - 已签发旧 token 在过期前仍可能保留旧权限。
