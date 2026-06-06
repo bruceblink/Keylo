@@ -29,6 +29,7 @@ pub struct AuthBody {
 pub struct AuthPayload {
     pub client_id: String,
     pub client_secret: String,
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

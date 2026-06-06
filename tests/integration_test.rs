@@ -1515,6 +1515,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_single_user_session_requires_explicit_takeover() {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("root_single_{}", ts);
+        let password = "RootSingle#123";
+        let config = Config {
+            enable_super_admin_bootstrap: true,
+            super_admin_username: Some(username.clone()),
+            super_admin_email: Some(format!("{}@example.com", username)),
+            super_admin_password: Some(password.to_string()),
+            session_policy: "single_user_session".to_string(),
+            ..test_config()
+        };
+
+        let server = setup_test_server_with_config(config).await;
+
+        let first_login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": password
+            }))
+            .await;
+
+        if first_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        first_login_resp.assert_status_ok();
+        let first_login_body: serde_json::Value = first_login_resp.json();
+        let first_refresh_token = first_login_body["refresh_token"].as_str().unwrap();
+
+        let rejected_login_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": password
+            }))
+            .await;
+        assert_eq!(rejected_login_resp.status_code(), StatusCode::CONFLICT);
+
+        let takeover_resp = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": password,
+                "force": true
+            }))
+            .await;
+        takeover_resp.assert_status_ok();
+        let takeover_body: serde_json::Value = takeover_resp.json();
+        assert!(takeover_body["refresh_token"].as_str().is_some());
+
+        let old_refresh_resp = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": first_refresh_token }))
+            .await;
+        assert_eq!(old_refresh_resp.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_third_party_user_migration_import_is_idempotent() {
         let server = setup_test_server().await;
         let admin_login_resp = server

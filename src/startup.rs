@@ -462,6 +462,7 @@ wwIDAQAB
             environment: "development".to_string(),
             token_expiry_seconds: 900,
             refresh_token_expiry_seconds: 2_592_000,
+            session_policy: "multi_session".to_string(),
             max_failed_login_attempts: 5,
             login_lockout_seconds: 300,
             auth_rate_limit_window_seconds: 60,

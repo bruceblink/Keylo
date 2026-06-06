@@ -155,6 +155,48 @@ async fn access_claims_for_principal(
         _ => Err(AuthError::TokenTypeInvalid),
     }
 }
+
+async fn enforce_refresh_session_policy(
+    state: &AppState,
+    db: &sqlx::PgPool,
+    principal: &Principal,
+    force_takeover: bool,
+) -> Result<(), AuthError> {
+    let applies = match state.config.session_policy.as_str() {
+        "multi_session" => false,
+        "single_user_session" => principal.principal_type == "user",
+        "single_principal_session" => true,
+        _ => false,
+    };
+
+    if !applies {
+        return Ok(());
+    }
+
+    if !crate::db::has_active_refresh_session_for_principal(db, &principal.id)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to check refresh sessions".to_string()))?
+    {
+        return Ok(());
+    }
+
+    if !force_takeover {
+        return Err(AuthError::Conflict("active_session_exists".to_string()));
+    }
+
+    crate::db::revoke_principal_refresh_sessions(db, &principal.id, Some("session_takeover"))
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to revoke refresh sessions".to_string()))?;
+    audit_event(
+        state,
+        "auth.session.takeover",
+        Some(&principal.subject),
+        Some(&format!("principal_id={}", principal.id)),
+    )
+    .await;
+
+    Ok(())
+}
 fn audit_event_background(
     state: &AppState,
     event_type: &str,
@@ -346,6 +388,10 @@ pub async fn auth_token(
             .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?,
         None => None,
     };
+    if let Some(principal) = principal.as_ref() {
+        enforce_refresh_session_policy(&state, db, principal, payload.force.unwrap_or(false))
+            .await?;
+    }
 
     // Create access token claims
     let access_claims = Claims {
@@ -493,6 +539,10 @@ pub async fn admin_token(
     let principal = crate::db::ensure_client_principal(db, &payload.client_id)
         .await
         .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?;
+    if let Some(principal) = principal.as_ref() {
+        enforce_refresh_session_policy(&state, db, principal, payload.force.unwrap_or(false))
+            .await?;
+    }
     let access_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
         uid: None,

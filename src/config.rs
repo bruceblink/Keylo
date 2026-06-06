@@ -531,6 +531,8 @@ pub struct Config {
     pub token_expiry_seconds: i64,
     /// 刷新token过期时间（秒）
     pub refresh_token_expiry_seconds: i64,
+    /// Refresh-session based login policy: multi_session | single_user_session | single_principal_session.
+    pub session_policy: String,
     /// 连续登录失败次数阈值
     pub max_failed_login_attempts: u32,
     /// 登录锁定时长（秒）
@@ -610,6 +612,15 @@ impl Config {
 
         let token_expiry_seconds = parse_i64_env("TOKEN_EXPIRY_SECONDS", 900);
         let refresh_token_expiry_seconds = parse_i64_env("REFRESH_TOKEN_EXPIRY_SECONDS", 2_592_000);
+        let session_policy = env::var("SESSION_POLICY")
+            .ok()
+            .filter(|value| {
+                matches!(
+                    value.as_str(),
+                    "multi_session" | "single_user_session" | "single_principal_session"
+                )
+            })
+            .unwrap_or_else(|| "multi_session".to_string());
         let max_failed_login_attempts = parse_u32_env("MAX_FAILED_LOGIN_ATTEMPTS", 5);
         let login_lockout_seconds = parse_i64_env("LOGIN_LOCKOUT_SECONDS", 300);
         let auth_rate_limit_window_seconds = parse_i64_env("AUTH_RATE_LIMIT_WINDOW_SECONDS", 60);
@@ -658,6 +669,7 @@ impl Config {
             environment,
             token_expiry_seconds,
             refresh_token_expiry_seconds,
+            session_policy,
             max_failed_login_attempts,
             login_lockout_seconds,
             auth_rate_limit_window_seconds,
@@ -1013,6 +1025,7 @@ mod tests {
             environment: "development".to_string(),
             token_expiry_seconds: 900,
             refresh_token_expiry_seconds: 2_592_000,
+            session_policy: "multi_session".to_string(),
             max_failed_login_attempts: 5,
             login_lockout_seconds: 300,
             auth_rate_limit_window_seconds: 60,
