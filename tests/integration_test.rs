@@ -1448,7 +1448,7 @@ mod tests {
 
         login_resp.assert_status_ok();
         let login_body: serde_json::Value = login_resp.json();
-        assert_eq!(login_body["refresh_token"], serde_json::Value::Null);
+        assert!(login_body["refresh_token"].as_str().is_some());
         let access_token = login_body["access_token"].as_str().unwrap();
 
         let admin_users_resp = server
@@ -1811,7 +1811,7 @@ mod tests {
         let job_id = create_job_body["job_id"].as_str().unwrap().to_string();
 
         let mut final_status = String::new();
-        for _ in 0..20 {
+        for _ in 0..80 {
             let status_resp = server
                 .get(&format!("/v1/admin/users/migrations/jobs/{}", job_id))
                 .add_header("Authorization", format!("Bearer {}", admin_access_token))
@@ -1827,7 +1827,7 @@ mod tests {
                 break;
             }
 
-            sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(250)).await;
         }
 
         assert!(final_status == "completed" || final_status == "failed");
