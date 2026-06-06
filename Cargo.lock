@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "keylo"
-version = "1.5.2"
+version = "2.0.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
