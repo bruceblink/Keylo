@@ -1,0 +1,194 @@
+use axum::{
+    extract::{Path, Query, State},
+    response::Json,
+    routing::{delete, get, post},
+    Router,
+};
+use serde_json::json;
+
+use crate::{
+    errors::AuthError,
+    models::{
+        AssignRoleRequest, Claims, PrincipalEffectivePermissionsResponse, PrincipalListQuery,
+    },
+    state::AppState,
+};
+
+pub fn principal_admin_routes() -> Router<AppState> {
+    Router::new()
+        .route("/v1/admin/principals", get(list_principals_handler))
+        .route(
+            "/v1/admin/principals/{principal_id}",
+            get(get_principal_handler),
+        )
+        .route(
+            "/v1/admin/principals/{principal_id}/roles",
+            get(get_principal_roles_handler),
+        )
+        .route(
+            "/v1/admin/principals/{principal_id}/roles",
+            post(assign_principal_role_handler),
+        )
+        .route(
+            "/v1/admin/principals/{principal_id}/roles/{role_id}",
+            delete(revoke_principal_role_handler),
+        )
+        .route(
+            "/v1/admin/principals/{principal_id}/effective-permissions",
+            get(get_principal_effective_permissions_handler),
+        )
+}
+
+async fn list_principals_handler(
+    State(state): State<AppState>,
+    Query(query): Query<PrincipalListQuery>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let principals = crate::db::list_principals(
+        db,
+        query.principal_type.as_deref(),
+        query.active,
+        query.limit.unwrap_or(50).clamp(1, 200),
+        query.offset.unwrap_or(0).max(0),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": principals
+    })))
+}
+
+async fn get_principal_handler(
+    State(state): State<AppState>,
+    Path(principal_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let principal = crate::db::get_principal_by_id(db, &principal_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or(AuthError::NotFound)?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": principal
+    })))
+}
+
+async fn get_principal_roles_handler(
+    State(state): State<AppState>,
+    Path(principal_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let roles = crate::db::get_principal_roles(db, &principal_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": roles
+    })))
+}
+
+async fn assign_principal_role_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(principal_id): Path<String>,
+    Json(payload): Json<AssignRoleRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    crate::db::assign_role_to_principal(db, &principal_id, &payload.role_id)
+        .await
+        .map_err(|e| AuthError::InvalidRequest(e.to_string()))?;
+    crate::db::create_audit_log(
+        db,
+        "principal.role_assigned",
+        Some(&claims.sub),
+        Some(&format!(
+            "principal_id={}, role_id={}",
+            principal_id, payload.role_id
+        )),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Role assigned to principal successfully"
+    })))
+}
+
+async fn revoke_principal_role_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((principal_id, role_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let revoked = crate::db::revoke_role_from_principal(db, &principal_id, &role_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    if !revoked {
+        return Err(AuthError::NotFound);
+    }
+    crate::db::create_audit_log(
+        db,
+        "principal.role_revoked",
+        Some(&claims.sub),
+        Some(&format!(
+            "principal_id={}, role_id={}",
+            principal_id, role_id
+        )),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Role revoked from principal successfully"
+    })))
+}
+
+async fn get_principal_effective_permissions_handler(
+    State(state): State<AppState>,
+    Path(principal_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let principal = crate::db::get_principal_by_id(db, &principal_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or(AuthError::NotFound)?;
+    let roles = crate::db::get_principal_roles(db, &principal.id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    let permissions = crate::db::get_principal_permissions(db, &principal.id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": PrincipalEffectivePermissionsResponse {
+            principal,
+            roles,
+            permissions,
+        }
+    })))
+}

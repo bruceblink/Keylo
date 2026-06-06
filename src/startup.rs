@@ -207,6 +207,7 @@ async fn cleanup_audit_logs(pool: &sqlx::PgPool, retention_days: i64) {
 fn base_public_routes(include_oauth: bool) -> Router<AppState> {
     let routes = Router::new()
         .merge(routes::auth::public_router())
+        .merge(routes::authorization::authorization_routes())
         .merge(routes::service::service_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
@@ -263,6 +264,14 @@ fn protected_routes(app_state: &AppState) -> Router<AppState> {
         )
         .merge(
             routes::auth::admin_router()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .merge(
+            routes::principal::principal_admin_routes()
+                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+        )
+        .merge(
+            routes::resource::resource_admin_routes()
                 .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
         )
         .nest(

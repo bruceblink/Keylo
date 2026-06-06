@@ -6,6 +6,12 @@ pub struct ServiceClaims {
     /// Subject：服务身份，格式 "service:<service_id>"
     pub sub: String,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_id: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_type: Option<String>,
+
     /// Issuer：签发方
     pub iss: String,
 
@@ -87,6 +93,10 @@ pub struct IntrospectResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
@@ -107,6 +117,8 @@ impl IntrospectResponse {
         Self {
             active: false,
             sub: None,
+            principal_id: None,
+            principal_type: None,
             scope: None,
             role: None,
             aud: None,
@@ -121,6 +133,8 @@ impl IntrospectResponse {
         Self {
             active: true,
             sub: Some(claims.sub.clone()),
+            principal_id: claims.principal_id.clone(),
+            principal_type: claims.principal_type.clone(),
             scope: Some(claims.scope.join(" ")),
             role: claims.role.clone(),
             aud: Some(claims.aud.clone()),

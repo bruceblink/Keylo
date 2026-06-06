@@ -28,6 +28,14 @@ pub struct Claims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
 
+    /// Keylo 2.0 unified Principal ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_id: Option<String>,
+
+    /// Keylo 2.0 Principal type: user | service | client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_type: Option<String>,
+
     /// Issuer：签发方
     pub iss: String,
 

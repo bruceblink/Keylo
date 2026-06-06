@@ -647,10 +647,21 @@ pub async fn jit_register_user(
     })?;
 
     let is_admin = is_user_admin(db, &user.id).await;
+    let principal = crate::db::ensure_user_principal(db, &user.id)
+        .await
+        .map_err(|_| {
+            migration_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                MigrationErrorCode::InternalError,
+                "failed to resolve principal",
+            )
+        })?;
     let now = Utc::now().timestamp();
     let claims = Claims {
         sub: format!("user:{}", user.username),
         uid: Some(user.id.clone()),
+        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_type: Some("user".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: if is_admin {

@@ -456,11 +456,24 @@ async fn oauth_callback(
     };
 
     // 生成JWT token
+    let principal = crate::db::ensure_user_principal(db, &user_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Failed to resolve principal: {}", e)
+                })),
+            )
+        })?;
     let token_expires_in = 3600; // 1小时
     let now = chrono::Utc::now().timestamp();
     let access_claims = crate::models::Claims {
         sub: user_id.clone(),
         uid: Some(user_id.clone()),
+        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_type: Some("user".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["read".into(), "write".into()],

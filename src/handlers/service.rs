@@ -56,10 +56,14 @@ pub async fn service_token(
                 let expires_in = policy
                     .token_ttl_seconds
                     .unwrap_or(state.config.service_token_expiry_seconds);
+                let principal = crate::db::ensure_service_principal(db, &payload.service_id)
+                    .await
+                    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
                 let token = mint_service_token(
                     &state,
                     &payload.service_id,
+                    principal.as_ref().map(|value| value.id.as_str()),
                     &granted_scopes,
                     &audience,
                     expires_in,
@@ -327,6 +331,7 @@ pub async fn get_service(
 pub fn mint_service_token(
     state: &AppState,
     service_id: &str,
+    principal_id: Option<&str>,
     scopes: &[String],
     audience: &str,
     expires_in: i64,
@@ -336,6 +341,8 @@ pub fn mint_service_token(
 
     let claims = ServiceClaims {
         sub: format!("service:{}", service_id),
+        principal_id: principal_id.map(str::to_string),
+        principal_type: Some("service".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: audience.to_string(),
         scope: scopes.to_vec(),

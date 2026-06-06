@@ -281,10 +281,19 @@ pub async fn auth_token(
         false
     };
 
+    let principal = match user_id.as_deref() {
+        Some(user_id) => crate::db::ensure_user_principal(db, user_id)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?,
+        None => None,
+    };
+
     // Create access token claims
     let access_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
         uid: user_id.clone(),
+        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_type: Some("user".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, is_admin_user),
@@ -388,9 +397,14 @@ pub async fn admin_token(
 
     let now = Utc::now().timestamp();
     let subject_prefix = "client";
+    let principal = crate::db::ensure_client_principal(db, &payload.client_id)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?;
     let access_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
         uid: None,
+        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_type: Some("client".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, true),
@@ -404,6 +418,8 @@ pub async fn admin_token(
     let refresh_claims = Claims {
         sub: format!("{}:{}", subject_prefix, payload.client_id),
         uid: None,
+        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_type: Some("client".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -776,6 +792,8 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
     Ok(Json(MeResponse {
         sub: claims.sub,
         uid: claims.uid,
+        principal_id: claims.principal_id,
+        principal_type: claims.principal_type,
         scope: claims.scope,
         role: claims.role,
         aud: claims.aud,
@@ -852,6 +870,8 @@ pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloCon
             "role".to_string(),
             "token_type".to_string(),
             "uid".to_string(),
+            "principal_id".to_string(),
+            "principal_type".to_string(),
         ],
         supported_signing_algorithms: vec!["RS256".to_string()],
         supported_audiences: state.config.jwt_audiences.clone(),
@@ -899,10 +919,20 @@ pub async fn auth_refresh(
         return Err(AuthError::InsufficientRole);
     }
 
+    let principal = if let Some(db) = &state.db {
+        crate::db::ensure_client_principal(db, &client_id)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?
+    } else {
+        None
+    };
+
     // Create new access token claims
     let access_claims = Claims {
         sub: format!("client:{}", client_id),
         uid: None,
+        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_type: Some("client".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope("client", is_admin_client),
@@ -917,6 +947,8 @@ pub async fn auth_refresh(
     let new_refresh_claims = Claims {
         sub: format!("client:{}", client_id),
         uid: None,
+        principal_id: principal.as_ref().map(|value| value.id.clone()),
+        principal_type: Some("client".to_string()),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
