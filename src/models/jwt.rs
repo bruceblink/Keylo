@@ -113,6 +113,10 @@ impl FromRequestParts<AppState> for Claims {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        if let Some(claims) = parts.extensions.get::<Claims>() {
+            return Ok(claims.clone());
+        }
+
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
@@ -267,5 +271,43 @@ impl Keys {
                 ErrorKind::ExpiredSignature => AuthError::ExpiredToken,
                 _ => AuthError::InvalidToken,
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn claims_extractor_reuses_middleware_claims() {
+        let state = AppState::default();
+        let claims = Claims {
+            sub: "user:alice".to_string(),
+            uid: Some("user-1".to_string()),
+            principal_id: Some("user-user-1".to_string()),
+            principal_type: Some("user".to_string()),
+            iss: state.config.jwt_issuer.clone(),
+            aud: "admin-backend".to_string(),
+            scope: vec!["read".to_string(), "write".to_string()],
+            role: vec!["user".to_string()],
+            token_type: "access".to_string(),
+            exp: chrono::Utc::now().timestamp() + 60,
+            iat: chrono::Utc::now().timestamp(),
+            jti: "test-jti".to_string(),
+        };
+
+        let request = http::Request::builder().uri("/").body(()).unwrap();
+        let (mut parts, _) = request.into_parts();
+        parts.extensions.insert(claims.clone());
+
+        let extracted =
+            <Claims as FromRequestParts<AppState>>::from_request_parts(&mut parts, &state)
+                .await
+                .unwrap();
+
+        assert_eq!(extracted.sub, claims.sub);
+        assert_eq!(extracted.uid, claims.uid);
+        assert_eq!(extracted.principal_id, claims.principal_id);
+        assert_eq!(extracted.jti, claims.jti);
     }
 }
