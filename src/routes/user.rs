@@ -41,6 +41,24 @@ fn self_user_identity_from_claims(claims: &Claims) -> Result<SelfUserIdentity<'_
         .ok_or("Missing uid in token")
 }
 
+fn validate_optional_password(password: Option<&str>) -> Result<(), &'static str> {
+    if let Some(password) = password {
+        validate_password_complexity(password)?;
+    }
+
+    Ok(())
+}
+
+fn invalid_password_response(message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "success": false,
+            "error": message,
+        })),
+    )
+}
+
 pub fn user_routes() -> Router<AppState> {
     admin_user_routes().merge(self_user_routes())
 }
@@ -116,6 +134,10 @@ async fn create_user_handler(
 ) -> ApiResponse {
     let db = require_db(&state)?;
 
+    if let Err(msg) = validate_optional_password(req.password.as_deref()) {
+        return Err(invalid_password_response(msg));
+    }
+
     match create_user(db, &req.username, &req.email, req.password.as_deref()).await {
         Ok(user) => Ok(Json(json!({
             "success": true,
@@ -149,6 +171,10 @@ async fn provision_user_handler(
     Json(req): Json<ProvisionUserRequest>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
+
+    if let Err(msg) = validate_optional_password(req.password.as_deref()) {
+        return Err(invalid_password_response(msg));
+    }
 
     match provision_user_with_roles(
         db,
@@ -289,6 +315,10 @@ async fn update_user_handler(
 ) -> ApiResponse {
     let db = require_db(&state)?;
 
+    if let Err(msg) = validate_optional_password(req.password.as_deref()) {
+        return Err(invalid_password_response(msg));
+    }
+
     match crate::db::user::update_user(
         db,
         &user_id,
@@ -354,6 +384,10 @@ async fn reset_user_password_handler(
     Json(req): Json<ResetPasswordRequest>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
+
+    if let Err(msg) = validate_optional_password(Some(&req.password)) {
+        return Err(invalid_password_response(msg));
+    }
 
     match crate::db::user::reset_user_password(db, &user_id, &req.password).await {
         Ok(true) => Ok(Json(json!({
@@ -512,5 +546,23 @@ mod tests {
         let claims = claims("client:web", Some("user-id"), Some("client"));
 
         assert!(self_user_identity_from_claims(&claims).is_err());
+    }
+
+    #[test]
+    fn validate_optional_password_allows_absent_password() {
+        assert!(validate_optional_password(None).is_ok());
+    }
+
+    #[test]
+    fn validate_optional_password_rejects_weak_password() {
+        assert_eq!(
+            validate_optional_password(Some("short")).unwrap_err(),
+            "Password must be at least 8 characters long"
+        );
+    }
+
+    #[test]
+    fn validate_optional_password_accepts_complex_password() {
+        assert!(validate_optional_password(Some("Password123!")).is_ok());
     }
 }

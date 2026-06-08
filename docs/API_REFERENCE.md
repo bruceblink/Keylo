@@ -242,6 +242,8 @@
 | POST | `/v1/admin/users/migrations/jobs` | 提交异步导入任务 |
 | GET | `/v1/admin/users/migrations/jobs/{job_id}` | 查询异步导入任务状态 |
 
+管理端创建、预配、更新、重置用户密码时，非空密码均需满足统一复杂度策略：至少 8 位，并包含大写字母、小写字母、数字和特殊字符。
+
 ### 5.1 Provision 请求体
 
 ```json
