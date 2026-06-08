@@ -20,6 +20,27 @@ use crate::{
     utils::{require_db, ApiResponse},
 };
 
+enum SelfUserIdentity<'a> {
+    Id(&'a str),
+    Username(&'a str),
+}
+
+fn self_user_identity_from_claims(claims: &Claims) -> Result<SelfUserIdentity<'_>, &'static str> {
+    if matches!(claims.principal_type.as_deref(), Some(kind) if kind != "user") {
+        return Err("Missing uid in token");
+    }
+
+    if let Some(uid) = claims.uid.as_deref() {
+        return Ok(SelfUserIdentity::Id(uid));
+    }
+
+    claims
+        .sub
+        .strip_prefix("user:")
+        .map(SelfUserIdentity::Username)
+        .ok_or("Missing uid in token")
+}
+
 pub fn user_routes() -> Router<AppState> {
     admin_user_routes().merge(self_user_routes())
 }
@@ -363,77 +384,46 @@ async fn change_password_handler(
 ) -> ApiResponse {
     let db = require_db(&state)?;
 
-    // 优先使用JWT中的uid（users表主键）
-    let user_id = if let Some(uid) = claims.uid.as_deref() {
-        uid.to_string()
-    } else if claims.sub.starts_with("user:") {
-        // 如果是user格式，从数据库中通过用户名查找用户ID
-        let username = &claims.sub[5..]; // 移除"user:"前缀
-        tracing::debug!("Looking up user by username: {}", username);
-        match crate::db::user::get_user_by_username(db, username).await {
-            Ok(Some(user)) => {
-                tracing::debug!("Found user: {}", user.id);
-                user.id
-            }
-            Ok(None) => {
-                tracing::warn!("User not found for username: {}", username);
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "success": false,
-                        "error": "User not found",
-                    })),
-                ));
-            }
-            Err(e) => {
-                tracing::warn!("Database error: {}", e);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "success": false,
-                        "error": format!("Failed to find user: {}", e),
-                    })),
-                ));
+    let user_id = match self_user_identity_from_claims(&claims) {
+        Ok(SelfUserIdentity::Id(uid)) => uid.to_string(),
+        Ok(SelfUserIdentity::Username(username)) => {
+            tracing::debug!("Looking up user by username: {}", username);
+            match crate::db::user::get_user_by_username(db, username).await {
+                Ok(Some(user)) => {
+                    tracing::debug!("Found user: {}", user.id);
+                    user.id
+                }
+                Ok(None) => {
+                    tracing::warn!("User not found for username: {}", username);
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({
+                            "success": false,
+                            "error": "User not found",
+                        })),
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!("Database error: {}", e);
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "success": false,
+                            "error": format!("Failed to find user: {}", e),
+                        })),
+                    ));
+                }
             }
         }
-    } else if claims.sub.starts_with("client:") {
-        // 如果是client格式，从数据库中通过用户名查找用户ID
-        let username = &claims.sub[7..]; // 移除"client:"前缀
-        tracing::debug!("Looking up user by username: {}", username);
-        match crate::db::user::get_user_by_username(db, username).await {
-            Ok(Some(user)) => {
-                tracing::debug!("Found user: {}", user.id);
-                user.id
-            }
-            Ok(None) => {
-                tracing::warn!("User not found for username: {}", username);
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "success": false,
-                        "error": "User not found",
-                    })),
-                ));
-            }
-            Err(e) => {
-                tracing::warn!("Database error: {}", e);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "success": false,
-                        "error": format!("Failed to find user: {}", e),
-                    })),
-                ));
-            }
+        Err(message) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "success": false,
+                    "error": message,
+                })),
+            ));
         }
-    } else {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "success": false,
-                "error": "Missing uid in token",
-            })),
-        ));
     };
 
     // 验证新密码复杂度
@@ -473,5 +463,54 @@ async fn change_password_handler(
                 "error": format!("Failed to change password: {}", e),
             })),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claims(sub: &str, uid: Option<&str>, principal_type: Option<&str>) -> Claims {
+        Claims {
+            sub: sub.to_string(),
+            uid: uid.map(str::to_string),
+            principal_id: Some("principal-1".to_string()),
+            principal_type: principal_type.map(str::to_string),
+            iss: "keylo".to_string(),
+            aud: "admin-backend".to_string(),
+            scope: vec!["read".to_string(), "write".to_string()],
+            role: vec!["user".to_string()],
+            token_type: "access".to_string(),
+            exp: 1,
+            iat: 1,
+            jti: "jti-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn self_user_identity_uses_uid() {
+        let claims = claims("user:alice", Some("user-id"), Some("user"));
+
+        match self_user_identity_from_claims(&claims).unwrap() {
+            SelfUserIdentity::Id(value) => assert_eq!(value, "user-id"),
+            SelfUserIdentity::Username(_) => panic!("expected uid identity"),
+        }
+    }
+
+    #[test]
+    fn self_user_identity_allows_legacy_user_subject() {
+        let claims = claims("user:alice", None, None);
+
+        match self_user_identity_from_claims(&claims).unwrap() {
+            SelfUserIdentity::Username(value) => assert_eq!(value, "alice"),
+            SelfUserIdentity::Id(_) => panic!("expected username identity"),
+        }
+    }
+
+    #[test]
+    fn self_user_identity_rejects_client_principal() {
+        let claims = claims("client:web", Some("user-id"), Some("client"));
+
+        assert!(self_user_identity_from_claims(&claims).is_err());
     }
 }
