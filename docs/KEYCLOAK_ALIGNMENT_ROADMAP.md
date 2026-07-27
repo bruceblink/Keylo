@@ -2,7 +2,7 @@
 
 ## 1. 目的与边界
 
-本计划以 Keycloak 作为成熟身份平台的能力参照，用于决定 Keylo 的后续投入；它**不**以功能数量追平 Keycloak 为目标。
+本计划以 Keycloak 作为成熟身份平台的能力参照，用于决定 Keylo 的后续投入；它**不**以功能数量追平 Keycloak 为目标。Keylo 的目标是成为可被通用客户端和外部系统接入的身份认证与授权中心，Keystone 只是首个使用方和集成验证对象。
 
 Keylo 保持轻量统一身份、认证和授权中心的定位：
 
@@ -24,25 +24,45 @@ Keylo 保持轻量统一身份、认证和授权中心的定位：
 
 ### 1.2 OIDC 的决策原则
 
-OIDC 不是无条件的 P0。只有 Keylo 要服务未知第三方应用、浏览器 SPA、移动端或企业客户时，才优先实现 OIDC Provider。
+Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌生第三方应用、浏览器 SPA、移动端和企业系统应能按公开标准接入，不应依赖 Keylo 专用 Token API。
 
-若当前主要服务 Keystone 和其他可控的内部系统，优先级应为 MFA、身份源执行链路和可观测性；自定义 Token API 可以继续使用。无论是否实施 OIDC，现有 JWT/JWKS 与 Principal RBAC 均保留，OIDC 不替代授权模型。
+现有自定义 Token API 在迁移期继续兼容；OIDC 不替代 JWT/JWKS 或 Principal RBAC。OIDC 负责标准化登录与身份声明，Keylo 继续负责签名、会话、主体和授权决策。
 
 ## 2. 当前基线
 
 | 领域 | 已有能力 | 当前缺口 |
 | --- | --- | --- |
 | 主体与授权 | Principal、角色、权限、资源树、单点/批量授权检查 | 数据范围与上下文条件尚未形成受控策略模型。 |
-| Token 与会话 | RS256、JWKS、服务 Token、Refresh Session 原子轮换与重放撤销 | 缺少面向标准客户端的 OIDC 授权码与 PKCE 流程。 |
+| Token 与会话 | RS256、JWKS、服务 Token、Refresh Session 原子轮换与重放撤销 | 缺少作为通用接入契约的 OIDC 授权码、PKCE、ID Token 和标准 Discovery。 |
 | 外部身份 | OAuth 登录、身份源注册表 | `oidc_upstream` 与 LDAP 当前仅登记配置，尚未进入可执行登录流程。 |
 | 安全 | 密码策略、限流、审计、密钥轮换 | 缺少 MFA、Passkey、恢复码与敏感操作的二次认证。 |
 | 运维 | health/ready 检查、结构化日志、审计日志 | 缺少指标、分布式追踪、事件投递与 HA 演练基线。 |
 
 ## 3. 分阶段计划
 
-### 阶段 A：账户安全与身份源可用性
+### 阶段 A：标准 OIDC 接入
 
-**目标：** 先降低高价值账号被接管的风险，并让已登记的身份源真正可登录。
+**目标：** 让标准 Web、SPA 和移动端客户端能把 Keylo 当作 OIDC Provider 安全接入。
+
+范围：
+
+1. 实现 OIDC Discovery、客户端注册模型、Authorization Code Flow、PKCE、`state`、`nonce`、ID Token 和 UserInfo。
+2. 精确校验 redirect URI、允许的 grant、Token 生命周期、客户端认证方式、受信任来源与禁用状态。
+3. 建立浏览器登录会话、授权同意或明确的自动授权规则、授权码一次性消费和退出边界。
+4. 提供 Node、Spring、Go、Rust 的最小标准 OIDC 接入样例，并用真实标准客户端库做兼容验证。
+
+验收：
+
+- 通用 OIDC 客户端库无需 Keylo 专用适配即可完成授权码 + PKCE 登录。
+- 非法 redirect URI、缺少/错误 PKCE、重放 code、错误 `state` 或 `nonce` 均被拒绝。
+- ID Token 的 `iss`、`aud`、`exp`、`nonce` 和签名可由独立客户端验证。
+- OIDC 登录得到的主体继续通过现有 Principal RBAC 授权，不产生双套权限模型。
+
+暂不做：Device Flow、CIBA、PAR、DPoP、Token Exchange；这些由明确协议客户需求触发。
+
+### 阶段 B：账户安全与身份联邦
+
+**目标：** 降低账号接管风险，并让 Keylo 能联邦接入外部身份源。
 
 范围：
 
@@ -59,26 +79,6 @@ OIDC 不是无条件的 P0。只有 Keylo 要服务未知第三方应用、浏�
 - 每个安全状态变化都有可检索审计记录，审计中不含密钥、验证码或恢复码明文。
 
 暂不做：SAML、Passkey、SCIM、通用规则引擎和多租户。
-
-### 阶段 B：标准客户端接入（条件性实施）
-
-**前置条件：** 至少有一个非自研 Web/SPA/移动端或外部客户需要直接接入 Keylo。
-
-范围：
-
-1. 实现 OIDC Discovery、Authorization Code Flow、PKCE、`state`、`nonce`、ID Token 和 UserInfo。
-2. 引入客户端注册模型：精确 redirect URI、允许的 grant、Token 生命周期、受信任来源与禁用状态。
-3. 为浏览器客户端建立登录会话、同意页或明确的自动授权规则、退出传播边界。
-4. 提供 Node、Spring、Go、Rust 的最小标准 OIDC 接入样例。
-
-验收：
-
-- 通用 OIDC 客户端库无需 Keylo 专用适配即可完成授权码 + PKCE 登录。
-- 非法 redirect URI、缺少/错误 PKCE、重放 code、错误 `state` 或 `nonce` 均被拒绝。
-- ID Token 的 `iss`、`aud`、`exp`、`nonce` 和签名可由独立客户端验证。
-- OIDC 登录得到的主体继续通过现有 Principal RBAC 授权，不产生双套权限模型。
-
-暂不做：Device Flow、CIBA、PAR、DPoP、Token Exchange；这些由明确协议客户需求触发。
 
 ### 阶段 C：授权治理与组织隔离
 
@@ -138,4 +138,4 @@ OIDC 不是无条件的 P0。只有 Keylo 要服务未知第三方应用、浏�
 
 ## 6. 建议的下一项工作
 
-实施阶段 A 的第一项：**TOTP MFA 与恢复码的领域模型及测试设计**。它不改变现有外部 API 的认证模式，安全收益高，并能为后续 OIDC 登录和 Passkey 提供统一的二次认证基础。
+实施阶段 A 的第一项：**OIDC 客户端注册模型与 Discovery 契约**。先建立客户端、redirect URI 和 grant 的安全边界，再实现授权码与 PKCE，避免把协议参数散落进现有自定义登录接口。
