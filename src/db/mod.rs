@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 pub mod identity;
 pub mod oauth;
+pub mod oidc;
 pub mod principal;
 pub mod rbac;
 pub mod refresh_session;
@@ -19,6 +20,7 @@ pub mod user;
 
 pub use identity::*;
 pub use oauth::*;
+pub use oidc::*;
 pub use principal::*;
 pub use rbac::*;
 pub use refresh_session::*;

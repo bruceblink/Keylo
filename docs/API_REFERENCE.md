@@ -63,6 +63,20 @@
 
 `/.well-known/keylo-configuration` 用于第三方服务发现 Keylo 的核心接入端点。它不是完整 OIDC discovery 文档，而是 Keylo 面向轻量统一鉴权场景提供的稳定集成契约。
 
+`/.well-known/openid-configuration` 已预留为标准 OIDC Discovery 地址。在授权端点实现前，它返回 `501 oidc_not_enabled`，不会发布不可用的 `authorization_endpoint` 或 `token_endpoint`。
+
+### 2.2 OIDC 客户端注册
+
+> 以下管理接口统一要求：admin access token。
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | `/v1/admin/oidc/clients` | 查询 OIDC relying party 客户端 |
+| POST | `/v1/admin/oidc/clients` | 注册 OIDC 客户端 |
+| PUT | `/v1/admin/oidc/clients/{client_id}` | 更新客户端元数据或启用状态 |
+
+当前仅接受 `authorization_code` grant。`public` 客户端不能登记 secret；`confidential` 客户端必须提供至少 16 个字符的 secret，服务端仅保存 bcrypt hash。redirect URI 必须为 HTTPS，开发期仅允许 `127.0.0.1` 或 `[::1]` 回环地址使用 HTTP，且不得含 fragment。
+
 示例响应：
 
 ```json

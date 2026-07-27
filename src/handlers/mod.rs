@@ -1,6 +1,7 @@
 mod auth;
 mod common;
 pub mod identity;
+pub mod oidc;
 pub mod service;
 pub mod setup;
 pub mod user;

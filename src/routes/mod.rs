@@ -2,6 +2,7 @@ pub mod auth;
 pub mod authorization;
 pub mod identity;
 pub mod oauth;
+pub mod oidc;
 pub mod principal;
 pub mod rbac;
 pub mod resource;
