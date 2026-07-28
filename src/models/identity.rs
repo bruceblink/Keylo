@@ -1,7 +1,10 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use std::collections::HashSet;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct IdentitySource {
@@ -87,6 +90,29 @@ pub struct OidcUpstreamDiscovery {
     pub userinfo_endpoint: Option<String>,
     pub response_types_supported: Vec<String>,
     pub grant_types_supported: Option<Vec<String>>,
+}
+
+/// Opaque state retained only for one upstream authorization-code round trip.
+#[derive(Debug, Clone)]
+pub struct OidcUpstreamAuthorizationState {
+    pub state: String,
+    pub nonce: String,
+    pub code_verifier: String,
+    pub code_challenge: String,
+}
+
+/// Generate independent state, nonce, and PKCE S256 material for an upstream login.
+pub fn new_oidc_upstream_authorization_state() -> OidcUpstreamAuthorizationState {
+    let state = Uuid::new_v4().simple().to_string();
+    let nonce = Uuid::new_v4().simple().to_string();
+    let code_verifier = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let code_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
+    OidcUpstreamAuthorizationState {
+        state,
+        nonce,
+        code_verifier,
+        code_challenge,
+    }
 }
 
 /// Build the standard Discovery address from the previously validated issuer.
@@ -204,7 +230,9 @@ pub fn parse_oidc_upstream_discovery(
 #[cfg(test)]
 mod tests {
     use super::redact_sensitive_values;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn identity_source_response_redacts_nested_credentials() {
@@ -265,6 +293,20 @@ mod tests {
         assert!(
             super::parse_oidc_upstream_discovery("https://idp.example/realms/acme", &invalid)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn upstream_authorization_state_uses_distinct_pkce_material() {
+        let first = super::new_oidc_upstream_authorization_state();
+        let second = super::new_oidc_upstream_authorization_state();
+
+        assert_ne!(first.state, second.state);
+        assert_ne!(first.nonce, first.state);
+        assert_eq!(first.code_verifier.len(), 64);
+        assert_eq!(
+            first.code_challenge,
+            URL_SAFE_NO_PAD.encode(Sha256::digest(first.code_verifier.as_bytes()))
         );
     }
 }
