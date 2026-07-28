@@ -53,6 +53,70 @@ pub struct OidcAuthorizationCode {
     pub expires_at: i64,
 }
 
+/// Query parameters accepted by the future browser-facing authorization endpoint.
+#[derive(Debug, Deserialize)]
+pub struct OidcAuthorizeRequest {
+    pub response_type: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub scope: String,
+    pub state: Option<String>,
+    pub nonce: Option<String>,
+    pub code_challenge: String,
+    pub code_challenge_method: String,
+}
+
+/// Validate an authorization request against the registered client before any login UI is shown.
+pub fn validate_authorization_request(
+    client: &OidcClient,
+    request: &OidcAuthorizeRequest,
+) -> Result<Vec<String>, String> {
+    if !client.active || client.client_id != request.client_id {
+        return Err("OIDC client is not active".to_string());
+    }
+    if request.response_type != "code"
+        || !client
+            .grant_types
+            .iter()
+            .any(|grant| grant == "authorization_code")
+    {
+        return Err("only response_type=code is supported".to_string());
+    }
+    if !client
+        .redirect_uris
+        .iter()
+        .any(|uri| uri == &request.redirect_uri)
+    {
+        return Err("redirect_uri must exactly match a registered URI".to_string());
+    }
+    if request.nonce.as_deref().is_none_or(str::is_empty) {
+        return Err("nonce is required for OIDC authorization requests".to_string());
+    }
+    if request
+        .state
+        .as_deref()
+        .is_some_and(|state| state.len() > 1024)
+    {
+        return Err("state must not exceed 1024 characters".to_string());
+    }
+    validate_pkce_challenge(&request.code_challenge, &request.code_challenge_method)?;
+    let scopes: Vec<String> = request
+        .scope
+        .split_ascii_whitespace()
+        .map(str::to_string)
+        .collect();
+    if scopes.is_empty() || !scopes.iter().any(|scope| scope == "openid") {
+        return Err("scope must include openid".to_string());
+    }
+    if scopes
+        .iter()
+        .any(|scope| !client.scopes.iter().any(|allowed| allowed == scope))
+    {
+        return Err("requested scope is not registered for this client".to_string());
+    }
+    Ok(scopes)
+}
+
 /// Check the S256 PKCE challenge before issuing an authorization code.
 pub fn validate_pkce_challenge(challenge: &str, method: &str) -> Result<(), String> {
     if method != "S256" {
@@ -207,5 +271,41 @@ mod tests {
     fn pkce_rejects_plain_or_invalid_challenges() {
         assert!(validate_pkce_challenge("short", "S256").is_err());
         assert!(validate_pkce_challenge("a".repeat(43).as_str(), "plain").is_err());
+    }
+
+    #[test]
+    fn authorization_request_requires_exact_client_binding() {
+        let client = OidcClient {
+            id: "id".to_string(),
+            client_id: "portal-web".to_string(),
+            name: "Portal".to_string(),
+            description: None,
+            client_type: "public".to_string(),
+            redirect_uris: vec!["https://portal.example.com/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            scopes: vec!["openid".to_string(), "profile".to_string()],
+            active: true,
+            created_at: chrono::Utc::now().naive_utc(),
+            updated_at: chrono::Utc::now().naive_utc(),
+        };
+        let request = OidcAuthorizeRequest {
+            response_type: "code".to_string(),
+            client_id: "portal-web".to_string(),
+            redirect_uri: "https://portal.example.com/callback".to_string(),
+            scope: "openid profile".to_string(),
+            state: Some("client-csrf-value".to_string()),
+            nonce: Some("browser-nonce".to_string()),
+            code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".to_string(),
+            code_challenge_method: "S256".to_string(),
+        };
+        assert_eq!(
+            validate_authorization_request(&client, &request).unwrap(),
+            vec!["openid", "profile"]
+        );
+        let invalid_redirect = OidcAuthorizeRequest {
+            redirect_uri: "https://portal.example.com/other".to_string(),
+            ..request
+        };
+        assert!(validate_authorization_request(&client, &invalid_redirect).is_err());
     }
 }
