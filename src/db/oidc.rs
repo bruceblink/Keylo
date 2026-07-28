@@ -39,6 +39,46 @@ pub async fn list_oidc_clients(pool: &PgPool) -> Result<Vec<OidcClient>> {
     Ok(sqlx::query_as::<_, OidcClient>("SELECT id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, created_at, updated_at FROM oidc_clients ORDER BY created_at DESC").fetch_all(pool).await?)
 }
 
+pub async fn get_oidc_client(pool: &PgPool, client_id: &str) -> Result<Option<OidcClient>> {
+    Ok(sqlx::query_as::<_, OidcClient>("SELECT id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, created_at, updated_at FROM oidc_clients WHERE client_id = $1")
+        .bind(client_id).fetch_optional(pool).await?)
+}
+
+/// Return only the authentication material required by the token endpoint.
+pub async fn get_oidc_client_secret_hash(
+    pool: &PgPool,
+    client_id: &str,
+) -> Result<Option<(String, Option<String>, bool)>> {
+    Ok(sqlx::query_as::<_, (String, Option<String>, bool)>(
+        "SELECT client_type, client_secret_hash, active FROM oidc_clients WHERE client_id = $1",
+    )
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn get_active_authorization_code(
+    pool: &PgPool,
+    raw_code: &str,
+) -> Result<Option<OidcAuthorizationCode>> {
+    let row = sqlx::query_as::<_, (String, String, String, Vec<String>, Option<String>, String, i64)>(
+        "SELECT client_id, user_id, redirect_uri, scopes, nonce, code_challenge, extract(epoch from expires_at)::bigint FROM oidc_authorization_codes WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > NOW()",
+    ).bind(authorization_code_hash(raw_code)).fetch_optional(pool).await?;
+    Ok(row.map(
+        |(client_id, user_id, redirect_uri, scopes, nonce, code_challenge, expires_at)| {
+            OidcAuthorizationCode {
+                client_id,
+                user_id,
+                redirect_uri,
+                scopes,
+                nonce,
+                code_challenge,
+                expires_at,
+            }
+        },
+    ))
+}
+
 pub async fn update_oidc_client(
     pool: &PgPool,
     client_id: &str,

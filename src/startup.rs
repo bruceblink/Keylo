@@ -576,6 +576,32 @@ wwIDAQAB
     }
 
     #[tokio::test]
+    async fn oidc_discovery_advertises_only_supported_code_flow() {
+        let app = init_app_router_with_config(test_config());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/.well-known/openid-configuration")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["authorization_endpoint"],
+            "http://127.0.0.1:2345/v1/oidc/authorize"
+        );
+        assert_eq!(
+            body["code_challenge_methods_supported"],
+            serde_json::json!(["S256"])
+        );
+    }
+
+    #[tokio::test]
     async fn readiness_fails_without_database_unless_fallback_is_explicit() {
         let app = init_app_router_with_config(test_config());
 

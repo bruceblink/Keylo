@@ -73,6 +73,63 @@ pub struct OidcAuthorizeRequest {
     pub code_challenge_method: String,
 }
 
+/// Form posted by Keylo's browser login page; it carries the original authorization request.
+#[derive(Debug, Deserialize)]
+pub struct OidcLoginRequest {
+    #[serde(flatten)]
+    pub authorization: OidcAuthorizeRequest,
+    pub username: String,
+    pub password: String,
+}
+
+/// OAuth 2.0 token endpoint form for the authorization-code grant.
+#[derive(Debug, Deserialize)]
+pub struct OidcTokenRequest {
+    pub grant_type: String,
+    pub code: String,
+    pub redirect_uri: String,
+    pub client_id: String,
+    pub client_secret: Option<String>,
+    pub code_verifier: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OidcTokenResponse {
+    pub access_token: String,
+    pub id_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
+    pub scope: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OidcIdTokenClaims {
+    pub iss: String,
+    pub sub: String,
+    pub aud: String,
+    pub exp: i64,
+    pub iat: i64,
+    pub nonce: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_verified: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OidcAccessTokenClaims {
+    pub iss: String,
+    pub sub: String,
+    pub aud: String,
+    pub exp: i64,
+    pub iat: i64,
+    pub jti: String,
+    pub scope: String,
+    pub token_type: String,
+}
+
 /// Validate an authorization request against the registered client before any login UI is shown.
 pub fn validate_authorization_request(
     client: &OidcClient,

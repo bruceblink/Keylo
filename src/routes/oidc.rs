@@ -1,6 +1,6 @@
 use crate::{handlers::oidc, state::AppState};
 use axum::{
-    routing::{get, put},
+    routing::{get, post, put},
     Router,
 };
 
@@ -17,8 +17,9 @@ pub fn admin_routes() -> Router<AppState> {
 }
 
 pub fn public_routes() -> Router<AppState> {
-    Router::new().route(
-        "/.well-known/openid-configuration",
-        get(oidc::unavailable_discovery),
-    )
+    Router::new()
+        .route("/v1/oidc/authorize", get(oidc::authorize))
+        .route("/v1/oidc/login", post(oidc::login))
+        .route("/v1/oidc/token", post(oidc::token))
+        .route("/.well-known/openid-configuration", get(oidc::discovery))
 }

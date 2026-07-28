@@ -1,15 +1,21 @@
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Form, Path, Query, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Redirect, Response},
     Json,
 };
+use bcrypt::verify;
+use chrono::Utc;
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::{
     errors::{is_unique_violation, AuthError},
     models::{
-        validate_grant_types, validate_oidc_client_registration, validate_redirect_uris,
-        CreateOidcClientRequest, UpdateOidcClientRequest,
+        validate_authorization_request, validate_grant_types, validate_oidc_client_registration,
+        validate_redirect_uris, verify_pkce_s256, CreateOidcClientRequest, OidcAccessTokenClaims,
+        OidcAuthorizationCode, OidcAuthorizeRequest, OidcBrowserSession, OidcIdTokenClaims,
+        OidcLoginRequest, OidcTokenRequest, OidcTokenResponse, UpdateOidcClientRequest,
     },
     state::AppState,
 };
@@ -65,11 +71,242 @@ pub async fn update_client(
         .ok_or(AuthError::NotFound)
 }
 
-pub async fn unavailable_discovery() -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(
-            json!({"error": "oidc_not_enabled", "message": "OIDC discovery will be enabled with the authorization endpoint"}),
-        ),
+/// Publish only OIDC capabilities that relying parties can use today.
+pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let base_url = state.config.server_url();
+    Json(json!({
+        "issuer": base_url,
+        "authorization_endpoint": format!("{}/v1/oidc/authorize", state.config.server_url()),
+        "token_endpoint": format!("{}/v1/oidc/token", state.config.server_url()),
+        "jwks_uri": format!("{}/.well-known/jwks.json", state.config.server_url()),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["RS256"],
+        "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": ["openid", "profile", "email"]
+    }))
+}
+
+fn browser_cookie(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .find_map(|part| part.trim().strip_prefix("keylo_oidc_session="))
+}
+
+fn redirect_with_code(request: &OidcAuthorizeRequest, code: &str) -> Redirect {
+    let separator = if request.redirect_uri.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    let mut location = format!(
+        "{}{}code={}",
+        request.redirect_uri,
+        separator,
+        urlencoding::encode(code)
+    );
+    if let Some(state) = &request.state {
+        location.push_str("&state=");
+        location.push_str(&urlencoding::encode(state));
+    }
+    Redirect::to(&location)
+}
+
+async fn authorize_for_user(
+    state: &AppState,
+    request: &OidcAuthorizeRequest,
+    user_id: String,
+) -> Result<Redirect, AuthError> {
+    let db = database(state)?;
+    let client = crate::db::get_oidc_client(db, &request.client_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .ok_or(AuthError::NotFound)?;
+    let scopes =
+        validate_authorization_request(&client, request).map_err(AuthError::InvalidRequest)?;
+    let code = Uuid::new_v4().simple().to_string();
+    crate::db::create_authorization_code(
+        db,
+        &code,
+        &OidcAuthorizationCode {
+            client_id: request.client_id.clone(),
+            user_id,
+            redirect_uri: request.redirect_uri.clone(),
+            scopes,
+            nonce: request.nonce.clone(),
+            code_challenge: request.code_challenge.clone(),
+            expires_at: Utc::now().timestamp() + 300,
+        },
     )
+    .await
+    .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    Ok(redirect_with_code(request, &code))
+}
+
+/// Start an authorization-code flow. Existing browser sessions can immediately continue to the client redirect URI.
+pub async fn authorize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(request): Query<OidcAuthorizeRequest>,
+) -> Result<Response, AuthError> {
+    let Some(cookie) = browser_cookie(&headers) else {
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"login_required","login_endpoint":"/v1/oidc/login"})),
+        )
+            .into_response());
+    };
+    let session = crate::db::resolve_browser_session(database(&state)?, cookie)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .ok_or(AuthError::Unauthorized)?;
+    Ok(authorize_for_user(&state, &request, session.user_id)
+        .await?
+        .into_response())
+}
+
+/// Authenticate a local user for an OIDC browser flow, then issue a short-lived code and HttpOnly session cookie.
+pub async fn login(
+    State(state): State<AppState>,
+    Form(request): Form<OidcLoginRequest>,
+) -> Result<Response, AuthError> {
+    let db = database(&state)?;
+    let user = crate::db::user::get_user_by_username(db, &request.username)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .filter(|user| user.active)
+        .ok_or(AuthError::WrongCredentials)?;
+    let password_hash = user
+        .password_hash
+        .as_deref()
+        .ok_or(AuthError::WrongCredentials)?;
+    if !verify(&request.password, password_hash).unwrap_or(false) {
+        return Err(AuthError::WrongCredentials);
+    }
+    let raw_session = Uuid::new_v4().simple().to_string();
+    crate::db::create_browser_session(
+        db,
+        &raw_session,
+        &OidcBrowserSession {
+            user_id: user.id.clone(),
+            expires_at: Utc::now().timestamp() + 28_800,
+        },
+    )
+    .await
+    .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    let redirect = authorize_for_user(&state, &request.authorization, user.id).await?;
+    let cookie = format!("keylo_oidc_session={raw_session}; Path=/v1/oidc; Max-Age=28800; HttpOnly; Secure; SameSite=Lax");
+    let mut response = redirect.into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(|_| {
+            AuthError::InternalServerError("Failed to construct session cookie".to_string())
+        })?,
+    );
+    Ok(response)
+}
+
+/// Exchange one authorization code exactly once after validating its client, redirect URI, and PKCE verifier.
+pub async fn token(
+    State(state): State<AppState>,
+    Form(request): Form<OidcTokenRequest>,
+) -> Result<Json<OidcTokenResponse>, AuthError> {
+    if request.grant_type != "authorization_code" {
+        return Err(AuthError::InvalidRequest(
+            "only grant_type=authorization_code is supported".to_string(),
+        ));
+    }
+    let db = database(&state)?;
+    let Some((client_type, secret_hash, active)) =
+        crate::db::get_oidc_client_secret_hash(db, &request.client_id)
+            .await
+            .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    else {
+        return Err(AuthError::Unauthorized);
+    };
+    if !active
+        || (client_type == "confidential"
+            && !request.client_secret.as_deref().is_some_and(|secret| {
+                secret_hash
+                    .as_deref()
+                    .is_some_and(|hash| verify(secret, hash).unwrap_or(false))
+            }))
+    {
+        return Err(AuthError::Unauthorized);
+    }
+    let authorization = crate::db::get_active_authorization_code(db, &request.code)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .ok_or(AuthError::InvalidRequest(
+            "authorization code is invalid or expired".to_string(),
+        ))?;
+    if authorization.client_id != request.client_id
+        || authorization.redirect_uri != request.redirect_uri
+        || !verify_pkce_s256(&request.code_verifier, &authorization.code_challenge)
+    {
+        return Err(AuthError::InvalidRequest(
+            "authorization code binding or PKCE verification failed".to_string(),
+        ));
+    }
+    if crate::db::consume_authorization_code(db, &request.code)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .is_none()
+    {
+        return Err(AuthError::InvalidRequest(
+            "authorization code has already been consumed".to_string(),
+        ));
+    }
+    let user = crate::db::user::get_user_by_id(db, &authorization.user_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .filter(|user| user.active)
+        .ok_or(AuthError::InvalidToken)?;
+    let now = Utc::now().timestamp();
+    let expires_at = now + state.config.token_expiry_seconds;
+    let scope = authorization.scopes.join(" ");
+    let access_token = state.jwt_keys.sign_token(&OidcAccessTokenClaims {
+        iss: state.config.server_url(),
+        sub: user.id.clone(),
+        aud: request.client_id.clone(),
+        exp: expires_at,
+        iat: now,
+        jti: Uuid::new_v4().to_string(),
+        scope: scope.clone(),
+        token_type: "Bearer".to_string(),
+    })?;
+    let id_token = state.jwt_keys.sign_token(&OidcIdTokenClaims {
+        iss: state.config.server_url(),
+        sub: user.id,
+        aud: request.client_id,
+        exp: expires_at,
+        iat: now,
+        nonce: authorization.nonce.ok_or(AuthError::InvalidToken)?,
+        name: authorization
+            .scopes
+            .iter()
+            .any(|scope| scope == "profile")
+            .then_some(user.username),
+        email: authorization
+            .scopes
+            .iter()
+            .any(|scope| scope == "email")
+            .then_some(user.email),
+        email_verified: authorization
+            .scopes
+            .iter()
+            .any(|scope| scope == "email")
+            .then_some(true),
+    })?;
+    Ok(Json(OidcTokenResponse {
+        access_token,
+        id_token,
+        token_type: "Bearer".to_string(),
+        expires_in: state.config.token_expiry_seconds,
+        scope,
+    }))
 }
