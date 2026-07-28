@@ -77,6 +77,18 @@ pub struct OidcUpstreamConfig {
     pub scopes: Vec<String>,
 }
 
+/// Minimal OIDC Discovery document required for authorization-code login.
+#[derive(Debug, Deserialize)]
+pub struct OidcUpstreamDiscovery {
+    pub issuer: String,
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub jwks_uri: String,
+    pub userinfo_endpoint: Option<String>,
+    pub response_types_supported: Vec<String>,
+    pub grant_types_supported: Option<Vec<String>>,
+}
+
 fn default_oidc_scopes() -> Vec<String> {
     vec![
         "openid".to_string(),
@@ -131,6 +143,56 @@ pub fn parse_oidc_upstream_config(config: &Value) -> Result<OidcUpstreamConfig, 
     })
 }
 
+/// Validate Discovery metadata against the registered issuer before it drives redirects or token calls.
+pub fn parse_oidc_upstream_discovery(
+    registered_issuer: &str,
+    discovery: &Value,
+) -> Result<OidcUpstreamDiscovery, String> {
+    let parsed: OidcUpstreamDiscovery = serde_json::from_value(discovery.clone())
+        .map_err(|_| "OIDC Discovery document is missing required endpoints".to_string())?;
+    if parsed.issuer != registered_issuer {
+        return Err("OIDC Discovery issuer does not match the registered issuer".to_string());
+    }
+    for (label, endpoint) in [
+        ("authorization_endpoint", &parsed.authorization_endpoint),
+        ("token_endpoint", &parsed.token_endpoint),
+        ("jwks_uri", &parsed.jwks_uri),
+    ] {
+        if !endpoint.starts_with("https://") || endpoint.contains('#') {
+            return Err(format!(
+                "OIDC Discovery {label} must be an HTTPS URL without fragment"
+            ));
+        }
+    }
+    if let Some(endpoint) = &parsed.userinfo_endpoint {
+        if !endpoint.starts_with("https://") || endpoint.contains('#') {
+            return Err(
+                "OIDC Discovery userinfo_endpoint must be an HTTPS URL without fragment"
+                    .to_string(),
+            );
+        }
+    }
+    if !parsed
+        .response_types_supported
+        .iter()
+        .any(|response_type| response_type == "code")
+    {
+        return Err("OIDC Discovery must support response_type code".to_string());
+    }
+    if parsed
+        .grant_types_supported
+        .as_ref()
+        .is_some_and(|grant_types| {
+            !grant_types
+                .iter()
+                .any(|grant_type| grant_type == "authorization_code")
+        })
+    {
+        return Err("OIDC Discovery must support authorization_code".to_string());
+    }
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::redact_sensitive_values;
@@ -168,5 +230,33 @@ mod tests {
             "scopes": ["profile"]
         });
         assert!(super::parse_oidc_upstream_config(&invalid).is_err());
+    }
+
+    #[test]
+    fn oidc_discovery_requires_matching_issuer_and_code_flow() {
+        let document = json!({
+            "issuer": "https://idp.example/realms/acme",
+            "authorization_endpoint": "https://idp.example/realms/acme/protocol/openid-connect/auth",
+            "token_endpoint": "https://idp.example/realms/acme/protocol/openid-connect/token",
+            "jwks_uri": "https://idp.example/realms/acme/protocol/openid-connect/certs",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"]
+        });
+        assert!(
+            super::parse_oidc_upstream_discovery("https://idp.example/realms/acme", &document)
+                .is_ok()
+        );
+
+        let invalid = json!({
+            "issuer": "https://other.example",
+            "authorization_endpoint": "https://idp.example/auth",
+            "token_endpoint": "https://idp.example/token",
+            "jwks_uri": "https://idp.example/jwks",
+            "response_types_supported": ["token"]
+        });
+        assert!(
+            super::parse_oidc_upstream_discovery("https://idp.example/realms/acme", &invalid)
+                .is_err()
+        );
     }
 }
