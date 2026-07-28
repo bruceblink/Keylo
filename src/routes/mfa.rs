@@ -1,0 +1,219 @@
+use axum::{extract::State, http::StatusCode, response::Json, routing::post, Router};
+use chrono::Utc;
+use serde_json::json;
+
+use crate::{
+    db::{
+        create_audit_log, enable_totp_credential, get_totp_credential, save_pending_totp_credential,
+    },
+    models::{
+        decrypt_totp_seed, encrypt_totp_seed, generate_totp_seed, totp_provisioning_uri,
+        verify_totp_code, Claims, TotpEnrollmentResponse, VerifyTotpEnrollmentRequest,
+    },
+    state::AppState,
+    utils::{require_db, ApiResponse},
+};
+
+/// Routes that let an authenticated user enroll their own TOTP authenticator.
+pub fn mfa_routes() -> Router<AppState> {
+    Router::new()
+        .route("/v1/user/mfa/totp/enroll", post(start_totp_enrollment))
+        .route("/v1/user/mfa/totp/verify", post(verify_totp_enrollment))
+}
+
+/// Start a replacement-safe TOTP enrollment and return the secret only to its owner.
+async fn start_totp_enrollment(claims: Claims, State(state): State<AppState>) -> ApiResponse {
+    let db = require_db(&state)?;
+    let user_id = require_user_id(&claims)?;
+    let key = match state.config.mfa_secret_key_bytes() {
+        Ok(key) => key,
+        Err(_) => return Err(mfa_unavailable_response()),
+    };
+
+    let user = match crate::db::user::get_user_by_id(db, &user_id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => return Err(not_found_response("User not found")),
+        Err(error) => return Err(internal_error_response("Failed to load user", &error)),
+    };
+    match get_totp_credential(db, &user_id).await {
+        Ok(Some(credential)) if credential.enabled_at.is_some() => {
+            return Err(conflict_response("TOTP is already enabled"));
+        }
+        Ok(_) => {}
+        Err(error) => return Err(internal_error_response("Failed to load MFA state", &error)),
+    }
+
+    let seed = generate_totp_seed();
+    let encrypted_seed = match encrypt_totp_seed(&seed, &key) {
+        Ok(encrypted_seed) => encrypted_seed,
+        Err(_) => return Err(mfa_unavailable_response()),
+    };
+    let provisioning_uri = match totp_provisioning_uri(&seed, "Keylo", &user.email) {
+        Ok(uri) => uri,
+        Err(_) => return Err(bad_request_response("Unable to create TOTP enrollment")),
+    };
+    if let Err(error) = save_pending_totp_credential(db, &user_id, &encrypted_seed).await {
+        return Err(internal_error_response(
+            "Failed to save MFA enrollment",
+            &error,
+        ));
+    }
+    if let Err(error) = create_audit_log(
+        db,
+        "mfa.totp.enrollment_started",
+        Some(&claims.sub),
+        Some(&format!("user_id={user_id}")),
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "Failed to write TOTP enrollment audit log");
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "data": TotpEnrollmentResponse {
+            manual_entry_key: seed,
+            provisioning_uri,
+        }
+    })))
+}
+
+/// Verify the pending seed once before enabling it and recording a security audit event.
+async fn verify_totp_enrollment(
+    claims: Claims,
+    State(state): State<AppState>,
+    Json(request): Json<VerifyTotpEnrollmentRequest>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+    let user_id = require_user_id(&claims)?;
+    let key = match state.config.mfa_secret_key_bytes() {
+        Ok(key) => key,
+        Err(_) => return Err(mfa_unavailable_response()),
+    };
+
+    let credential = match get_totp_credential(db, &user_id).await {
+        Ok(Some(credential)) if credential.enabled_at.is_none() => credential,
+        Ok(Some(_)) => return Err(conflict_response("TOTP is already enabled")),
+        Ok(None) => return Err(not_found_response("No pending TOTP enrollment")),
+        Err(error) => return Err(internal_error_response("Failed to load MFA state", &error)),
+    };
+    let seed = match decrypt_totp_seed(&credential.encrypted_seed, &key) {
+        Ok(seed) => seed,
+        Err(_) => return Err(mfa_unavailable_response()),
+    };
+    let now = Utc::now().timestamp();
+    let step = match u64::try_from(now).ok().and_then(|timestamp| {
+        verify_totp_code(&seed, &request.code, timestamp)
+            .ok()
+            .flatten()
+    }) {
+        Some(step) => step,
+        None => return Err(bad_request_response("Invalid TOTP code")),
+    };
+    match enable_totp_credential(db, &user_id, step).await {
+        Ok(true) => {}
+        Ok(false) => return Err(conflict_response("TOTP enrollment is no longer pending")),
+        Err(error) => return Err(internal_error_response("Failed to enable TOTP", &error)),
+    }
+    if let Err(error) = create_audit_log(
+        db,
+        "mfa.totp.enabled",
+        Some(&claims.sub),
+        Some(&format!("user_id={user_id}")),
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "Failed to write TOTP enabled audit log");
+    }
+
+    Ok(Json(
+        json!({ "success": true, "data": { "enabled": true } }),
+    ))
+}
+
+/// Accept only user principals with a stable user identifier for self-service MFA changes.
+fn require_user_id(claims: &Claims) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    if matches!(claims.principal_type.as_deref(), Some(kind) if kind != "user") {
+        return Err(unauthorized_response());
+    }
+    claims.uid.clone().ok_or_else(unauthorized_response)
+}
+
+fn unauthorized_response() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "success": false, "error": "A user access token is required" })),
+    )
+}
+
+fn mfa_unavailable_response() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "success": false, "error": "MFA is not configured" })),
+    )
+}
+
+fn bad_request_response(message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "success": false, "error": message })),
+    )
+}
+
+fn conflict_response(message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({ "success": false, "error": message })),
+    )
+}
+
+fn not_found_response(message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "success": false, "error": message })),
+    )
+}
+
+fn internal_error_response(
+    message: &str,
+    error: &dyn std::fmt::Display,
+) -> (StatusCode, Json<serde_json::Value>) {
+    tracing::error!(error = %error, "{message}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "success": false, "error": message })),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_user_id;
+    use crate::models::Claims;
+
+    fn claims(uid: Option<&str>, principal_type: Option<&str>) -> Claims {
+        Claims {
+            sub: "user:alice".to_string(),
+            uid: uid.map(str::to_string),
+            principal_id: Some("principal-1".to_string()),
+            principal_type: principal_type.map(str::to_string),
+            iss: "keylo".to_string(),
+            aud: "admin-backend".to_string(),
+            scope: vec![],
+            role: vec![],
+            token_type: "access".to_string(),
+            exp: 1,
+            iat: 1,
+            jti: "jti-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn mfa_requires_a_user_principal_with_uid() {
+        assert_eq!(
+            require_user_id(&claims(Some("user-1"), Some("user"))).unwrap(),
+            "user-1"
+        );
+        assert!(require_user_id(&claims(None, Some("user"))).is_err());
+        assert!(require_user_id(&claims(Some("user-1"), Some("client"))).is_err());
+    }
+}

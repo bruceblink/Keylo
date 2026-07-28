@@ -94,7 +94,9 @@ pub fn admin_user_routes() -> Router<AppState> {
 }
 
 pub fn self_user_routes() -> Router<AppState> {
-    Router::new().route("/v1/user/change-password", post(change_password_handler))
+    Router::new()
+        .route("/v1/user/change-password", post(change_password_handler))
+        .merge(crate::routes::mfa::mfa_routes())
 }
 
 async fn list_users_handler(

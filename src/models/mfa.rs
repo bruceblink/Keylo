@@ -1,6 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use totp_rs::{Algorithm, Secret, TOTP};
 use uuid::Uuid;
@@ -17,6 +18,19 @@ pub struct MfaTotpCredential {
     pub last_verified_step: Option<i64>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
+}
+
+/// Response returned once for an unfinished TOTP enrollment.
+#[derive(Debug, Serialize)]
+pub struct TotpEnrollmentResponse {
+    pub manual_entry_key: String,
+    pub provisioning_uri: String,
+}
+
+/// Six-digit confirmation supplied from the user's authenticator application.
+#[derive(Debug, Deserialize)]
+pub struct VerifyTotpEnrollmentRequest {
+    pub code: String,
 }
 
 /// Create a random Base32 seed suitable for a standard authenticator application.

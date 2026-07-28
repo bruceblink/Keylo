@@ -284,6 +284,18 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
 | POST | `/v1/user/change-password` | user access token | 修改当前用户密码 |
+| POST | `/v1/user/mfa/totp/enroll` | user access token | 创建待确认的 TOTP enrollment |
+| POST | `/v1/user/mfa/totp/verify` | user access token | 用验证码确认并启用待确认的 TOTP |
+
+`POST /v1/user/mfa/totp/enroll` 只可由带稳定 `uid` 的用户 token 调用。它会生成新 Base32 seed、加密保存待确认状态，并一次性返回 `manual_entry_key` 和标准 `provisioning_uri`；响应不得写入客户端日志。已经启用 TOTP 的账户不能通过此接口直接覆盖现有凭据。
+
+调用方将 `provisioning_uri` 交给验证器应用扫码或使用 `manual_entry_key` 手动添加后，提交：
+
+```json
+{ "code": "123456" }
+```
+
+到 `POST /v1/user/mfa/totp/verify`。Keylo 采用 6 位、30 秒、SHA-1 的 RFC 6238 兼容配置，并允许相邻一个时间步来兼容轻微时钟误差。验证成功后才启用凭据并写入审计日志；无效或已启用的 enrollment 不会产生部分状态变更。
 
 ---
 
