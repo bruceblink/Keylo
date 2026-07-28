@@ -459,6 +459,7 @@ wwIDAQAB
             database_url: String::new(),
             server_addr: "127.0.0.1".to_string(),
             server_port: 2345,
+            oidc_public_issuer: None,
             environment: "development".to_string(),
             token_expiry_seconds: 900,
             refresh_token_expiry_seconds: 2_592_000,

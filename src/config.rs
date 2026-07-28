@@ -532,6 +532,8 @@ pub struct Config {
     pub server_addr: String,
     /// 服务监听端口
     pub server_port: u16,
+    /// Public issuer used by OIDC Discovery and OIDC tokens; separate from the bind address.
+    pub oidc_public_issuer: Option<String>,
     /// 环境
     pub environment: String,
     /// JWT token过期时间（秒）
@@ -616,6 +618,9 @@ impl Config {
             .unwrap_or_else(|_| "2345".to_string())
             .parse::<u16>()
             .unwrap_or(2345);
+        let oidc_public_issuer = env::var("OIDC_PUBLIC_ISSUER")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
 
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
 
@@ -676,6 +681,7 @@ impl Config {
             database_url,
             server_addr,
             server_port,
+            oidc_public_issuer,
             environment,
             token_expiry_seconds,
             refresh_token_expiry_seconds,
@@ -710,6 +716,13 @@ impl Config {
     /// 获取完整的服务器地址
     pub fn server_url(&self) -> String {
         format!("http://{}:{}", self.server_addr, self.server_port)
+    }
+
+    /// Return the externally stable issuer for OIDC, with a local bind-address fallback for development.
+    pub fn oidc_issuer(&self) -> String {
+        self.oidc_public_issuer
+            .clone()
+            .unwrap_or_else(|| self.server_url())
     }
 
     /// 判断是否生产环境
@@ -876,6 +889,15 @@ impl Config {
         require_non_empty(errors, "ENVIRONMENT", &self.environment);
         require_non_empty(errors, "SERVER_ADDR", &self.server_addr);
         require_positive(errors, "SERVER_PORT", self.server_port as i64);
+        if self.is_production() {
+            match self.oidc_public_issuer.as_deref() {
+                Some(issuer) if valid_oidc_public_issuer(issuer) => {}
+                _ => errors.push(
+                    "OIDC_PUBLIC_ISSUER must be an absolute HTTPS origin without a path, query, fragment, or trailing slash in production"
+                        .to_string(),
+                ),
+            }
+        }
         require_positive(errors, "TOKEN_EXPIRY_SECONDS", self.token_expiry_seconds);
         require_positive(
             errors,
@@ -981,6 +1003,18 @@ fn valid_cors_origin(origin: &str) -> bool {
             .is_none_or(|path_and_query| path_and_query.as_str() == "/")
 }
 
+fn valid_oidc_public_issuer(issuer: &str) -> bool {
+    let Ok(uri) = issuer.parse::<http::Uri>() else {
+        return false;
+    };
+    uri.scheme_str() == Some("https")
+        && uri.host().is_some()
+        && uri
+            .path_and_query()
+            .is_none_or(|path_and_query| path_and_query.as_str() == "/")
+        && !issuer.ends_with('/')
+}
+
 fn env_value_is_non_empty(key: &str) -> bool {
     env::var(key)
         .ok()
@@ -1039,6 +1073,7 @@ mod tests {
             database_url: "postgres://keylo_user@localhost:5432/keylo".to_string(),
             server_addr: "127.0.0.1".to_string(),
             server_port: 2345,
+            oidc_public_issuer: Some("https://identity.example.com".to_string()),
             environment: "development".to_string(),
             token_expiry_seconds: 900,
             refresh_token_expiry_seconds: 2_592_000,
@@ -1281,6 +1316,23 @@ mod tests {
         config.environment = "production".to_string();
         config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
 
+        assert!(config.validate_for_setup_initialization().is_ok());
+    }
+
+    #[test]
+    fn production_startup_requires_a_stable_https_oidc_issuer() {
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.oidc_public_issuer = None;
+        assert!(config
+            .validate_for_setup_initialization()
+            .unwrap_err()
+            .contains("OIDC_PUBLIC_ISSUER"));
+
+        config.oidc_public_issuer = Some("http://identity.example.com".to_string());
+        assert!(config.validate_for_setup_initialization().is_err());
+
+        config.oidc_public_issuer = Some("https://identity.example.com".to_string());
         assert!(config.validate_for_setup_initialization().is_ok());
     }
 

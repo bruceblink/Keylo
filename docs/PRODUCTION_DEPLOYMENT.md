@@ -22,7 +22,10 @@ Keylo 在生产环境中承担统一认证中心职责，因此部署目标不�
 # ADMIN_CLIENT_ID=cli-admin-root, DB_POOL_SIZE=10, and standard key/secret paths.
 DATABASE_URL=postgres://keylo_user@postgres:5432/keylo
 CORS_ALLOWED_ORIGINS=https://admin.example.com
+OIDC_PUBLIC_ISSUER=https://identity.example.com
 ```
+
+`OIDC_PUBLIC_ISSUER` 是浏览器、移动端和第三方 relying party 使用的稳定 OIDC issuer，同时决定 Discovery、ID Token 和 OIDC access token 的 `iss`。它不能是容器绑定地址，生产环境必须是没有路径、查询、fragment 或末尾 `/` 的公开 HTTPS origin；修改该值会使依赖旧 issuer 的客户端失效。
 
 `JWT_KEY_ID` 是当前 JWT 签名密钥的标识符，会写入 JWT header 的 `kid` 字段，同时暴露在 `/.well-known/jwks.json` 中对应公钥的 `kid` 字段。下游服务本地验签时，会根据 token header 中的 `kid` 到 JWKS 中选择同名公钥。单密钥部署可以使用类似 `keylo-rs256-1` 的稳定值；每次更换 RSA 私钥/公钥时，应同步更换 `JWT_KEY_ID`，例如递增为 `keylo-rs256-2`，避免下游 JWKS 缓存把新 token 误用旧公钥验证。
 

@@ -73,13 +73,13 @@ pub async fn update_client(
 
 /// Publish only OIDC capabilities that relying parties can use today.
 pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let base_url = state.config.server_url();
+    let base_url = state.config.oidc_issuer();
     Json(json!({
         "issuer": base_url,
-        "authorization_endpoint": format!("{}/v1/oidc/authorize", state.config.server_url()),
-        "token_endpoint": format!("{}/v1/oidc/token", state.config.server_url()),
-        "userinfo_endpoint": format!("{}/v1/oidc/userinfo", state.config.server_url()),
-        "jwks_uri": format!("{}/.well-known/jwks.json", state.config.server_url()),
+        "authorization_endpoint": format!("{base_url}/v1/oidc/authorize"),
+        "token_endpoint": format!("{base_url}/v1/oidc/token"),
+        "userinfo_endpoint": format!("{base_url}/v1/oidc/userinfo"),
+        "jwks_uri": format!("{base_url}/.well-known/jwks.json"),
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "subject_types_supported": ["public"],
@@ -101,7 +101,7 @@ pub async fn userinfo(
         .ok_or(AuthError::MissingCredentials)?;
     let claims = state
         .jwt_keys
-        .decode_oidc_access_token(token, &state.config.server_url())?;
+        .decode_oidc_access_token(token, &state.config.oidc_issuer())?;
     if claims.token_type != "Bearer"
         || !claims
             .scope
@@ -313,7 +313,7 @@ pub async fn token(
     let expires_at = now + state.config.token_expiry_seconds;
     let scope = authorization.scopes.join(" ");
     let access_token = state.jwt_keys.sign_token(&OidcAccessTokenClaims {
-        iss: state.config.server_url(),
+        iss: state.config.oidc_issuer(),
         sub: user.id.clone(),
         aud: request.client_id.clone(),
         exp: expires_at,
@@ -323,7 +323,7 @@ pub async fn token(
         token_type: "Bearer".to_string(),
     })?;
     let id_token = state.jwt_keys.sign_token(&OidcIdTokenClaims {
-        iss: state.config.server_url(),
+        iss: state.config.oidc_issuer(),
         sub: user.id,
         aud: request.client_id,
         exp: expires_at,

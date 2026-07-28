@@ -63,7 +63,7 @@
 
 `/.well-known/keylo-configuration` 用于第三方服务发现 Keylo 的核心接入端点。它不是完整 OIDC discovery 文档，而是 Keylo 面向轻量统一鉴权场景提供的稳定集成契约。
 
-`/.well-known/openid-configuration` 是标准 OIDC Discovery 地址，当前公布 Authorization Code + PKCE（S256）、RS256 JWKS 与 `openid`、`profile`、`email` scope。OIDC issuer 固定为 Keylo 的 `SERVER_ADDR` + `SERVER_PORT` 服务地址；生产部署必须将其配置为公开 HTTPS 地址。
+`/.well-known/openid-configuration` 是标准 OIDC Discovery 地址，当前公布 Authorization Code + PKCE（S256）、RS256 JWKS 与 `openid`、`profile`、`email` scope。OIDC issuer 由 `OIDC_PUBLIC_ISSUER` 决定；生产部署必须将其配置为公开 HTTPS origin，不能使用 Keylo 的内部监听地址。
 
 OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1/oidc/token`、`GET /v1/oidc/userinfo`。授权码有效期为 5 分钟，且只能原子消费一次。`/v1/oidc/login` 使用 `application/x-www-form-urlencoded` 提交用户名、密码及原授权请求参数，成功后以 `HttpOnly; Secure; SameSite=Lax` 浏览器会话 cookie 重定向至已登记的 redirect URI。UserInfo 只接受 OIDC access token；始终返回 `sub`，仅在被授予 `profile` 或 `email` scope 时返回对应 profile/email claims。
 
