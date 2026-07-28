@@ -601,6 +601,8 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 `oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调；scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience 和 expiry。
 
 成功回调返回标准 Keylo `AuthBody`，包含 Bearer access token、可轮换 refresh token 和 `expires_in`。令牌代表已关联的本地用户，沿用本地用户的角色、权限和会话策略；令牌及上游 ID Token 不会出现在审计详情中。
+
+已登录用户可调用 `DELETE /v1/user/identity-sources/{source_id}/link` 解除自己的 OIDC upstream 关联。该操作会撤销仅由该身份源签发的 refresh session 并写入审计日志；若该关联是用户唯一的登录方式，接口返回冲突而不执行解除，避免用户把自己锁在账户之外。
 - `claim_mapping`：外部身份字段到 Keylo 标准字段的映射对象。`oidc_upstream` 仅支持 `external_subject`、`email`、`username`、`email_verified` 四个本地字段，值为已签名 ID Token 中的 claim 名；缺省时分别使用 `sub`、`email`、`preferred_username`、`email_verified`。映射到已有账号的邮箱仍需映射后的 `email_verified` 为 `true`，不会因自定义映射降低自动关联的安全要求。
 - `jit_enabled`：是否允许在没有映射和同邮箱账号时创建无密码的 Keylo 用户，默认 `false`。
 - `auto_link_enabled`：是否允许把已有同邮箱 Keylo 用户关联到上游身份，默认 `true`。仅上游 ID Token 声明 `email_verified: true` 时才会自动关联；否则需要显式关联，避免未验证邮箱接管账号。

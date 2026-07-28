@@ -251,6 +251,10 @@ fn protected_routes(app_state: &AppState) -> Router<AppState> {
                 .route_layer(middleware::from_fn(auth::user_authorization_middleware)),
         )
         .merge(
+            routes::identity::identity_self_routes()
+                .route_layer(middleware::from_fn(auth::user_authorization_middleware)),
+        )
+        .merge(
             routes::auth::admin_router().route_layer(middleware::from_fn_with_state(
                 app_state.clone(),
                 auth::admin_authorization_middleware,

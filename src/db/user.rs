@@ -9,6 +9,13 @@ use crate::models::User;
 
 const PASSWORD_COST: u32 = DEFAULT_COST;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalUserMappingUnlinkResult {
+    Unlinked,
+    NotFound,
+    LastLoginMethod,
+}
+
 fn hash_password(password: &str) -> Result<String> {
     Ok(hash(password, PASSWORD_COST)?)
 }
@@ -289,6 +296,65 @@ pub async fn upsert_external_user_mapping(
     .await?;
 
     Ok(())
+}
+
+/// Remove one upstream source from a user only when another login method remains available.
+pub async fn unlink_external_user_mapping(
+    pool: &PgPool,
+    provider: &str,
+    user_id: &str,
+) -> Result<ExternalUserMappingUnlinkResult> {
+    let mut tx = pool.begin().await?;
+    let user = sqlx::query(
+        "SELECT password_hash IS NOT NULL AS has_password FROM users WHERE id = $1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(user) = user else {
+        tx.commit().await?;
+        return Ok(ExternalUserMappingUnlinkResult::NotFound);
+    };
+    let mapping_exists = sqlx::query(
+        "SELECT 1 FROM external_user_mappings WHERE provider = $1 AND user_id = $2 LIMIT 1",
+    )
+    .bind(provider)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .is_some();
+    if !mapping_exists {
+        tx.commit().await?;
+        return Ok(ExternalUserMappingUnlinkResult::NotFound);
+    }
+
+    let has_password: bool = user.get("has_password");
+    let has_other_external_mapping = sqlx::query(
+        "SELECT 1 FROM external_user_mappings WHERE user_id = $1 AND provider <> $2 LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(provider)
+    .fetch_optional(&mut *tx)
+    .await?
+    .is_some();
+    let has_oauth_account =
+        sqlx::query("SELECT 1 FROM user_oauth_accounts WHERE user_id = $1 LIMIT 1")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some();
+    if !has_password && !has_other_external_mapping && !has_oauth_account {
+        tx.commit().await?;
+        return Ok(ExternalUserMappingUnlinkResult::LastLoginMethod);
+    }
+
+    sqlx::query("DELETE FROM external_user_mappings WHERE provider = $1 AND user_id = $2")
+        .bind(provider)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(ExternalUserMappingUnlinkResult::Unlinked)
 }
 
 /// 获取用户总量

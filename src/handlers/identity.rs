@@ -1,7 +1,7 @@
 use crate::db::identity as identity_db;
 use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
-    oidc_discovery_url, parse_oidc_upstream_config, parse_oidc_upstream_discovery,
+    oidc_discovery_url, parse_oidc_upstream_config, parse_oidc_upstream_discovery, Claims,
     CreateIdentitySourceRequest, IdentitySource, OidcUpstreamDiscovery, OidcUpstreamProfile,
     UpdateIdentitySourceRequest,
 };
@@ -568,6 +568,62 @@ pub async fn update_identity_source(
     .ok_or(AuthError::NotFound)?;
 
     Ok(Json(source.redacted_for_response()))
+}
+
+/// Unlink the caller's OIDC source and revoke only sessions issued through that source.
+pub async fn unlink_oidc_upstream_identity(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(source_id): Path<String>,
+) -> Result<Json<Value>, AuthError> {
+    if matches!(claims.principal_type.as_deref(), Some(kind) if kind != "user") {
+        return Err(AuthError::Unauthorized);
+    }
+    let user_id = claims.uid.as_deref().ok_or(AuthError::Unauthorized)?;
+    let db = require_db(&state)?;
+    let source = identity_db::get_identity_source(db, &source_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .filter(|source| source.source_type == "oidc_upstream")
+        .ok_or(AuthError::NotFound)?;
+    let provider = oidc_mapping_provider(&source);
+    match crate::db::unlink_external_user_mapping(db, &provider, user_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    {
+        crate::db::ExternalUserMappingUnlinkResult::NotFound => Err(AuthError::NotFound),
+        crate::db::ExternalUserMappingUnlinkResult::LastLoginMethod => Err(AuthError::Conflict(
+            "Cannot unlink the last available login method".to_string(),
+        )),
+        crate::db::ExternalUserMappingUnlinkResult::Unlinked => {
+            if let Some(principal) = crate::db::ensure_user_principal(db, user_id)
+                .await
+                .map_err(|_| {
+                    AuthError::DatabaseError("Failed to resolve user principal".to_string())
+                })?
+            {
+                crate::db::revoke_principal_client_refresh_sessions(
+                    db,
+                    &principal.id,
+                    &provider,
+                    Some("upstream_identity_unlinked"),
+                )
+                .await
+                .map_err(|_| {
+                    AuthError::DatabaseError("Failed to revoke upstream sessions".to_string())
+                })?;
+            }
+            crate::db::create_audit_log(
+                db,
+                "identity_source.account.unlinked",
+                Some(&claims.sub),
+                Some(&format!("user_id={}; source_id={}", user_id, source.id)),
+            )
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to audit identity unlink".to_string()))?;
+            Ok(Json(json!({"success": true, "source_id": source.id})))
+        }
+    }
 }
 
 #[cfg(test)]

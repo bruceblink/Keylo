@@ -441,6 +441,30 @@ pub async fn revoke_client_refresh_sessions(
     Ok(result.rows_affected())
 }
 
+/// Revoke one principal's sessions for one login client without affecting other users of that client.
+pub async fn revoke_principal_client_refresh_sessions(
+    pool: &PgPool,
+    principal_id: &str,
+    client_id: &str,
+    reason: Option<&str>,
+) -> Result<u64> {
+    let result = sqlx::query(
+        r#"
+        UPDATE refresh_sessions
+        SET revoked_at = COALESCE(revoked_at, NOW()),
+            revoke_reason = COALESCE(revoke_reason, $3)
+        WHERE principal_id = $1 AND client_id = $2 AND revoked_at IS NULL
+        "#,
+    )
+    .bind(principal_id)
+    .bind(client_id)
+    .bind(reason)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 pub async fn has_active_refresh_session_for_principal(
     pool: &PgPool,
     principal_id: &str,
