@@ -7,6 +7,7 @@ use crate::models::{
 };
 use crate::state::AppState;
 use axum::extract::{Path, State};
+use axum::response::Redirect;
 use axum::Json;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -205,6 +206,66 @@ pub async fn discover_oidc_upstream(
     let discovery = parse_oidc_upstream_discovery(&config.issuer, &document)
         .map_err(AuthError::InvalidRequest)?;
     Ok(Json(discovery))
+}
+
+/// Begin a secure upstream authorization-code flow and redirect the browser to the IdP.
+pub async fn begin_oidc_upstream_login(
+    State(state): State<AppState>,
+    Path(source_name): Path<String>,
+) -> Result<Redirect, AuthError> {
+    let db = require_db(&state)?;
+    let source = identity_db::get_active_identity_source_by_name(db, &source_name)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .filter(|source| source.source_type == "oidc_upstream")
+        .ok_or(AuthError::NotFound)?;
+    let config = parse_oidc_upstream_config(&source.config).map_err(AuthError::InvalidRequest)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC HTTP client".to_string()))?;
+    let document = client
+        .get(oidc_discovery_url(&config.issuer))
+        .send()
+        .await
+        .map_err(|_| {
+            AuthError::InvalidRequest("Unable to fetch OIDC Discovery document".to_string())
+        })?
+        .error_for_status()
+        .map_err(|_| {
+            AuthError::InvalidRequest(
+                "OIDC Discovery endpoint returned an unsuccessful status".to_string(),
+            )
+        })?
+        .json::<Value>()
+        .await
+        .map_err(|_| {
+            AuthError::InvalidRequest("OIDC Discovery document is not valid JSON".to_string())
+        })?;
+    let discovery = parse_oidc_upstream_discovery(&config.issuer, &document)
+        .map_err(AuthError::InvalidRequest)?;
+    let transaction = crate::models::new_oidc_upstream_authorization_state();
+    crate::db::create_oidc_upstream_authorization(
+        db,
+        &source.id,
+        &transaction,
+        chrono::Utc::now().timestamp() + 300,
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    let scope = config.scopes.join(" ");
+    let url = format!(
+        "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&nonce={}&code_challenge={}&code_challenge_method=S256",
+        discovery.authorization_endpoint,
+        urlencoding::encode(&config.client_id),
+        urlencoding::encode(&config.redirect_uri),
+        urlencoding::encode(&scope),
+        urlencoding::encode(&transaction.state),
+        urlencoding::encode(&transaction.nonce),
+        urlencoding::encode(&transaction.code_challenge),
+    );
+    Ok(Redirect::temporary(&url))
 }
 
 pub async fn update_identity_source(

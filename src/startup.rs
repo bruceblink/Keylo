@@ -196,6 +196,7 @@ fn base_public_routes(include_oauth: bool) -> Router<AppState> {
         .merge(routes::authorization::authorization_routes())
         .merge(routes::service::service_public_routes())
         .merge(routes::oidc::public_routes())
+        .merge(routes::identity::identity_public_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/favicon.ico", get(favicon))

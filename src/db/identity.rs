@@ -92,6 +92,19 @@ pub async fn get_identity_source(pool: &PgPool, id: &str) -> Result<Option<Ident
     Ok(source)
 }
 
+/// Find an active identity source by its stable public name.
+pub async fn get_active_identity_source_by_name(
+    pool: &PgPool,
+    name: &str,
+) -> Result<Option<IdentitySource>> {
+    Ok(sqlx::query_as::<_, IdentitySource>(
+        "SELECT id, name, source_type, display_name, description, config, claim_mapping, jit_enabled, auto_link_enabled, active, created_at, updated_at FROM identity_sources WHERE name = $1 AND active = TRUE",
+    )
+    .bind(name)
+    .fetch_optional(pool)
+    .await?)
+}
+
 pub async fn update_identity_source(
     pool: &PgPool,
     params: UpdateIdentitySourceParams<'_>,

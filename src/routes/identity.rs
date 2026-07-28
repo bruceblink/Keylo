@@ -1,6 +1,6 @@
 use crate::handlers::identity::{
-    create_identity_source, discover_oidc_upstream, get_identity_source, list_identity_sources,
-    update_identity_source,
+    begin_oidc_upstream_login, create_identity_source, discover_oidc_upstream, get_identity_source,
+    list_identity_sources, update_identity_source,
 };
 use crate::state::AppState;
 use axum::routing::{get, post, put};
@@ -23,4 +23,12 @@ pub fn identity_admin_routes() -> Router<AppState> {
             "/v1/admin/identity-sources/{source_id}/oidc/discover",
             post(discover_oidc_upstream),
         )
+}
+
+/// Public browser entry point for a registered upstream OIDC identity source.
+pub fn identity_public_routes() -> Router<AppState> {
+    Router::new().route(
+        "/v1/upstream/oidc/{source_name}/login",
+        get(begin_oidc_upstream_login),
+    )
 }
