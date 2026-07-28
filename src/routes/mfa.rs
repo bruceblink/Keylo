@@ -4,11 +4,13 @@ use serde_json::json;
 
 use crate::{
     db::{
-        create_audit_log, enable_totp_credential, get_totp_credential, save_pending_totp_credential,
+        create_audit_log, enable_totp_credential_with_recovery_codes, get_totp_credential,
+        save_pending_totp_credential,
     },
     models::{
-        decrypt_totp_seed, encrypt_totp_seed, generate_totp_seed, totp_provisioning_uri,
-        verify_totp_code, Claims, TotpEnrollmentResponse, VerifyTotpEnrollmentRequest,
+        decrypt_totp_seed, encrypt_totp_seed, generate_recovery_codes, generate_totp_seed,
+        totp_provisioning_uri, verify_totp_code, Claims, TotpEnrollmentResponse,
+        TotpVerificationResponse, VerifyTotpEnrollmentRequest,
     },
     state::AppState,
     utils::{require_db, ApiResponse},
@@ -110,7 +112,8 @@ async fn verify_totp_enrollment(
         Some(step) => step,
         None => return Err(bad_request_response("Invalid TOTP code")),
     };
-    match enable_totp_credential(db, &user_id, step).await {
+    let recovery_codes = generate_recovery_codes();
+    match enable_totp_credential_with_recovery_codes(db, &user_id, step, &recovery_codes).await {
         Ok(true) => {}
         Ok(false) => return Err(conflict_response("TOTP enrollment is no longer pending")),
         Err(error) => return Err(internal_error_response("Failed to enable TOTP", &error)),
@@ -126,9 +129,10 @@ async fn verify_totp_enrollment(
         tracing::warn!(error = %error, "Failed to write TOTP enabled audit log");
     }
 
-    Ok(Json(
-        json!({ "success": true, "data": { "enabled": true } }),
-    ))
+    Ok(Json(json!({
+        "success": true,
+        "data": TotpVerificationResponse { enabled: true, recovery_codes }
+    })))
 }
 
 /// Accept only user principals with a stable user identifier for self-service MFA changes.

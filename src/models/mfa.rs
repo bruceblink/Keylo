@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 pub const TOTP_STEP_SECONDS: u64 = 30;
 const TOTP_DIGITS: usize = 6;
+pub const RECOVERY_CODE_COUNT: usize = 10;
 
 /// An encrypted TOTP credential; the seed is never returned through API responses.
 #[derive(Debug, Clone, FromRow)]
@@ -31,6 +32,45 @@ pub struct TotpEnrollmentResponse {
 #[derive(Debug, Deserialize)]
 pub struct VerifyTotpEnrollmentRequest {
     pub code: String,
+}
+
+/// Response returned only when TOTP becomes enabled, including replacement recovery codes.
+#[derive(Debug, Serialize)]
+pub struct TotpVerificationResponse {
+    pub enabled: bool,
+    pub recovery_codes: Vec<String>,
+}
+
+/// Create display-friendly, high-entropy recovery codes for a single enrollment.
+pub fn generate_recovery_codes() -> Vec<String> {
+    (0..RECOVERY_CODE_COUNT)
+        .map(|_| format_recovery_code(&Uuid::new_v4().simple().to_string()))
+        .collect()
+}
+
+/// Normalize a recovery code before hashing or comparison without accepting arbitrary input.
+pub fn normalize_recovery_code(code: &str) -> Option<String> {
+    if !code
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    {
+        return None;
+    }
+
+    let compact = code.replace('-', "");
+    (compact.len() == 32 && compact.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| compact.to_ascii_lowercase())
+}
+
+/// Format the raw UUID-shaped code in groups that are practical to transcribe manually.
+fn format_recovery_code(code: &str) -> String {
+    format!(
+        "{}-{}-{}-{}",
+        &code[..8],
+        &code[8..16],
+        &code[16..24],
+        &code[24..]
+    )
 }
 
 /// Create a random Base32 seed suitable for a standard authenticator application.
@@ -140,8 +180,9 @@ pub fn decrypt_totp_seed(encrypted_seed: &str, key: &[u8]) -> Result<String, Str
 #[cfg(test)]
 mod tests {
     use super::{
-        decrypt_totp_seed, encrypt_totp_seed, generate_totp_seed, totp_provisioning_uri,
-        verify_totp_code, TOTP_STEP_SECONDS,
+        decrypt_totp_seed, encrypt_totp_seed, generate_recovery_codes, generate_totp_seed,
+        normalize_recovery_code, totp_provisioning_uri, verify_totp_code, RECOVERY_CODE_COUNT,
+        TOTP_STEP_SECONDS,
     };
     use totp_rs::{Algorithm, Secret, TOTP};
 
@@ -219,5 +260,21 @@ mod tests {
         assert!(uri.starts_with("otpauth://totp/"));
         assert!(uri.contains("issuer=Keylo"));
         assert!(uri.contains(&format!("secret={seed}")));
+    }
+
+    #[test]
+    fn recovery_codes_are_unique_and_normalize_only_valid_inputs() {
+        let codes = generate_recovery_codes();
+        let unique_codes = codes.iter().collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(codes.len(), RECOVERY_CODE_COUNT);
+        assert_eq!(unique_codes.len(), RECOVERY_CODE_COUNT);
+        assert_eq!(normalize_recovery_code(&codes[0]).unwrap().len(), 32);
+        assert_eq!(
+            normalize_recovery_code(&codes[0].to_ascii_lowercase()),
+            normalize_recovery_code(&codes[0])
+        );
+        assert!(normalize_recovery_code("not-a-recovery-code").is_none());
+        assert!(normalize_recovery_code("1234-5678").is_none());
     }
 }

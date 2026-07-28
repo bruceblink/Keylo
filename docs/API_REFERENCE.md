@@ -295,7 +295,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 { "code": "123456" }
 ```
 
-到 `POST /v1/user/mfa/totp/verify`。Keylo 采用 6 位、30 秒、SHA-1 的 RFC 6238 兼容配置，并允许相邻一个时间步来兼容轻微时钟误差。验证成功后才启用凭据并写入审计日志；无效或已启用的 enrollment 不会产生部分状态变更。
+到 `POST /v1/user/mfa/totp/verify`。Keylo 采用 6 位、30 秒、SHA-1 的 RFC 6238 兼容配置，并允许相邻一个时间步来兼容轻微时钟误差。验证成功后才启用凭据、原子生成 10 个恢复码并写入审计日志；恢复码只在该响应的 `recovery_codes` 中返回一次，服务端仅保存 bcrypt hash，客户端不得记录明文。无效或已启用的 enrollment 不会产生部分状态变更。
 
 ---
 

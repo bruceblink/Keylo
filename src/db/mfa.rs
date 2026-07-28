@@ -1,6 +1,8 @@
-use crate::models::MfaTotpCredential;
-use anyhow::Result;
+use crate::models::{MfaTotpCredential, RECOVERY_CODE_COUNT};
+use anyhow::{bail, Result};
+use bcrypt::{hash, verify, DEFAULT_COST};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 /// Create or replace an unverified enrollment seed for a user.
 pub async fn save_pending_totp_credential(
@@ -52,6 +54,85 @@ pub async fn enable_totp_credential(pool: &PgPool, user_id: &str, step: i64) -> 
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Enable a verified TOTP seed and replace recovery codes in one database transaction.
+pub async fn enable_totp_credential_with_recovery_codes(
+    pool: &PgPool,
+    user_id: &str,
+    step: i64,
+    recovery_codes: &[String],
+) -> Result<bool> {
+    if recovery_codes.len() != RECOVERY_CODE_COUNT {
+        bail!("expected exactly {RECOVERY_CODE_COUNT} recovery codes");
+    }
+    let mut hashes = Vec::with_capacity(recovery_codes.len());
+    for code in recovery_codes {
+        hashes.push(hash(code, DEFAULT_COST)?);
+    }
+
+    let mut transaction = pool.begin().await?;
+    let enabled = sqlx::query(
+        "UPDATE mfa_totp_credentials
+         SET enabled_at = NOW(), last_verified_step = $2, updated_at = NOW()
+         WHERE user_id = $1 AND enabled_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(step)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected()
+        > 0;
+    if !enabled {
+        transaction.rollback().await?;
+        return Ok(false);
+    }
+
+    sqlx::query("DELETE FROM mfa_recovery_codes WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?;
+    for code_hash in hashes {
+        sqlx::query(
+            "INSERT INTO mfa_recovery_codes (id, user_id, code_hash)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(user_id)
+        .bind(code_hash)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+
+    Ok(true)
+}
+
+/// Atomically mark a matching recovery code used; a concurrent second use always fails.
+pub async fn consume_recovery_code(pool: &PgPool, user_id: &str, code: &str) -> Result<bool> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, code_hash FROM mfa_recovery_codes
+         WHERE user_id = $1 AND used_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    for (id, code_hash) in rows {
+        if verify(code, &code_hash)? {
+            return Ok(sqlx::query(
+                "UPDATE mfa_recovery_codes SET used_at = NOW()
+                 WHERE id = $1 AND used_at IS NULL",
+            )
+            .bind(id)
+            .execute(pool)
+            .await?
+            .rows_affected()
+                > 0);
+        }
+    }
+
+    Ok(false)
 }
 
 /// Remove all TOTP state; callers must enforce recent MFA before using it on enabled accounts.
