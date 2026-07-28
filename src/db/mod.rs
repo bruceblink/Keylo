@@ -8,6 +8,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 pub mod identity;
+pub mod mfa;
 pub mod oauth;
 pub mod oidc;
 pub mod principal;
@@ -19,6 +20,7 @@ pub mod settings;
 pub mod user;
 
 pub use identity::*;
+pub use mfa::*;
 pub use oauth::*;
 pub use oidc::*;
 pub use principal::*;

@@ -1,6 +1,7 @@
 mod auth;
 mod identity;
 mod jwt;
+mod mfa;
 mod oauth;
 mod oidc;
 mod principal;
@@ -13,6 +14,7 @@ mod user;
 pub use auth::*;
 pub use identity::*;
 pub use jwt::*;
+pub use mfa::*;
 pub use oauth::*;
 pub use oidc::*;
 pub use principal::*;
