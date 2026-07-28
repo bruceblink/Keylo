@@ -517,6 +517,7 @@ pub async fn complete_oidc_upstream_login(
 }
 
 pub async fn update_identity_source(
+    claims: Claims,
     State(state): State<AppState>,
     Path(source_id): Path<String>,
     Json(payload): Json<UpdateIdentitySourceRequest>,
@@ -536,18 +537,28 @@ pub async fn update_identity_source(
     let claim_mapping = optional_json_object("claim_mapping", payload.claim_mapping)?;
 
     let db = require_db(&state)?;
+    let needs_existing =
+        config.is_some() || claim_mapping.is_some() || payload.active == Some(false);
+    let existing = if needs_existing {
+        Some(
+            identity_db::get_identity_source(db, &source_id)
+                .await
+                .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+                .ok_or(AuthError::NotFound)?,
+        )
+    } else {
+        None
+    };
     if let Some(config) = config.as_ref() {
-        let existing = identity_db::get_identity_source(db, &source_id)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?
-            .ok_or(AuthError::NotFound)?;
+        let existing = existing
+            .as_ref()
+            .expect("existing source required for config validation");
         validate_identity_source_config(&existing.source_type, config)?;
     }
     if let Some(claim_mapping) = claim_mapping.as_ref() {
-        let existing = identity_db::get_identity_source(db, &source_id)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?
-            .ok_or(AuthError::NotFound)?;
+        let existing = existing
+            .as_ref()
+            .expect("existing source required for claim mapping validation");
         validate_identity_source_claim_mapping(&existing.source_type, claim_mapping)?;
     }
     let source = identity_db::update_identity_source(
@@ -566,6 +577,31 @@ pub async fn update_identity_source(
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?
     .ok_or(AuthError::NotFound)?;
+
+    if existing.is_some_and(|previous| {
+        previous.active && !source.active && previous.source_type == "oidc_upstream"
+    }) {
+        let revoked_sessions = crate::db::revoke_client_refresh_sessions(
+            db,
+            &oidc_mapping_provider(&source),
+            Some("identity_source_disabled"),
+        )
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to revoke upstream sessions".to_string()))?;
+        crate::db::create_audit_log(
+            db,
+            "identity_source.disabled",
+            Some(&claims.sub),
+            Some(&format!(
+                "source_id={}; revoked_sessions={}",
+                source.id, revoked_sessions
+            )),
+        )
+        .await
+        .map_err(|_| {
+            AuthError::DatabaseError("Failed to audit identity source disable".to_string())
+        })?;
+    }
 
     Ok(Json(source.redacted_for_response()))
 }
