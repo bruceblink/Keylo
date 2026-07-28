@@ -596,7 +596,7 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - `name`：稳定唯一标识，会被 trim 并转为小写，不能包含空白字符。
 - `source_type`：支持 `local_password`、`oauth2`、`oidc_upstream`、`ldap`。
 - `display_name`：面向管理界面或集成文档展示的名称。
-- `config`：身份源配置对象。Keylo 当前只校验它是 JSON object，具体 schema 由后续接入实现定义。
+- `config`：身份源配置对象。Keylo 当前只校验它是 JSON object，具体 schema 由后续接入实现定义；响应会将 key 名含 `secret`、`password` 或等于 `token` 的配置值脱敏，提交后的敏感值不能通过读取接口回显。
 - `claim_mapping`：外部身份字段到 Keylo 标准字段的映射对象。
 - `jit_enabled`：是否允许后续登录接入实现进行 JIT 用户创建，默认 `false`。
 - `auto_link_enabled`：是否允许后续登录接入实现自动关联已有用户，默认 `true`。

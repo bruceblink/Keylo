@@ -86,7 +86,12 @@ pub async fn list_identity_sources(
         .await
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-    Ok(Json(json!({ "identity_sources": sources })))
+    Ok(Json(json!({
+        "identity_sources": sources
+            .into_iter()
+            .map(IdentitySource::redacted_for_response)
+            .collect::<Vec<_>>()
+    })))
 }
 
 pub async fn create_identity_source(
@@ -132,7 +137,7 @@ pub async fn create_identity_source(
         }
     })?;
 
-    Ok(Json(source))
+    Ok(Json(source.redacted_for_response()))
 }
 
 pub async fn get_identity_source(
@@ -145,7 +150,7 @@ pub async fn get_identity_source(
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?
         .ok_or(AuthError::NotFound)?;
 
-    Ok(Json(source))
+    Ok(Json(source.redacted_for_response()))
 }
 
 pub async fn update_identity_source(
@@ -185,7 +190,7 @@ pub async fn update_identity_source(
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?
     .ok_or(AuthError::NotFound)?;
 
-    Ok(Json(source))
+    Ok(Json(source.redacted_for_response()))
 }
 
 #[cfg(test)]
