@@ -20,6 +20,7 @@ pub fn public_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/oidc/authorize", get(oidc::authorize))
         .route("/v1/oidc/login", post(oidc::login))
+        .route("/v1/oidc/logout", post(oidc::logout))
         .route("/v1/oidc/token", post(oidc::token))
         .route("/v1/oidc/userinfo", get(oidc::userinfo))
         .route("/.well-known/openid-configuration", get(oidc::discovery))

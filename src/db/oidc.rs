@@ -172,3 +172,14 @@ pub async fn resolve_browser_session(
         expires_at,
     }))
 }
+
+/// Revoke a browser session by its opaque cookie value; callers never expose the stored hash.
+pub async fn revoke_browser_session(pool: &PgPool, raw_session: &str) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE oidc_browser_sessions SET revoked_at = NOW() WHERE session_hash = $1 AND revoked_at IS NULL",
+    )
+    .bind(browser_session_hash(raw_session))
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}

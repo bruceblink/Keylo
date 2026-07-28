@@ -323,6 +323,26 @@ pub async fn login(
     Ok(response)
 }
 
+/// End the browser-only OIDC session and expire its cookie without affecting API refresh sessions.
+pub async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AuthError> {
+    if let Some(cookie) = browser_cookie(&headers) {
+        crate::db::revoke_browser_session(database(&state)?, cookie)
+            .await
+            .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_static(
+            "keylo_oidc_session=; Path=/v1/oidc; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
+        ),
+    );
+    Ok(response)
+}
+
 /// Exchange one authorization code exactly once after validating its client, redirect URI, and PKCE verifier.
 pub async fn token(
     State(state): State<AppState>,
