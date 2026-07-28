@@ -597,6 +597,8 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - `source_type`：支持 `local_password`、`oauth2`、`oidc_upstream`、`ldap`。
 - `display_name`：面向管理界面或集成文档展示的名称。
 - `config`：身份源配置对象。Keylo 当前只校验它是 JSON object，具体 schema 由后续接入实现定义；响应会将 key 名含 `secret`、`password` 或等于 `token` 的配置值脱敏，提交后的敏感值不能通过读取接口回显。
+
+`oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调；scopes 必须唯一且包含 `openid`。这些字段将用于后续 Discovery、授权码回调与 claim 映射执行链路。
 - `claim_mapping`：外部身份字段到 Keylo 标准字段的映射对象。
 - `jit_enabled`：是否允许后续登录接入实现进行 JIT 用户创建，默认 `false`。
 - `auto_link_enabled`：是否允许后续登录接入实现自动关联已有用户，默认 `true`。

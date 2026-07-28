@@ -1,6 +1,9 @@
 use crate::db::identity as identity_db;
 use crate::errors::{is_unique_violation, AuthError};
-use crate::models::{CreateIdentitySourceRequest, IdentitySource, UpdateIdentitySourceRequest};
+use crate::models::{
+    parse_oidc_upstream_config, CreateIdentitySourceRequest, IdentitySource,
+    UpdateIdentitySourceRequest,
+};
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -78,6 +81,13 @@ fn optional_json_object(
     }
 }
 
+fn validate_identity_source_config(source_type: &str, config: &Value) -> Result<(), AuthError> {
+    if source_type == "oidc_upstream" {
+        parse_oidc_upstream_config(config).map_err(AuthError::InvalidRequest)?;
+    }
+    Ok(())
+}
+
 pub async fn list_identity_sources(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, AuthError> {
@@ -102,6 +112,7 @@ pub async fn create_identity_source(
     let source_type = normalize_source_type(&payload.source_type)?;
     let display_name = normalize_display_name(&payload.display_name)?;
     let config = json_object_or_default("config", payload.config)?;
+    validate_identity_source_config(&source_type, &config)?;
     let claim_mapping = json_object_or_default("claim_mapping", payload.claim_mapping)?;
     let description = payload
         .description
@@ -173,6 +184,13 @@ pub async fn update_identity_source(
     let claim_mapping = optional_json_object("claim_mapping", payload.claim_mapping)?;
 
     let db = require_db(&state)?;
+    if let Some(config) = config.as_ref() {
+        let existing = identity_db::get_identity_source(db, &source_id)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+            .ok_or(AuthError::NotFound)?;
+        validate_identity_source_config(&existing.source_type, config)?;
+    }
     let source = identity_db::update_identity_source(
         db,
         identity_db::UpdateIdentitySourceParams {
