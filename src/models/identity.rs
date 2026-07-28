@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -112,6 +113,53 @@ pub struct OidcUpstreamIdTokenClaims {
     pub nonce: Option<String>,
     pub email: Option<String>,
     pub preferred_username: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OidcUpstreamJwks {
+    pub keys: Vec<OidcUpstreamJwk>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OidcUpstreamJwk {
+    pub kid: Option<String>,
+    pub kty: String,
+    pub n: Option<String>,
+    pub e: Option<String>,
+}
+
+/// Verify an RS256 upstream ID Token using the JWK selected by its required key id.
+pub fn verify_oidc_upstream_id_token(
+    id_token: &str,
+    jwks: &OidcUpstreamJwks,
+) -> Result<OidcUpstreamIdTokenClaims, String> {
+    let header =
+        decode_header(id_token).map_err(|_| "Upstream ID Token header is invalid".to_string())?;
+    if header.alg != Algorithm::RS256 {
+        return Err("Upstream ID Token must use RS256".to_string());
+    }
+    let kid = header
+        .kid
+        .ok_or_else(|| "Upstream ID Token is missing kid".to_string())?;
+    let jwk = jwks
+        .keys
+        .iter()
+        .find(|jwk| jwk.kid.as_deref() == Some(kid.as_str()) && jwk.kty == "RSA")
+        .ok_or_else(|| "Upstream ID Token signing key is unavailable".to_string())?;
+    let key = DecodingKey::from_rsa_components(
+        jwk.n
+            .as_deref()
+            .ok_or_else(|| "Upstream RSA JWK is missing modulus".to_string())?,
+        jwk.e
+            .as_deref()
+            .ok_or_else(|| "Upstream RSA JWK is missing exponent".to_string())?,
+    )
+    .map_err(|_| "Upstream RSA JWK is invalid".to_string())?;
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.validate_aud = false;
+    decode::<OidcUpstreamIdTokenClaims>(id_token, &key, &validation)
+        .map(|data| data.claims)
+        .map_err(|_| "Upstream ID Token signature or expiry is invalid".to_string())
 }
 
 /// Validate issuer, audience, expiry, and nonce after cryptographic signature validation.
