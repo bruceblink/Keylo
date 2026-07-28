@@ -112,6 +112,10 @@ pub async fn enable_totp_credential_with_recovery_codes(
 
 /// Atomically mark a matching recovery code used; a concurrent second use always fails.
 pub async fn consume_recovery_code(pool: &PgPool, user_id: &str, code: &str) -> Result<bool> {
+    let normalized = match normalize_recovery_code(code) {
+        Some(code) => code,
+        None => return Ok(false),
+    };
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT id, code_hash FROM mfa_recovery_codes
          WHERE user_id = $1 AND used_at IS NULL",
@@ -121,7 +125,7 @@ pub async fn consume_recovery_code(pool: &PgPool, user_id: &str, code: &str) -> 
     .await?;
 
     for (id, code_hash) in rows {
-        if verify(code, &code_hash)? {
+        if verify(&normalized, &code_hash)? {
             return Ok(sqlx::query(
                 "UPDATE mfa_recovery_codes SET used_at = NOW()
                  WHERE id = $1 AND used_at IS NULL",
@@ -135,6 +139,119 @@ pub async fn consume_recovery_code(pool: &PgPool, user_id: &str, code: &str) -> 
     }
 
     Ok(false)
+}
+
+/// Consume a valid TOTP time step and persist a short-lived proof for the current access token.
+pub async fn consume_totp_step_and_record_recent_verification(
+    pool: &PgPool,
+    user_id: &str,
+    step: i64,
+    token_jti: &str,
+    expires_at: i64,
+) -> Result<bool> {
+    let mut transaction = pool.begin().await?;
+    let consumed = sqlx::query(
+        "UPDATE mfa_totp_credentials
+         SET last_verified_step = $2, updated_at = NOW()
+         WHERE user_id = $1
+           AND enabled_at IS NOT NULL
+           AND (last_verified_step IS NULL OR last_verified_step < $2)",
+    )
+    .bind(user_id)
+    .bind(step)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected()
+        > 0;
+    if !consumed {
+        transaction.rollback().await?;
+        return Ok(false);
+    }
+
+    save_recent_verification(&mut transaction, user_id, token_jti, expires_at).await?;
+    transaction.commit().await?;
+    Ok(true)
+}
+
+/// Consume a recovery code and create the associated token-bound MFA proof atomically.
+pub async fn consume_recovery_code_and_record_recent_verification(
+    pool: &PgPool,
+    user_id: &str,
+    code: &str,
+    token_jti: &str,
+    expires_at: i64,
+) -> Result<bool> {
+    let normalized = match normalize_recovery_code(code) {
+        Some(code) => code,
+        None => return Ok(false),
+    };
+    let mut transaction = pool.begin().await?;
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, code_hash FROM mfa_recovery_codes
+         WHERE user_id = $1 AND used_at IS NULL FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *transaction)
+    .await?;
+
+    let mut matching_id = None;
+    for (id, code_hash) in rows {
+        if verify(&normalized, &code_hash)? {
+            matching_id = Some(id);
+            break;
+        }
+    }
+    let Some(id) = matching_id else {
+        transaction.rollback().await?;
+        return Ok(false);
+    };
+    sqlx::query("UPDATE mfa_recovery_codes SET used_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+    save_recent_verification(&mut transaction, user_id, token_jti, expires_at).await?;
+    transaction.commit().await?;
+
+    Ok(true)
+}
+
+/// Check whether this exact user access token has a still-valid MFA confirmation.
+pub async fn has_recent_mfa_verification(
+    pool: &PgPool,
+    user_id: &str,
+    token_jti: &str,
+) -> Result<bool> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1 FROM mfa_recent_verifications
+             WHERE user_id = $1 AND token_jti = $2 AND expires_at > NOW()
+         )",
+    )
+    .bind(user_id)
+    .bind(token_jti)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Insert or extend the proof within an existing transaction so factor consumption remains atomic.
+async fn save_recent_verification(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+    token_jti: &str,
+    expires_at: i64,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO mfa_recent_verifications (user_id, token_jti, expires_at)
+         VALUES ($1, $2, to_timestamp($3))
+         ON CONFLICT (user_id, token_jti) DO UPDATE
+         SET verified_at = NOW(), expires_at = EXCLUDED.expires_at",
+    )
+    .bind(user_id)
+    .bind(token_jti)
+    .bind(expires_at)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
 /// Remove all TOTP state; callers must enforce recent MFA before using it on enabled accounts.

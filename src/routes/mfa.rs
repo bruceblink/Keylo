@@ -4,13 +4,16 @@ use serde_json::json;
 
 use crate::{
     db::{
-        create_audit_log, enable_totp_credential_with_recovery_codes, get_totp_credential,
+        consume_recovery_code_and_record_recent_verification,
+        consume_totp_step_and_record_recent_verification, create_audit_log,
+        enable_totp_credential_with_recovery_codes, get_totp_credential,
         save_pending_totp_credential,
     },
     models::{
         decrypt_totp_seed, encrypt_totp_seed, generate_recovery_codes, generate_totp_seed,
-        totp_provisioning_uri, verify_totp_code, Claims, TotpEnrollmentResponse,
-        TotpVerificationResponse, VerifyTotpEnrollmentRequest,
+        totp_provisioning_uri, verify_totp_code, Claims, MfaVerificationRequest,
+        MfaVerificationResponse, TotpEnrollmentResponse, TotpVerificationResponse,
+        VerifyTotpEnrollmentRequest, MFA_RECENT_VERIFICATION_SECONDS,
     },
     state::AppState,
     utils::{require_db, ApiResponse},
@@ -21,6 +24,89 @@ pub fn mfa_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/user/mfa/totp/enroll", post(start_totp_enrollment))
         .route("/v1/user/mfa/totp/verify", post(verify_totp_enrollment))
+        .route("/v1/user/mfa/verify", post(verify_recent_mfa))
+}
+
+/// Verify an enabled factor and bind the resulting short-lived proof to this access token.
+async fn verify_recent_mfa(
+    claims: Claims,
+    State(state): State<AppState>,
+    Json(request): Json<MfaVerificationRequest>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+    let user_id = require_user_id(&claims)?;
+    let has_totp = request.totp_code.is_some();
+    let has_recovery = request.recovery_code.is_some();
+    if has_totp == has_recovery {
+        return Err(bad_request_response("Provide exactly one MFA factor"));
+    }
+    let credential = match get_totp_credential(db, &user_id).await {
+        Ok(Some(credential)) if credential.enabled_at.is_some() => credential,
+        Ok(_) => return Err(bad_request_response("TOTP is not enabled")),
+        Err(error) => return Err(internal_error_response("Failed to load MFA state", &error)),
+    };
+    let now = Utc::now().timestamp();
+    let verified_until = now + MFA_RECENT_VERIFICATION_SECONDS;
+    let (method, accepted) = if let Some(code) = request.totp_code {
+        let key = match state.config.mfa_secret_key_bytes() {
+            Ok(key) => key,
+            Err(_) => return Err(mfa_unavailable_response()),
+        };
+        let seed = match decrypt_totp_seed(&credential.encrypted_seed, &key) {
+            Ok(seed) => seed,
+            Err(_) => return Err(mfa_unavailable_response()),
+        };
+        let step = match u64::try_from(now)
+            .ok()
+            .and_then(|timestamp| verify_totp_code(&seed, &code, timestamp).ok().flatten())
+        {
+            Some(step) => step,
+            None => return Err(bad_request_response("Invalid MFA code")),
+        };
+        (
+            "totp",
+            consume_totp_step_and_record_recent_verification(
+                db,
+                &user_id,
+                step,
+                &claims.jti,
+                verified_until,
+            )
+            .await,
+        )
+    } else {
+        (
+            "recovery_code",
+            consume_recovery_code_and_record_recent_verification(
+                db,
+                &user_id,
+                request.recovery_code.as_deref().unwrap_or_default(),
+                &claims.jti,
+                verified_until,
+            )
+            .await,
+        )
+    };
+    match accepted {
+        Ok(true) => {}
+        Ok(false) => return Err(bad_request_response("Invalid or already used MFA code")),
+        Err(error) => return Err(internal_error_response("Failed to verify MFA", &error)),
+    }
+    if let Err(error) = create_audit_log(
+        db,
+        "mfa.verified",
+        Some(&claims.sub),
+        Some(&format!("user_id={user_id}, method={method}")),
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "Failed to write MFA verification audit log");
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "data": MfaVerificationResponse { method: method.to_string(), verified_until }
+    })))
 }
 
 /// Start a replacement-safe TOTP enrollment and return the secret only to its owner.

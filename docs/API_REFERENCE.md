@@ -286,6 +286,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | POST | `/v1/user/change-password` | user access token | 修改当前用户密码 |
 | POST | `/v1/user/mfa/totp/enroll` | user access token | 创建待确认的 TOTP enrollment |
 | POST | `/v1/user/mfa/totp/verify` | user access token | 用验证码确认并启用待确认的 TOTP |
+| POST | `/v1/user/mfa/verify` | user access token | 验证 TOTP 或恢复码，创建短时 MFA 凭据 |
 
 `POST /v1/user/mfa/totp/enroll` 只可由带稳定 `uid` 的用户 token 调用。它会生成新 Base32 seed、加密保存待确认状态，并一次性返回 `manual_entry_key` 和标准 `provisioning_uri`；响应不得写入客户端日志。已经启用 TOTP 的账户不能通过此接口直接覆盖现有凭据。
 
@@ -296,6 +297,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 ```
 
 到 `POST /v1/user/mfa/totp/verify`。Keylo 采用 6 位、30 秒、SHA-1 的 RFC 6238 兼容配置，并允许相邻一个时间步来兼容轻微时钟误差。验证成功后才启用凭据、原子生成 10 个恢复码并写入审计日志；恢复码只在该响应的 `recovery_codes` 中返回一次，服务端仅保存 bcrypt hash，客户端不得记录明文。无效或已启用的 enrollment 不会产生部分状态变更。
+
+`POST /v1/user/mfa/verify` 请求体必须且只能提交 `totp_code` 或 `recovery_code` 其中之一。验证成功后，Keylo 将最近 MFA 凭据绑定到当前 access token 的 `jti`，有效期为 10 分钟；TOTP 的同一时间步只能成功一次，恢复码成功后立即作废。该接口为改密和管理敏感操作提供二次认证前置条件，审计记录仅保存验证方式。
 
 ---
 

@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub const TOTP_STEP_SECONDS: u64 = 30;
 const TOTP_DIGITS: usize = 6;
 pub const RECOVERY_CODE_COUNT: usize = 10;
+pub const MFA_RECENT_VERIFICATION_SECONDS: i64 = 600;
 
 /// An encrypted TOTP credential; the seed is never returned through API responses.
 #[derive(Debug, Clone, FromRow)]
@@ -39,6 +40,20 @@ pub struct VerifyTotpEnrollmentRequest {
 pub struct TotpVerificationResponse {
     pub enabled: bool,
     pub recovery_codes: Vec<String>,
+}
+
+/// One of the two independent proofs accepted for a recent-MFA credential.
+#[derive(Debug, Deserialize)]
+pub struct MfaVerificationRequest {
+    pub totp_code: Option<String>,
+    pub recovery_code: Option<String>,
+}
+
+/// A short-lived, token-bound verification result for sensitive operations.
+#[derive(Debug, Serialize)]
+pub struct MfaVerificationResponse {
+    pub method: String,
+    pub verified_until: i64,
 }
 
 /// Create display-friendly, high-entropy recovery codes for a single enrollment.
