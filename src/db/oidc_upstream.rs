@@ -9,7 +9,7 @@ use crate::models::OidcUpstreamAuthorizationState;
 pub struct ConsumedOidcUpstreamAuthorization {
     pub source_id: String,
     pub nonce_hash: String,
-    pub code_verifier_hash: String,
+    pub code_verifier_encrypted: String,
 }
 
 fn opaque_hash(value: &str) -> String {
@@ -21,18 +21,19 @@ pub async fn create_oidc_upstream_authorization(
     pool: &PgPool,
     source_id: &str,
     authorization: &OidcUpstreamAuthorizationState,
+    encrypted_code_verifier: &str,
     expires_at: i64,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO oidc_upstream_authorizations
-         (id, state_hash, source_id, nonce_hash, code_verifier_hash, expires_at)
+         (id, state_hash, source_id, nonce_hash, code_verifier_encrypted, expires_at)
          VALUES ($1, $2, $3, $4, $5, to_timestamp($6))",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(opaque_hash(&authorization.state))
     .bind(source_id)
     .bind(opaque_hash(&authorization.nonce))
-    .bind(opaque_hash(&authorization.code_verifier))
+    .bind(encrypted_code_verifier)
     .bind(expires_at)
     .execute(pool)
     .await?;
@@ -47,18 +48,18 @@ pub async fn consume_oidc_upstream_authorization(
     let row = sqlx::query_as::<_, (String, String, String)>(
         "UPDATE oidc_upstream_authorizations SET consumed_at = NOW()
          WHERE state_hash = $1 AND consumed_at IS NULL AND expires_at > NOW()
-         RETURNING source_id, nonce_hash, code_verifier_hash",
+         RETURNING source_id, nonce_hash, code_verifier_encrypted",
     )
     .bind(opaque_hash(state))
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(
-        |(source_id, nonce_hash, code_verifier_hash)| ConsumedOidcUpstreamAuthorization {
+    Ok(row.map(|(source_id, nonce_hash, code_verifier_encrypted)| {
+        ConsumedOidcUpstreamAuthorization {
             source_id,
             nonce_hash,
-            code_verifier_hash,
-        },
-    ))
+            code_verifier_encrypted,
+        }
+    }))
 }
 
 /// Compare a callback value with its retained hash without retaining plaintext state.

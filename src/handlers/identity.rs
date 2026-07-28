@@ -246,10 +246,18 @@ pub async fn begin_oidc_upstream_login(
     let discovery = parse_oidc_upstream_discovery(&config.issuer, &document)
         .map_err(AuthError::InvalidRequest)?;
     let transaction = crate::models::new_oidc_upstream_authorization_state();
+    let mfa_key = state.config.mfa_secret_key_bytes().map_err(|_| {
+        AuthError::DatabaseError("MFA_SECRET_KEY is required for upstream OIDC login".to_string())
+    })?;
+    let encrypted_code_verifier =
+        crate::models::encrypt_totp_seed(&transaction.code_verifier, &mfa_key).map_err(|_| {
+            AuthError::DatabaseError("Failed to protect upstream PKCE verifier".to_string())
+        })?;
     crate::db::create_oidc_upstream_authorization(
         db,
         &source.id,
         &transaction,
+        &encrypted_code_verifier,
         chrono::Utc::now().timestamp() + 300,
     )
     .await
