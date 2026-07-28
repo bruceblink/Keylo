@@ -3,7 +3,10 @@ use bcrypt::{hash, DEFAULT_COST};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::{CreateOidcClientRequest, OidcClient, UpdateOidcClientRequest};
+use crate::models::{
+    authorization_code_hash, CreateOidcClientRequest, OidcAuthorizationCode, OidcClient,
+    UpdateOidcClientRequest,
+};
 
 /// Persist a validated OIDC relying-party registration without ever storing its secret in plaintext.
 pub async fn create_oidc_client(
@@ -44,4 +47,53 @@ pub async fn update_oidc_client(
     let now = chrono::Local::now().naive_utc();
     Ok(sqlx::query_as::<_, OidcClient>("UPDATE oidc_clients SET name = COALESCE($2, name), description = COALESCE($3, description), redirect_uris = COALESCE($4, redirect_uris), grant_types = COALESCE($5, grant_types), scopes = COALESCE($6, scopes), active = COALESCE($7, active), updated_at = $8 WHERE client_id = $1 RETURNING id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, created_at, updated_at")
         .bind(client_id).bind(&request.name).bind(&request.description).bind(&request.redirect_uris).bind(&request.grant_types).bind(&request.scopes).bind(request.active).bind(now).fetch_optional(pool).await?)
+}
+
+/// Store an authorization code as a hash; the raw value is only ever returned to its redirect URI.
+pub async fn create_authorization_code(
+    pool: &PgPool,
+    raw_code: &str,
+    authorization: &OidcAuthorizationCode,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO oidc_authorization_codes (id, code_hash, client_id, user_id, redirect_uri, scopes, nonce, code_challenge, code_challenge_method, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'S256',to_timestamp($9))",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(authorization_code_hash(raw_code))
+    .bind(&authorization.client_id)
+    .bind(&authorization.user_id)
+    .bind(&authorization.redirect_uri)
+    .bind(&authorization.scopes)
+    .bind(&authorization.nonce)
+    .bind(&authorization.code_challenge)
+    .bind(authorization.expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Atomically mark a valid authorization code as consumed and return its immutable grant context.
+pub async fn consume_authorization_code(
+    pool: &PgPool,
+    raw_code: &str,
+) -> Result<Option<OidcAuthorizationCode>> {
+    let row = sqlx::query_as::<_, (String, String, String, Vec<String>, Option<String>, String, i64)>(
+        "UPDATE oidc_authorization_codes SET consumed_at = NOW() WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > NOW() RETURNING client_id, user_id, redirect_uri, scopes, nonce, code_challenge, extract(epoch from expires_at)::bigint",
+    )
+    .bind(authorization_code_hash(raw_code))
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(
+        |(client_id, user_id, redirect_uri, scopes, nonce, code_challenge, expires_at)| {
+            OidcAuthorizationCode {
+                client_id,
+                user_id,
+                redirect_uri,
+                scopes,
+                nonce,
+                code_challenge,
+                expires_at,
+            }
+        },
+    ))
 }

@@ -1,4 +1,6 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 
 /// A registered relying party that will later use Keylo's OIDC authorization endpoints.
@@ -37,6 +39,51 @@ pub struct UpdateOidcClientRequest {
     pub grant_types: Option<Vec<String>>,
     pub scopes: Option<Vec<String>>,
     pub active: Option<bool>,
+}
+
+/// Authorization data retained until the token endpoint atomically consumes the one-time code.
+#[derive(Debug, Clone)]
+pub struct OidcAuthorizationCode {
+    pub client_id: String,
+    pub user_id: String,
+    pub redirect_uri: String,
+    pub scopes: Vec<String>,
+    pub nonce: Option<String>,
+    pub code_challenge: String,
+    pub expires_at: i64,
+}
+
+/// Check the S256 PKCE challenge before issuing an authorization code.
+pub fn validate_pkce_challenge(challenge: &str, method: &str) -> Result<(), String> {
+    if method != "S256" {
+        return Err("only S256 code_challenge_method is supported".to_string());
+    }
+    validate_pkce_value("code_challenge", challenge)
+}
+
+/// Verify the verifier sent to the token endpoint against the challenge bound to the code.
+pub fn verify_pkce_s256(verifier: &str, challenge: &str) -> bool {
+    if validate_pkce_value("code_verifier", verifier).is_err() {
+        return false;
+    }
+    let digest = Sha256::digest(verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest) == challenge
+}
+
+/// Hash an opaque authorization code so database disclosure cannot mint access tokens.
+pub fn authorization_code_hash(code: &str) -> String {
+    hex::encode(Sha256::digest(code.as_bytes()))
+}
+
+fn validate_pkce_value(label: &str, value: &str) -> Result<(), String> {
+    if !(43..=128).contains(&value.len())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+    {
+        return Err(format!("{label} must be 43-128 PKCE unreserved characters"));
+    }
+    Ok(())
 }
 
 /// Validate static registration data before it can become an OAuth redirect target.
@@ -142,5 +189,23 @@ mod tests {
             "https://portal.example.com/callback#token"
         ))
         .is_err());
+    }
+
+    #[test]
+    fn pkce_s256_matches_the_rfc_vector() {
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+        assert!(validate_pkce_challenge(challenge, "S256").is_ok());
+        assert!(verify_pkce_s256(verifier, challenge));
+        assert!(!verify_pkce_s256(
+            "this-verifier-is-definitely-not-the-original-value-123",
+            challenge
+        ));
+    }
+
+    #[test]
+    fn pkce_rejects_plain_or_invalid_challenges() {
+        assert!(validate_pkce_challenge("short", "S256").is_err());
+        assert!(validate_pkce_challenge("a".repeat(43).as_str(), "plain").is_err());
     }
 }

@@ -27,6 +27,8 @@ mod database_tests {
         // 清理测试数据，保留表结构
         if (sqlx::query(
             "TRUNCATE TABLE
+                oidc_authorization_codes,
+                oidc_clients,
                 user_oauth_accounts,
                 oauth_providers,
                 role_permissions,
@@ -122,6 +124,64 @@ mod database_tests {
             .expect("Failed to query non-existent client");
 
         assert_eq!(non_existent, None);
+    }
+
+    #[tokio::test]
+    async fn test_oidc_authorization_code_is_one_time_use() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_oidc_authorization_code_is_one_time_use: {msg}");
+                return;
+            }
+        };
+        let user = db::create_user(
+            &pool,
+            "oidc-code-user",
+            "oidc-code@example.com",
+            Some("CodeUser#123"),
+        )
+        .await
+        .expect("Failed to create OIDC code user");
+        let client_request = keylo::models::CreateOidcClientRequest {
+            client_id: "oidc-code-client".to_string(),
+            client_secret: None,
+            name: "OIDC code client".to_string(),
+            description: None,
+            client_type: "public".to_string(),
+            redirect_uris: vec!["https://example.com/callback".to_string()],
+            grant_types: None,
+            scopes: None,
+        };
+        db::create_oidc_client(&pool, &client_request)
+            .await
+            .expect("Failed to create OIDC client");
+        let code = "authorization-code-value";
+        let authorization = keylo::models::OidcAuthorizationCode {
+            client_id: client_request.client_id,
+            user_id: user.id.clone(),
+            redirect_uri: "https://example.com/callback".to_string(),
+            scopes: vec!["openid".to_string()],
+            nonce: Some("browser-nonce".to_string()),
+            code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".to_string(),
+            expires_at: chrono::Utc::now().timestamp() + 60,
+        };
+        db::create_authorization_code(&pool, code, &authorization)
+            .await
+            .expect("Failed to store authorization code");
+
+        let consumed = db::consume_authorization_code(&pool, code)
+            .await
+            .expect("Failed to consume authorization code")
+            .expect("Authorization code should be active");
+        assert_eq!(consumed.client_id, "oidc-code-client");
+        assert_eq!(consumed.user_id, user.id);
+        assert_eq!(consumed.nonce.as_deref(), Some("browser-nonce"));
+        assert!(db::consume_authorization_code(&pool, code)
+            .await
+            .expect("Failed to check authorization-code replay")
+            .is_none());
     }
 
     #[tokio::test]
