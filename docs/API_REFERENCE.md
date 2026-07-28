@@ -599,6 +599,8 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - `config`：身份源配置对象。Keylo 当前只校验它是 JSON object，具体 schema 由后续接入实现定义；响应会将 key 名含 `secret`、`password` 或等于 `token` 的配置值脱敏，提交后的敏感值不能通过读取接口回显。
 
 `oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调；scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience 和 expiry。
+
+成功回调返回标准 Keylo `AuthBody`，包含 Bearer access token、可轮换 refresh token 和 `expires_in`。令牌代表已关联的本地用户，沿用本地用户的角色、权限和会话策略；令牌及上游 ID Token 不会出现在审计详情中。
 - `claim_mapping`：外部身份字段到 Keylo 标准字段的映射对象。
 - `jit_enabled`：是否允许在没有映射和同邮箱账号时创建无密码的 Keylo 用户，默认 `false`。
 - `auto_link_enabled`：是否允许把已有同邮箱 Keylo 用户关联到上游身份，默认 `true`。仅上游 ID Token 声明 `email_verified: true` 时才会自动关联；否则需要显式关联，避免未验证邮箱接管账号。

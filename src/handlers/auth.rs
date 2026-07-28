@@ -197,6 +197,91 @@ async fn enforce_refresh_session_policy(
 
     Ok(())
 }
+
+/// Issue Keylo access and refresh tokens for an already verified external user and persist its session.
+pub async fn issue_external_user_session(
+    state: &AppState,
+    db: &sqlx::PgPool,
+    user: &crate::models::User,
+    session_client_id: &str,
+) -> Result<AuthBody, AuthError> {
+    if !user.active {
+        return Err(AuthError::Forbidden);
+    }
+
+    let principal = crate::db::ensure_user_principal(db, &user.id)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to resolve user principal".to_string()))?
+        .ok_or(AuthError::InvalidToken)?;
+    enforce_refresh_session_policy(state, db, &principal, false).await?;
+
+    let now = Utc::now().timestamp();
+    let is_admin_user = is_user_admin(db, &user.id).await;
+    let access_claims = Claims {
+        sub: format!("user:{}", user.username),
+        uid: Some(user.id.clone()),
+        principal_id: Some(principal.id.clone()),
+        principal_type: Some("user".to_string()),
+        iss: state.config.jwt_issuer.clone(),
+        aud: "admin-backend".to_string(),
+        scope: access_scope("user", is_admin_user),
+        role: claim_role("user", is_admin_user),
+        iat: now,
+        exp: now + state.config.token_expiry_seconds,
+        jti: utils::generate_jti(),
+        token_type: "access".to_string(),
+    };
+    let refresh_claims = Claims {
+        sub: access_claims.sub.clone(),
+        uid: access_claims.uid.clone(),
+        principal_id: Some(principal.id.clone()),
+        principal_type: Some("user".to_string()),
+        iss: state.config.jwt_issuer.clone(),
+        aud: "admin-backend".to_string(),
+        scope: vec!["refresh".into()],
+        role: claim_role("user", is_admin_user),
+        iat: now,
+        exp: now + state.config.refresh_token_expiry_seconds,
+        jti: utils::generate_jti(),
+        token_type: "refresh".to_string(),
+    };
+    let access_token = state.jwt_keys.sign_token(&access_claims)?;
+    let refresh_token = state.jwt_keys.sign_token(&refresh_claims)?;
+    let session_id = utils::generate_jti();
+    crate::db::create_refresh_session(
+        db,
+        crate::db::CreateRefreshSessionParams {
+            session_id: &session_id,
+            principal_id: &principal.id,
+            client_id: session_client_id,
+            refresh_token_id: &refresh_claims.jti,
+            refresh_token: &refresh_token,
+            access_jti: &access_claims.jti,
+            login_ip: None,
+            user_agent: None,
+            expires_at: refresh_claims.exp,
+        },
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Failed to create refresh session".to_string()))?;
+    audit_event(
+        state,
+        "auth.external_login.success",
+        Some(&user.id),
+        Some(&format!(
+            "session_id={}; client_id={}",
+            session_id, session_client_id
+        )),
+    )
+    .await;
+
+    Ok(AuthBody::new(
+        access_token,
+        Some(refresh_token),
+        state.config.token_expiry_seconds,
+    ))
+}
+
 fn audit_event_background(
     state: &AppState,
     event_type: &str,

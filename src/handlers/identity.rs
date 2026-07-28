@@ -491,9 +491,16 @@ pub async fn complete_oidc_upstream_login(
     let profile =
         crate::models::oidc_upstream_profile(&claims).map_err(AuthError::InvalidRequest)?;
     let user = resolve_oidc_upstream_user(db, &source, &profile).await?;
-    Ok(Json(
-        json!({"user_id": user.id, "username": user.username, "email": user.email}),
-    ))
+    let tokens = crate::handlers::issue_external_user_session(
+        &state,
+        db,
+        &user,
+        &oidc_mapping_provider(&source),
+    )
+    .await?;
+    serde_json::to_value(tokens).map(Json).map_err(|_| {
+        AuthError::InternalServerError("Failed to serialize OIDC login response".to_string())
+    })
 }
 
 pub async fn update_identity_source(
