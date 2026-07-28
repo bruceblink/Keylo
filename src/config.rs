@@ -534,6 +534,8 @@ pub struct Config {
     pub server_port: u16,
     /// Public issuer used by OIDC Discovery and OIDC tokens; separate from the bind address.
     pub oidc_public_issuer: Option<String>,
+    /// AES-256 key for encrypting user MFA seeds at rest.
+    pub mfa_secret_key: Option<String>,
     /// 环境
     pub environment: String,
     /// JWT token过期时间（秒）
@@ -621,6 +623,9 @@ impl Config {
         let oidc_public_issuer = env::var("OIDC_PUBLIC_ISSUER")
             .ok()
             .filter(|value| !value.trim().is_empty());
+        let mfa_secret_key = env::var("MFA_SECRET_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
 
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
 
@@ -682,6 +687,7 @@ impl Config {
             server_addr,
             server_port,
             oidc_public_issuer,
+            mfa_secret_key,
             environment,
             token_expiry_seconds,
             refresh_token_expiry_seconds,
@@ -725,6 +731,15 @@ impl Config {
             .unwrap_or_else(|| self.server_url())
     }
 
+    /// Decode the dedicated AES-256 key used by MFA persistence.
+    pub fn mfa_secret_key_bytes(&self) -> Result<Vec<u8>, String> {
+        let key = self
+            .mfa_secret_key
+            .as_deref()
+            .ok_or_else(|| "MFA_SECRET_KEY must be configured".to_string())?;
+        decode_config_secret_key(key, "MFA_SECRET_KEY")
+    }
+
     /// 判断是否生产环境
     pub fn is_production(&self) -> bool {
         self.environment.to_lowercase() == "production"
@@ -758,6 +773,9 @@ impl Config {
                     "DATABASE_URL must not contain a plaintext password in production; use DATABASE_PASSWORD_ENC or DATABASE_PASSWORD_ENC_FILE"
                         .to_string(),
                 );
+            }
+            if self.mfa_secret_key_bytes().is_err() {
+                errors.push("MFA_SECRET_KEY must be a 32-byte raw or base64-encoded AES-256 key in production".to_string());
             }
         }
 
@@ -1074,6 +1092,7 @@ mod tests {
             server_addr: "127.0.0.1".to_string(),
             server_port: 2345,
             oidc_public_issuer: Some("https://identity.example.com".to_string()),
+            mfa_secret_key: Some("01234567890123456789012345678901".to_string()),
             environment: "development".to_string(),
             token_expiry_seconds: 900,
             refresh_token_expiry_seconds: 2_592_000,
@@ -1334,6 +1353,28 @@ mod tests {
 
         config.oidc_public_issuer = Some("https://identity.example.com".to_string());
         assert!(config.validate_for_setup_initialization().is_ok());
+    }
+
+    #[test]
+    fn production_startup_requires_a_valid_mfa_encryption_key() {
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.mfa_secret_key = None;
+        assert!(config
+            .validate_for_database_startup()
+            .unwrap_err()
+            .contains("MFA_SECRET_KEY"));
+
+        config.mfa_secret_key = Some("too-short".to_string());
+        assert!(config
+            .validate_for_database_startup()
+            .unwrap_err()
+            .contains("MFA_SECRET_KEY"));
+        config.mfa_secret_key = Some("01234567890123456789012345678901".to_string());
+        assert!(!config
+            .validate_for_database_startup()
+            .unwrap_err()
+            .contains("MFA_SECRET_KEY"));
     }
 
     #[test]
