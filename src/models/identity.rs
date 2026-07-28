@@ -101,6 +101,50 @@ pub struct OidcUpstreamAuthorizationState {
     pub code_challenge: String,
 }
 
+/// Claims required from a signed upstream ID Token after JWKS signature verification.
+#[derive(Debug, Deserialize)]
+pub struct OidcUpstreamIdTokenClaims {
+    pub iss: String,
+    pub sub: String,
+    #[serde(default)]
+    pub aud: Value,
+    pub exp: i64,
+    pub nonce: Option<String>,
+    pub email: Option<String>,
+    pub preferred_username: Option<String>,
+}
+
+/// Validate issuer, audience, expiry, and nonce after cryptographic signature validation.
+pub fn validate_oidc_upstream_id_token_claims(
+    claims: &OidcUpstreamIdTokenClaims,
+    issuer: &str,
+    client_id: &str,
+    nonce_hash: &str,
+    now: i64,
+) -> Result<(), String> {
+    if claims.iss != issuer || claims.sub.trim().is_empty() {
+        return Err("Upstream ID Token issuer or subject is invalid".to_string());
+    }
+    let audience_matches = claims.aud.as_str() == Some(client_id)
+        || claims
+            .aud
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(client_id)));
+    if !audience_matches || claims.exp <= now {
+        return Err("Upstream ID Token audience or expiry is invalid".to_string());
+    }
+    let nonce = claims
+        .nonce
+        .as_deref()
+        .ok_or_else(|| "Upstream ID Token nonce is missing".to_string())?;
+    if hex::encode(Sha256::digest(nonce.as_bytes())) != nonce_hash {
+        return Err(
+            "Upstream ID Token nonce does not match the authorization transaction".to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Generate independent state, nonce, and PKCE S256 material for an upstream login.
 pub fn new_oidc_upstream_authorization_state() -> OidcUpstreamAuthorizationState {
     let state = Uuid::new_v4().simple().to_string();
@@ -308,5 +352,37 @@ mod tests {
             first.code_challenge,
             URL_SAFE_NO_PAD.encode(Sha256::digest(first.code_verifier.as_bytes()))
         );
+    }
+
+    #[test]
+    fn upstream_id_token_claims_require_matching_nonce_and_audience() {
+        let nonce = "nonce-1";
+        let claims = super::OidcUpstreamIdTokenClaims {
+            iss: "https://idp.example".to_string(),
+            sub: "user-1".to_string(),
+            aud: json!(["keylo-client"]),
+            exp: 2_000,
+            nonce: Some(nonce.to_string()),
+            email: None,
+            preferred_username: None,
+        };
+        let nonce_hash = hex::encode(Sha256::digest(nonce.as_bytes()));
+
+        assert!(super::validate_oidc_upstream_id_token_claims(
+            &claims,
+            "https://idp.example",
+            "keylo-client",
+            &nonce_hash,
+            1_000,
+        )
+        .is_ok());
+        assert!(super::validate_oidc_upstream_id_token_claims(
+            &claims,
+            "https://idp.example",
+            "wrong-client",
+            &nonce_hash,
+            1_000,
+        )
+        .is_err());
     }
 }
