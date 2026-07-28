@@ -536,6 +536,8 @@ pub struct Config {
     pub oidc_public_issuer: Option<String>,
     /// AES-256 key for encrypting user MFA seeds at rest.
     pub mfa_secret_key: Option<String>,
+    /// Require all human administrators to enroll and verify MFA before management writes.
+    pub mfa_require_for_admins: bool,
     /// 环境
     pub environment: String,
     /// JWT token过期时间（秒）
@@ -626,6 +628,7 @@ impl Config {
         let mfa_secret_key = env::var("MFA_SECRET_KEY")
             .ok()
             .filter(|value| !value.trim().is_empty());
+        let mfa_require_for_admins = parse_bool_env("MFA_REQUIRE_FOR_ADMINS", false);
 
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
 
@@ -688,6 +691,7 @@ impl Config {
             server_port,
             oidc_public_issuer,
             mfa_secret_key,
+            mfa_require_for_admins,
             environment,
             token_expiry_seconds,
             refresh_token_expiry_seconds,
@@ -1093,6 +1097,7 @@ mod tests {
             server_port: 2345,
             oidc_public_issuer: Some("https://identity.example.com".to_string()),
             mfa_secret_key: Some("01234567890123456789012345678901".to_string()),
+            mfa_require_for_admins: false,
             environment: "development".to_string(),
             token_expiry_seconds: 900,
             refresh_token_expiry_seconds: 2_592_000,

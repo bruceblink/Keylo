@@ -470,6 +470,7 @@ wwIDAQAB
             server_port: 2345,
             oidc_public_issuer: None,
             mfa_secret_key: None,
+            mfa_require_for_admins: false,
             environment: "development".to_string(),
             token_expiry_seconds: 900,
             refresh_token_expiry_seconds: 2_592_000,

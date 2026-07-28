@@ -302,7 +302,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 已启用 TOTP 的用户调用 `POST /v1/user/change-password` 前必须先调用 `/v1/user/mfa/verify` 并使用同一 access token；缺少或过期的近期 MFA 凭据会返回 `403` 与 `mfa_required=true`，不会修改密码。尚未启用 MFA 的既有用户在管理员强制 MFA 策略上线前保持兼容。
 
-管理端由用户 access token 发起的写操作同样要求近期 MFA；范围包括 `POST`、`PUT`、`DELETE`。管理员客户端 access token 面向受控自动化，不适用交互式 MFA 校验。管理端查询接口不要求重复验证。
+管理端由已启用 TOTP 的用户 access token 发起的写操作同样要求近期 MFA；范围包括 `POST`、`PUT`、`DELETE`。设置 `MFA_REQUIRE_FOR_ADMINS=true` 后，所有人类管理员必须先 enrollment 再执行写操作。管理员客户端 access token 面向受控自动化，不适用交互式 MFA 校验。管理端查询接口不要求重复验证。
 
 ---
 

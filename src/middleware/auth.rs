@@ -169,6 +169,17 @@ pub async fn admin_authorization_middleware(
                     .into_response())
                 }
             };
+            if state.config.mfa_require_for_admins && !mfa_enabled {
+                return Ok((
+                    StatusCode::FORBIDDEN,
+                    axum::Json(json!({
+                        "success": false,
+                        "error": "MFA enrollment is required for administrators",
+                        "mfa_enrollment_required": true,
+                    })),
+                )
+                    .into_response());
+            }
             if mfa_enabled {
                 match crate::db::has_recent_mfa_verification(db, user_id, &claims.jti).await {
                     Ok(true) => {}
