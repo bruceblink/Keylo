@@ -100,6 +100,18 @@ fn validate_identity_source_config(source_type: &str, config: &Value) -> Result<
     Ok(())
 }
 
+/// Validate claim mappings when the source is an executable upstream OIDC login.
+fn validate_identity_source_claim_mapping(
+    source_type: &str,
+    claim_mapping: &Value,
+) -> Result<(), AuthError> {
+    if source_type == "oidc_upstream" {
+        crate::models::parse_oidc_upstream_claim_mapping(claim_mapping)
+            .map_err(AuthError::InvalidRequest)?;
+    }
+    Ok(())
+}
+
 /// Build the stable external-provider key used to keep one source's subjects separate from another.
 fn oidc_mapping_provider(source: &IdentitySource) -> String {
     format!("oidc_upstream:{}", source.id)
@@ -213,6 +225,7 @@ pub async fn create_identity_source(
     let config = json_object_or_default("config", payload.config)?;
     validate_identity_source_config(&source_type, &config)?;
     let claim_mapping = json_object_or_default("claim_mapping", payload.claim_mapping)?;
+    validate_identity_source_claim_mapping(&source_type, &claim_mapping)?;
     let description = payload
         .description
         .as_deref()
@@ -488,8 +501,8 @@ pub async fn complete_oidc_upstream_login(
         chrono::Utc::now().timestamp(),
     )
     .map_err(AuthError::InvalidRequest)?;
-    let profile =
-        crate::models::oidc_upstream_profile(&claims).map_err(AuthError::InvalidRequest)?;
+    let profile = crate::models::oidc_upstream_profile_with_mapping(&claims, &source.claim_mapping)
+        .map_err(AuthError::InvalidRequest)?;
     let user = resolve_oidc_upstream_user(db, &source, &profile).await?;
     let tokens = crate::handlers::issue_external_user_session(
         &state,
@@ -529,6 +542,13 @@ pub async fn update_identity_source(
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?
             .ok_or(AuthError::NotFound)?;
         validate_identity_source_config(&existing.source_type, config)?;
+    }
+    if let Some(claim_mapping) = claim_mapping.as_ref() {
+        let existing = identity_db::get_identity_source(db, &source_id)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+            .ok_or(AuthError::NotFound)?;
+        validate_identity_source_claim_mapping(&existing.source_type, claim_mapping)?;
     }
     let source = identity_db::update_identity_source(
         db,

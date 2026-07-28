@@ -1,10 +1,10 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -114,6 +114,8 @@ pub struct OidcUpstreamIdTokenClaims {
     pub email: Option<String>,
     pub email_verified: Option<bool>,
     pub preferred_username: Option<String>,
+    #[serde(flatten)]
+    pub additional_claims: Map<String, Value>,
 }
 
 /// Normalized local profile fields derived from a verified upstream identity.
@@ -129,19 +131,28 @@ pub struct OidcUpstreamProfile {
 pub fn oidc_upstream_profile(
     claims: &OidcUpstreamIdTokenClaims,
 ) -> Result<OidcUpstreamProfile, String> {
-    let email = claims
-        .email
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| value.contains('@'))
-        .ok_or_else(|| {
-            "Upstream ID Token must contain a valid email for account mapping".to_string()
-        })?
+    oidc_upstream_profile_with_mapping(claims, &Value::Object(Map::new()))
+}
+
+/// Apply an administrator-defined OIDC claim mapping after the ID Token has been verified.
+pub fn oidc_upstream_profile_with_mapping(
+    claims: &OidcUpstreamIdTokenClaims,
+    claim_mapping: &Value,
+) -> Result<OidcUpstreamProfile, String> {
+    let mapping = parse_oidc_upstream_claim_mapping(claim_mapping)?;
+    let external_subject = oidc_string_claim(claims, mapping.get("external_subject"), "sub")?;
+    let email = oidc_string_claim(claims, mapping.get("email"), "email")?
+        .trim()
         .to_ascii_lowercase();
-    let candidate = claims
-        .preferred_username
-        .as_deref()
-        .unwrap_or_else(|| email.split('@').next().unwrap_or("user"));
+    if !email.contains('@') {
+        return Err("Upstream ID Token must contain a valid email for account mapping".to_string());
+    }
+    let candidate = mapping
+        .get("username")
+        .map(|claim_name| oidc_string_claim(claims, Some(claim_name), "preferred_username"))
+        .transpose()?
+        .or_else(|| claims.preferred_username.clone())
+        .unwrap_or_else(|| email.split('@').next().unwrap_or("user").to_string());
     let username = candidate
         .chars()
         .filter_map(|character| {
@@ -156,11 +167,80 @@ pub fn oidc_upstream_profile(
         return Err("Upstream identity does not provide a usable username".to_string());
     }
     Ok(OidcUpstreamProfile {
-        external_subject: claims.sub.clone(),
+        external_subject,
         username,
         email,
-        email_verified: claims.email_verified.unwrap_or(false),
+        email_verified: oidc_bool_claim(claims, mapping.get("email_verified"), "email_verified")?
+            .unwrap_or(false),
     })
+}
+
+/// Validate the small, fixed mapping contract instead of accepting arbitrary local profile fields.
+pub fn parse_oidc_upstream_claim_mapping(
+    mapping: &Value,
+) -> Result<BTreeMap<String, String>, String> {
+    let object = mapping
+        .as_object()
+        .ok_or_else(|| "OIDC claim_mapping must be a JSON object".to_string())?;
+    let mut parsed = BTreeMap::new();
+    for (target, value) in object {
+        if !matches!(
+            target.as_str(),
+            "external_subject" | "email" | "username" | "email_verified"
+        ) {
+            return Err(format!("OIDC claim_mapping does not support '{}'", target));
+        }
+        let source = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.chars().any(char::is_whitespace))
+            .ok_or_else(|| format!("OIDC claim_mapping '{}' must name one claim", target))?;
+        parsed.insert(target.clone(), source.to_string());
+    }
+    Ok(parsed)
+}
+
+/// Read a string claim from the standard OIDC fields or from signed custom claims.
+fn oidc_string_claim(
+    claims: &OidcUpstreamIdTokenClaims,
+    mapped_name: Option<&String>,
+    default_name: &str,
+) -> Result<String, String> {
+    let name = mapped_name.map(String::as_str).unwrap_or(default_name);
+    let value = match name {
+        "sub" => Some(claims.sub.clone()),
+        "email" => claims.email.clone(),
+        "preferred_username" => claims.preferred_username.clone(),
+        _ => claims
+            .additional_claims
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    };
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("Upstream ID Token is missing mapped '{}' claim", name))
+}
+
+/// Read an optional boolean verification claim without coercing strings such as "true".
+fn oidc_bool_claim(
+    claims: &OidcUpstreamIdTokenClaims,
+    mapped_name: Option<&String>,
+    default_name: &str,
+) -> Result<Option<bool>, String> {
+    let name = mapped_name.map(String::as_str).unwrap_or(default_name);
+    let value = match name {
+        "email_verified" => claims.email_verified,
+        _ => claims.additional_claims.get(name).and_then(Value::as_bool),
+    };
+    if mapped_name.is_some() && value.is_none() {
+        return Err(format!(
+            "Upstream ID Token is missing mapped '{}' boolean claim",
+            name
+        ));
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Deserialize)]
@@ -462,6 +542,7 @@ mod tests {
             email: None,
             email_verified: None,
             preferred_username: None,
+            additional_claims: serde_json::Map::new(),
         };
         let nonce_hash = hex::encode(Sha256::digest(nonce.as_bytes()));
 
@@ -494,10 +575,53 @@ mod tests {
             email: Some(" Alice@Example.COM ".to_string()),
             email_verified: Some(true),
             preferred_username: Some("Alice Smith!".to_string()),
+            additional_claims: serde_json::Map::new(),
         };
         let profile = super::oidc_upstream_profile(&claims).unwrap();
         assert_eq!(profile.email, "alice@example.com");
         assert_eq!(profile.username, "alicesmith");
         assert!(profile.email_verified);
+    }
+
+    #[test]
+    fn upstream_profile_uses_signed_custom_claim_mapping() {
+        let claims = super::OidcUpstreamIdTokenClaims {
+            iss: "https://idp.example".to_string(),
+            sub: "ignored-subject".to_string(),
+            aud: json!("keylo"),
+            exp: 2_000,
+            nonce: None,
+            email: None,
+            email_verified: None,
+            preferred_username: None,
+            additional_claims: serde_json::from_value(json!({
+                "employee_id": "E-17",
+                "work_email": "SAM@EXAMPLE.COM",
+                "login_name": "Sam Example",
+                "work_email_verified": true
+            }))
+            .unwrap(),
+        };
+        let mapping = json!({
+            "external_subject": "employee_id",
+            "email": "work_email",
+            "username": "login_name",
+            "email_verified": "work_email_verified"
+        });
+
+        let profile = super::oidc_upstream_profile_with_mapping(&claims, &mapping).unwrap();
+
+        assert_eq!(profile.external_subject, "E-17");
+        assert_eq!(profile.email, "sam@example.com");
+        assert_eq!(profile.username, "samexample");
+        assert!(profile.email_verified);
+    }
+
+    #[test]
+    fn upstream_claim_mapping_rejects_unknown_local_fields() {
+        let error =
+            super::parse_oidc_upstream_claim_mapping(&json!({"role": "groups"})).unwrap_err();
+
+        assert!(error.contains("does not support"));
     }
 }
