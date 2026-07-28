@@ -253,6 +253,23 @@ impl Keys {
         Ok(claims)
     }
 
+    /// Decode an OIDC access token whose audience is the relying party rather than Keylo's API audience list.
+    pub fn decode_oidc_access_token(
+        &self,
+        token: &str,
+        issuer: &str,
+    ) -> Result<crate::models::OidcAccessTokenClaims, AuthError> {
+        let mut validation = Validation::new(self.algorithm);
+        validation.validate_aud = false;
+        validation.set_issuer(&[issuer]);
+        decode::<crate::models::OidcAccessTokenClaims>(token, &self.decoding, &validation)
+            .map(|data| data.claims)
+            .map_err(|err| match err.kind() {
+                ErrorKind::ExpiredSignature => AuthError::ExpiredToken,
+                _ => AuthError::InvalidToken,
+            })
+    }
+
     /// Like [`decode_service_token`] but also validates that the token's `aud` matches
     /// `expected_audience` at the JWT level, providing defense-in-depth for call sites
     /// that know the expected audience at decode time.

@@ -118,7 +118,7 @@ pub struct OidcIdTokenClaims {
     pub email_verified: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcAccessTokenClaims {
     pub iss: String,
     pub sub: String,

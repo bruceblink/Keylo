@@ -78,6 +78,7 @@ pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value>
         "issuer": base_url,
         "authorization_endpoint": format!("{}/v1/oidc/authorize", state.config.server_url()),
         "token_endpoint": format!("{}/v1/oidc/token", state.config.server_url()),
+        "userinfo_endpoint": format!("{}/v1/oidc/userinfo", state.config.server_url()),
         "jwks_uri": format!("{}/.well-known/jwks.json", state.config.server_url()),
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
@@ -86,6 +87,48 @@ pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value>
         "code_challenge_methods_supported": ["S256"],
         "scopes_supported": ["openid", "profile", "email"]
     }))
+}
+
+/// Return only profile claims allowed by the OIDC scopes embedded in a signed access token.
+pub async fn userinfo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or(AuthError::MissingCredentials)?;
+    let claims = state
+        .jwt_keys
+        .decode_oidc_access_token(token, &state.config.server_url())?;
+    if claims.token_type != "Bearer"
+        || !claims
+            .scope
+            .split_ascii_whitespace()
+            .any(|scope| scope == "openid")
+    {
+        return Err(AuthError::InvalidToken);
+    }
+    let user = crate::db::user::get_user_by_id(database(&state)?, &claims.sub)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .filter(|user| user.active)
+        .ok_or(AuthError::InvalidToken)?;
+    let has_scope = |scope: &str| {
+        claims
+            .scope
+            .split_ascii_whitespace()
+            .any(|value| value == scope)
+    };
+    let mut response = json!({"sub": user.id});
+    if has_scope("profile") {
+        response["name"] = json!(user.username);
+    }
+    if has_scope("email") {
+        response["email"] = json!(user.email);
+    }
+    Ok(Json(response))
 }
 
 fn browser_cookie(headers: &HeaderMap) -> Option<&str> {
@@ -296,11 +339,8 @@ pub async fn token(
             .iter()
             .any(|scope| scope == "email")
             .then_some(user.email),
-        email_verified: authorization
-            .scopes
-            .iter()
-            .any(|scope| scope == "email")
-            .then_some(true),
+        // Keylo has no verified-email state yet, so it must not claim verification to relying parties.
+        email_verified: None,
     })?;
     Ok(Json(OidcTokenResponse {
         access_token,

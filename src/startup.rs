@@ -599,6 +599,10 @@ wwIDAQAB
             body["code_challenge_methods_supported"],
             serde_json::json!(["S256"])
         );
+        assert_eq!(
+            body["userinfo_endpoint"],
+            "http://127.0.0.1:2345/v1/oidc/userinfo"
+        );
     }
 
     #[tokio::test]
