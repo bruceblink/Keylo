@@ -2,7 +2,11 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use sqlx::FromRow;
+use totp_rs::{Algorithm, Secret, TOTP};
 use uuid::Uuid;
+
+pub const TOTP_STEP_SECONDS: u64 = 30;
+const TOTP_DIGITS: usize = 6;
 
 /// An encrypted TOTP credential; the seed is never returned through API responses.
 #[derive(Debug, Clone, FromRow)]
@@ -13,6 +17,61 @@ pub struct MfaTotpCredential {
     pub last_verified_step: Option<i64>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
+}
+
+/// Create a random Base32 seed suitable for a standard authenticator application.
+pub fn generate_totp_seed() -> String {
+    Secret::generate_secret().to_encoded().to_string()
+}
+
+/// Build the standard provisioning URI without persisting or logging the seed.
+pub fn totp_provisioning_uri(
+    seed: &str,
+    issuer: &str,
+    account_name: &str,
+) -> Result<String, String> {
+    let totp = build_totp(seed, issuer, account_name)?;
+    Ok(totp.get_url())
+}
+
+/// Verify a six-digit code and return its exact time step for replay protection.
+pub fn verify_totp_code(seed: &str, code: &str, unix_seconds: u64) -> Result<Option<i64>, String> {
+    if code.len() != TOTP_DIGITS || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Ok(None);
+    }
+
+    let totp = build_totp(seed, "Keylo", "verification")?;
+    let current_step = unix_seconds / TOTP_STEP_SECONDS;
+    for step in [
+        current_step.saturating_sub(1),
+        current_step,
+        current_step.saturating_add(1),
+    ] {
+        if totp.check(code, step * TOTP_STEP_SECONDS) {
+            return i64::try_from(step)
+                .map(Some)
+                .map_err(|_| "TOTP time step is out of range".to_string());
+        }
+    }
+
+    Ok(None)
+}
+
+/// Construct Keylo's fixed TOTP profile and validate the input secret and labels.
+fn build_totp(seed: &str, issuer: &str, account_name: &str) -> Result<TOTP, String> {
+    let secret = Secret::Encoded(seed.to_string())
+        .to_bytes()
+        .map_err(|_| "TOTP seed must be valid Base32".to_string())?;
+    TOTP::new(
+        Algorithm::SHA1,
+        TOTP_DIGITS,
+        0,
+        TOTP_STEP_SECONDS,
+        secret,
+        Some(issuer.to_string()),
+        account_name.to_string(),
+    )
+    .map_err(|_| "TOTP enrollment labels are invalid".to_string())
 }
 
 /// Encrypt a TOTP seed with the configured AES-256 key before it is persisted.
@@ -66,7 +125,11 @@ pub fn decrypt_totp_seed(encrypted_seed: &str, key: &[u8]) -> Result<String, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{decrypt_totp_seed, encrypt_totp_seed};
+    use super::{
+        decrypt_totp_seed, encrypt_totp_seed, generate_totp_seed, totp_provisioning_uri,
+        verify_totp_code, TOTP_STEP_SECONDS,
+    };
+    use totp_rs::{Algorithm, Secret, TOTP};
 
     const KEY: &[u8; 32] = b"01234567890123456789012345678901";
 
@@ -89,5 +152,58 @@ mod tests {
 
         assert!(decrypt_totp_seed(&tampered, KEY).is_err());
         assert!(decrypt_totp_seed(&encrypted, b"too-short").is_err());
+    }
+
+    #[test]
+    fn totp_uses_the_rfc_6238_sha1_test_vector() {
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            8,
+            0,
+            TOTP_STEP_SECONDS,
+            Secret::Raw(b"12345678901234567890".to_vec())
+                .to_bytes()
+                .unwrap(),
+            Some("Keylo".to_string()),
+            "user".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(totp.generate(59), "94287082");
+    }
+
+    #[test]
+    fn totp_verification_accepts_a_single_adjacent_time_step() {
+        let seed = generate_totp_seed();
+        let at = 1_700_000_000;
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            0,
+            TOTP_STEP_SECONDS,
+            Secret::Encoded(seed.clone()).to_bytes().unwrap(),
+            Some("Keylo".to_string()),
+            "verification".to_string(),
+        )
+        .unwrap();
+        let previous_step = (at / TOTP_STEP_SECONDS) - 1;
+        let previous_code = totp.generate(previous_step * TOTP_STEP_SECONDS);
+
+        assert_eq!(
+            verify_totp_code(&seed, &previous_code, at).unwrap(),
+            Some(previous_step as i64)
+        );
+        assert_eq!(verify_totp_code(&seed, "abcdef", at).unwrap(), None);
+        assert_eq!(verify_totp_code(&seed, "123456", at).unwrap(), None);
+    }
+
+    #[test]
+    fn provisioning_uri_does_not_change_the_stored_seed() {
+        let seed = generate_totp_seed();
+        let uri = totp_provisioning_uri(&seed, "Keylo", "alice@example.com").unwrap();
+
+        assert!(uri.starts_with("otpauth://totp/"));
+        assert!(uri.contains("issuer=Keylo"));
+        assert!(uri.contains(&format!("secret={seed}")));
     }
 }
