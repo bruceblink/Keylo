@@ -7,7 +7,7 @@ use crate::{
         consume_recovery_code_and_record_recent_verification,
         consume_totp_step_and_record_recent_verification, create_audit_log,
         enable_totp_credential_with_recovery_codes, get_totp_credential,
-        save_pending_totp_credential,
+        has_recent_mfa_verification, save_pending_totp_credential,
     },
     models::{
         decrypt_totp_seed, encrypt_totp_seed, generate_recovery_codes, generate_totp_seed,
@@ -25,6 +25,37 @@ pub fn mfa_routes() -> Router<AppState> {
         .route("/v1/user/mfa/totp/enroll", post(start_totp_enrollment))
         .route("/v1/user/mfa/totp/verify", post(verify_totp_enrollment))
         .route("/v1/user/mfa/verify", post(verify_recent_mfa))
+}
+
+/// Require a fresh, token-bound MFA proof when this user has enabled TOTP.
+pub async fn require_recent_mfa_for_enabled_user(
+    state: &AppState,
+    user_id: &str,
+    token_jti: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let db = require_db(state)?;
+    let credential = match get_totp_credential(db, user_id).await {
+        Ok(credential) => credential,
+        Err(error) => return Err(internal_error_response("Failed to load MFA state", &error)),
+    };
+    if credential.is_none_or(|credential| credential.enabled_at.is_none()) {
+        return Ok(());
+    }
+    match has_recent_mfa_verification(db, user_id, token_jti).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "success": false,
+                "error": "Recent MFA verification is required",
+                "mfa_required": true,
+            })),
+        )),
+        Err(error) => Err(internal_error_response(
+            "Failed to validate recent MFA verification",
+            &error,
+        )),
+    }
 }
 
 /// Verify an enabled factor and bind the resulting short-lived proof to this access token.

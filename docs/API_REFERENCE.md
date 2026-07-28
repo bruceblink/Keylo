@@ -300,6 +300,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 `POST /v1/user/mfa/verify` 请求体必须且只能提交 `totp_code` 或 `recovery_code` 其中之一。验证成功后，Keylo 将最近 MFA 凭据绑定到当前 access token 的 `jti`，有效期为 10 分钟；TOTP 的同一时间步只能成功一次，恢复码成功后立即作废。该接口为改密和管理敏感操作提供二次认证前置条件，审计记录仅保存验证方式。
 
+已启用 TOTP 的用户调用 `POST /v1/user/change-password` 前必须先调用 `/v1/user/mfa/verify` 并使用同一 access token；缺少或过期的近期 MFA 凭据会返回 `403` 与 `mfa_required=true`，不会修改密码。尚未启用 MFA 的既有用户在管理员强制 MFA 策略上线前保持兼容。
+
 ---
 
 ## 6. RBAC 接口

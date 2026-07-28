@@ -462,6 +462,8 @@ async fn change_password_handler(
         }
     };
 
+    crate::routes::mfa::require_recent_mfa_for_enabled_user(&state, &user_id, &claims.jti).await?;
+
     // 验证新密码复杂度
     if let Err(msg) = validate_password_complexity(&req.new_password) {
         return Err((
