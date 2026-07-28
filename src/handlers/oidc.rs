@@ -13,9 +13,10 @@ use crate::{
     errors::{is_unique_violation, AuthError},
     models::{
         validate_authorization_request, validate_grant_types, validate_oidc_client_registration,
-        validate_redirect_uris, verify_pkce_s256, CreateOidcClientRequest, OidcAccessTokenClaims,
-        OidcAuthorizationCode, OidcAuthorizeRequest, OidcBrowserSession, OidcIdTokenClaims,
-        OidcLoginRequest, OidcTokenRequest, OidcTokenResponse, UpdateOidcClientRequest,
+        validate_oidc_scopes, validate_redirect_uris, verify_pkce_s256, CreateOidcClientRequest,
+        OidcAccessTokenClaims, OidcAuthorizationCode, OidcAuthorizeRequest, OidcBrowserSession,
+        OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest, OidcTokenResponse,
+        UpdateOidcClientRequest,
     },
     state::AppState,
 };
@@ -132,6 +133,9 @@ pub async fn update_client(
     }
     if let Some(grant_types) = &request.grant_types {
         validate_grant_types(grant_types).map_err(AuthError::InvalidRequest)?;
+    }
+    if let Some(scopes) = &request.scopes {
+        validate_oidc_scopes(scopes).map_err(AuthError::InvalidRequest)?;
     }
     let client = crate::db::update_oidc_client(database(&state)?, &client_id, &request)
         .await

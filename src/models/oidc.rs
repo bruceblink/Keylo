@@ -256,6 +256,31 @@ pub fn validate_oidc_client_registration(request: &CreateOidcClientRequest) -> R
             .as_deref()
             .unwrap_or(&["authorization_code".to_string()]),
     )?;
+    validate_oidc_scopes(request.scopes.as_deref().unwrap_or(&[
+        "openid".to_string(),
+        "profile".to_string(),
+        "email".to_string(),
+    ]))?;
+    Ok(())
+}
+
+/// Keep registered scopes aligned with claims Keylo can actually issue today.
+pub fn validate_oidc_scopes(scopes: &[String]) -> Result<(), String> {
+    if scopes.is_empty() || !scopes.iter().any(|scope| scope == "openid") {
+        return Err("OIDC client scopes must include openid".to_string());
+    }
+    if scopes
+        .iter()
+        .any(|scope| !matches!(scope.as_str(), "openid" | "profile" | "email"))
+    {
+        return Err("OIDC client scopes may only include openid, profile, and email".to_string());
+    }
+    let mut unique = scopes.to_vec();
+    unique.sort();
+    unique.dedup();
+    if unique.len() != scopes.len() {
+        return Err("OIDC client scopes must not contain duplicates".to_string());
+    }
     Ok(())
 }
 
@@ -322,6 +347,13 @@ mod tests {
             "https://portal.example.com/callback#token"
         ))
         .is_err());
+    }
+
+    #[test]
+    fn registration_rejects_unsupported_or_missing_oidc_scopes() {
+        assert!(validate_oidc_scopes(&["openid".to_string(), "admin".to_string()]).is_err());
+        assert!(validate_oidc_scopes(&["profile".to_string()]).is_err());
+        assert!(validate_oidc_scopes(&["openid".to_string(), "openid".to_string()]).is_err());
     }
 
     #[test]
