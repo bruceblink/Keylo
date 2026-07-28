@@ -82,6 +82,14 @@ pub struct OidcLoginRequest {
     pub password: String,
 }
 
+/// Same-site confirmation submitted after Keylo displays the requested client and scopes.
+#[derive(Debug, Deserialize)]
+pub struct OidcConsentRequest {
+    #[serde(flatten)]
+    pub authorization: OidcAuthorizeRequest,
+    pub decision: String,
+}
+
 /// OAuth 2.0 token endpoint form for the authorization-code grant.
 #[derive(Debug, Deserialize)]
 pub struct OidcTokenRequest {

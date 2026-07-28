@@ -15,8 +15,8 @@ use crate::{
         validate_authorization_request, validate_grant_types, validate_oidc_client_registration,
         validate_oidc_scopes, validate_redirect_uris, verify_pkce_s256, CreateOidcClientRequest,
         OidcAccessTokenClaims, OidcAuthorizationCode, OidcAuthorizeRequest, OidcBrowserSession,
-        OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest, OidcTokenResponse,
-        RotateClientSecretRequest, UpdateOidcClientRequest,
+        OidcConsentRequest, OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest,
+        OidcTokenResponse, RotateClientSecretRequest, UpdateOidcClientRequest,
     },
     state::AppState,
 };
@@ -257,6 +257,49 @@ fn redirect_with_code(request: &OidcAuthorizeRequest, code: &str) -> Redirect {
     Redirect::to(&location)
 }
 
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn consent_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
+    let optional = |name: &str, value: Option<&String>| {
+        value
+            .map(|value| {
+                format!(
+                    "<input type=\"hidden\" name=\"{name}\" value=\"{}\">",
+                    html_escape(value)
+                )
+            })
+            .unwrap_or_default()
+    };
+    let body = format!("<!doctype html><html><body><main><h1>Authorize {}</h1><p>Requested scopes: {}</p><form method=\"post\" action=\"/v1/oidc/consent\"><input type=\"hidden\" name=\"response_type\" value=\"{}\"><input type=\"hidden\" name=\"client_id\" value=\"{}\"><input type=\"hidden\" name=\"redirect_uri\" value=\"{}\"><input type=\"hidden\" name=\"scope\" value=\"{}\"><input type=\"hidden\" name=\"code_challenge\" value=\"{}\"><input type=\"hidden\" name=\"code_challenge_method\" value=\"{}\">{}{}<button name=\"decision\" value=\"approve\" type=\"submit\">Approve</button><button name=\"decision\" value=\"deny\" type=\"submit\">Deny</button></form></main></body></html>", html_escape(client_name), html_escape(&request.scope), html_escape(&request.response_type), html_escape(&request.client_id), html_escape(&request.redirect_uri), html_escape(&request.scope), html_escape(&request.code_challenge), html_escape(&request.code_challenge_method), optional("state", request.state.as_ref()), optional("nonce", request.nonce.as_ref()));
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+async fn consent_for_session(
+    state: &AppState,
+    request: &OidcAuthorizeRequest,
+    user_id: String,
+) -> Result<Response, AuthError> {
+    let client = crate::db::get_oidc_client(database(state)?, &request.client_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .ok_or(AuthError::NotFound)?;
+    validate_authorization_request(&client, request).map_err(AuthError::InvalidRequest)?;
+    let _ = user_id;
+    Ok(consent_page(request, &client.name))
+}
+
 async fn authorize_for_user(
     state: &AppState,
     request: &OidcAuthorizeRequest,
@@ -305,9 +348,7 @@ pub async fn authorize(
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .ok_or(AuthError::Unauthorized)?;
-    Ok(authorize_for_user(&state, &request, session.user_id)
-        .await?
-        .into_response())
+    consent_for_session(&state, &request, session.user_id).await
 }
 
 /// Authenticate a local user for an OIDC browser flow, then issue a short-lived code and HttpOnly session cookie.
@@ -339,9 +380,8 @@ pub async fn login(
     )
     .await
     .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
-    let redirect = authorize_for_user(&state, &request.authorization, user.id).await?;
+    let mut response = consent_for_session(&state, &request.authorization, user.id).await?;
     let cookie = format!("keylo_oidc_session={raw_session}; Path=/v1/oidc; Max-Age=28800; HttpOnly; Secure; SameSite=Lax");
-    let mut response = redirect.into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie).map_err(|_| {
@@ -349,6 +389,36 @@ pub async fn login(
         })?,
     );
     Ok(response)
+}
+
+/// Approve or deny a validated authorization request from Keylo's same-site consent form.
+pub async fn consent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(request): Form<OidcConsentRequest>,
+) -> Result<Response, AuthError> {
+    let cookie = browser_cookie(&headers).ok_or(AuthError::Unauthorized)?;
+    let session = crate::db::resolve_browser_session(database(&state)?, cookie)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .ok_or(AuthError::Unauthorized)?;
+    if request.decision == "approve" {
+        return Ok(
+            authorize_for_user(&state, &request.authorization, session.user_id)
+                .await?
+                .into_response(),
+        );
+    }
+    if request.decision == "deny" {
+        return Ok((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"access_denied"})),
+        )
+            .into_response());
+    }
+    Err(AuthError::InvalidRequest(
+        "decision must be approve or deny".to_string(),
+    ))
 }
 
 /// End the browser-only OIDC session and expire its cookie without affecting API refresh sessions.

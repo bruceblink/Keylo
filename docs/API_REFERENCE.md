@@ -65,7 +65,7 @@
 
 `/.well-known/openid-configuration` 是标准 OIDC Discovery 地址，当前公布 Authorization Code + PKCE（S256）、RS256 JWKS 与 `openid`、`profile`、`email` scope。OIDC issuer 由 `OIDC_PUBLIC_ISSUER` 决定；生产部署必须将其配置为公开 HTTPS origin，不能使用 Keylo 的内部监听地址。
 
-OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1/oidc/logout`、`POST /v1/oidc/token`、`GET /v1/oidc/userinfo`。授权码有效期为 5 分钟，且只能原子消费一次。`/v1/oidc/login` 使用 `application/x-www-form-urlencoded` 提交用户名、密码及原授权请求参数，成功后以 `HttpOnly; Secure; SameSite=Lax` 浏览器会话 cookie 重定向至已登记的 redirect URI。`POST /v1/oidc/logout` 撤销该浏览器 OIDC session 并清除 cookie，不影响 API refresh session。UserInfo 只接受 OIDC access token；始终返回 `sub`，仅在被授予 `profile` 或 `email` scope 时返回对应 profile/email claims。
+OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1/oidc/consent`、`POST /v1/oidc/logout`、`POST /v1/oidc/token`、`GET /v1/oidc/userinfo`。授权码有效期为 5 分钟，且只能原子消费一次。`/v1/oidc/login` 使用 `application/x-www-form-urlencoded` 提交用户名、密码及原授权请求参数，成功后创建 `HttpOnly; Secure; SameSite=Lax` 浏览器会话。登录后或已有会话访问 `/v1/oidc/authorize` 会显示客户端和 scope，必须通过同站点的 `/v1/oidc/consent` 明确确认才会重定向至已登记的 redirect URI 并签发 code；拒绝不会签发 code。`POST /v1/oidc/logout` 撤销该浏览器 OIDC session 并清除 cookie，不影响 API refresh session。UserInfo 只接受 OIDC access token；始终返回 `sub`，仅在被授予 `profile` 或 `email` scope 时返回对应 profile/email claims。
 
 `/v1/oidc/token` 失败时使用 OAuth 2.0 错误响应：`invalid_request` 表示 grant 参数不支持，`invalid_client` 表示客户端认证失败（同时返回 `WWW-Authenticate`），`invalid_grant` 表示授权码、redirect URI 或 PKCE verifier 不匹配、失效或已被消费。内部错误统一返回 `server_error`，不泄露数据库或签名细节。
 
