@@ -2,7 +2,7 @@ use crate::db::identity as identity_db;
 use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
     oidc_discovery_url, parse_oidc_upstream_config, parse_oidc_upstream_discovery,
-    CreateIdentitySourceRequest, IdentitySource, OidcUpstreamDiscovery,
+    CreateIdentitySourceRequest, IdentitySource, OidcUpstreamDiscovery, OidcUpstreamProfile,
     UpdateIdentitySourceRequest,
 };
 use crate::state::AppState;
@@ -11,6 +11,7 @@ use axum::response::Redirect;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 const SUPPORTED_SOURCE_TYPES: [&str; 4] = ["local_password", "oauth2", "oidc_upstream", "ldap"];
@@ -97,6 +98,93 @@ fn validate_identity_source_config(source_type: &str, config: &Value) -> Result<
         parse_oidc_upstream_config(config).map_err(AuthError::InvalidRequest)?;
     }
     Ok(())
+}
+
+/// Build the stable external-provider key used to keep one source's subjects separate from another.
+fn oidc_mapping_provider(source: &IdentitySource) -> String {
+    format!("oidc_upstream:{}", source.id)
+}
+
+/// Generate a deterministic fallback username when an upstream preferred username is already used.
+fn oidc_jit_username(source: &IdentitySource, profile: &OidcUpstreamProfile) -> String {
+    let digest = Sha256::digest(format!("{}:{}", source.id, profile.external_subject).as_bytes());
+    format!("{}-{}", profile.username, hex::encode(&digest[..4]))
+}
+
+/// Resolve a verified OIDC identity to an active Keylo user, creating a mapping only under source policy.
+async fn resolve_oidc_upstream_user(
+    db: &sqlx::PgPool,
+    source: &IdentitySource,
+    profile: &OidcUpstreamProfile,
+) -> Result<crate::models::User, AuthError> {
+    let provider = oidc_mapping_provider(source);
+    if let Some(user_id) = crate::db::get_mapped_user_id(db, &provider, &profile.external_subject)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to resolve OIDC user mapping".to_string()))?
+    {
+        return crate::db::get_user_by_id(db, &user_id)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to load mapped user".to_string()))?
+            .filter(|user| user.active)
+            .ok_or(AuthError::Forbidden);
+    }
+
+    if let Some(user) = crate::db::get_user_by_email(db, &profile.email)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to look up OIDC email".to_string()))?
+    {
+        if !source.auto_link_enabled || !profile.email_verified {
+            return Err(AuthError::Conflict(
+                "An existing Keylo account requires an explicit identity link".to_string(),
+            ));
+        }
+        if !user.active {
+            return Err(AuthError::Forbidden);
+        }
+        crate::db::upsert_external_user_mapping(
+            db,
+            &provider,
+            &profile.external_subject,
+            &user.id,
+            Some(&json!({"source_name": source.name, "email": profile.email})),
+        )
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC user mapping".to_string()))?;
+        return Ok(user);
+    }
+
+    if !source.jit_enabled {
+        return Err(AuthError::Forbidden);
+    }
+
+    let username = match crate::db::get_user_by_username(db, &profile.username)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to look up OIDC username".to_string()))?
+    {
+        Some(_) => oidc_jit_username(source, profile),
+        None => profile.username.clone(),
+    };
+    let user = crate::db::create_user(db, &username, &profile.email, None)
+        .await
+        .map_err(|error| {
+            if is_unique_violation(error.as_ref()) {
+                AuthError::Conflict(
+                    "OIDC account conflicts with an existing Keylo user".to_string(),
+                )
+            } else {
+                AuthError::DatabaseError("Failed to create JIT OIDC user".to_string())
+            }
+        })?;
+    crate::db::upsert_external_user_mapping(
+        db,
+        &provider,
+        &profile.external_subject,
+        &user.id,
+        Some(&json!({"source_name": source.name, "email": profile.email})),
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Failed to create OIDC user mapping".to_string()))?;
+    Ok(user)
 }
 
 pub async fn list_identity_sources(
@@ -284,7 +372,7 @@ pub async fn begin_oidc_upstream_login(
     Ok(Redirect::temporary(&url))
 }
 
-/// Consume an upstream callback, exchange its code, and return only a verified external subject.
+/// Consume an upstream callback, verify its identity, and resolve it to a Keylo user.
 pub async fn complete_oidc_upstream_login(
     State(state): State<AppState>,
     Query(query): Query<OidcUpstreamCallbackQuery>,
@@ -400,8 +488,11 @@ pub async fn complete_oidc_upstream_login(
         chrono::Utc::now().timestamp(),
     )
     .map_err(AuthError::InvalidRequest)?;
+    let profile =
+        crate::models::oidc_upstream_profile(&claims).map_err(AuthError::InvalidRequest)?;
+    let user = resolve_oidc_upstream_user(db, &source, &profile).await?;
     Ok(Json(
-        json!({"subject": claims.sub, "email": claims.email, "username": claims.preferred_username}),
+        json!({"user_id": user.id, "username": user.username, "email": user.email}),
     ))
 }
 
@@ -473,5 +564,38 @@ mod tests {
         let err = json_object_or_default("config", Some(json!([]))).unwrap_err();
 
         assert!(matches!(err, AuthError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn jit_username_is_stable_and_disambiguates_the_profile_username() {
+        let source = IdentitySource {
+            id: "88c474cd-d20b-48fb-8b39-1b30d177e10d".to_string(),
+            name: "corporate-idp".to_string(),
+            source_type: "oidc_upstream".to_string(),
+            display_name: "Corporate IdP".to_string(),
+            description: None,
+            config: json!({}),
+            claim_mapping: json!({}),
+            jit_enabled: true,
+            auto_link_enabled: true,
+            active: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let profile = OidcUpstreamProfile {
+            external_subject: "employee-123".to_string(),
+            username: "alice".to_string(),
+            email: "alice@example.com".to_string(),
+            email_verified: true,
+        };
+
+        let first = oidc_jit_username(&source, &profile);
+
+        assert_eq!(first, oidc_jit_username(&source, &profile));
+        assert!(first.starts_with("alice-"));
+        assert_eq!(
+            oidc_mapping_provider(&source),
+            "oidc_upstream:88c474cd-d20b-48fb-8b39-1b30d177e10d"
+        );
     }
 }

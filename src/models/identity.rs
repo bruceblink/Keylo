@@ -112,6 +112,7 @@ pub struct OidcUpstreamIdTokenClaims {
     pub exp: i64,
     pub nonce: Option<String>,
     pub email: Option<String>,
+    pub email_verified: Option<bool>,
     pub preferred_username: Option<String>,
 }
 
@@ -121,6 +122,7 @@ pub struct OidcUpstreamProfile {
     pub external_subject: String,
     pub username: String,
     pub email: String,
+    pub email_verified: bool,
 }
 
 /// Map verified standard OIDC claims into safe local user fields for linking or JIT creation.
@@ -157,6 +159,7 @@ pub fn oidc_upstream_profile(
         external_subject: claims.sub.clone(),
         username,
         email,
+        email_verified: claims.email_verified.unwrap_or(false),
     })
 }
 
@@ -457,6 +460,7 @@ mod tests {
             exp: 2_000,
             nonce: Some(nonce.to_string()),
             email: None,
+            email_verified: None,
             preferred_username: None,
         };
         let nonce_hash = hex::encode(Sha256::digest(nonce.as_bytes()));
@@ -488,10 +492,12 @@ mod tests {
             exp: 2_000,
             nonce: None,
             email: Some(" Alice@Example.COM ".to_string()),
+            email_verified: Some(true),
             preferred_username: Some("Alice Smith!".to_string()),
         };
         let profile = super::oidc_upstream_profile(&claims).unwrap();
         assert_eq!(profile.email, "alice@example.com");
         assert_eq!(profile.username, "alicesmith");
+        assert!(profile.email_verified);
     }
 }
