@@ -3,7 +3,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::IdentitySource;
+use crate::models::{IdentitySource, LinkedOidcIdentitySource};
 
 pub struct CreateIdentitySourceParams<'a> {
     pub name: &'a str,
@@ -102,6 +102,26 @@ pub async fn get_active_identity_source_by_name(
     )
     .bind(name)
     .fetch_optional(pool)
+    .await?)
+}
+
+/// List only the upstream OIDC sources associated with a user, without exposing credentials.
+pub async fn list_linked_oidc_identity_sources(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<LinkedOidcIdentitySource>> {
+    Ok(sqlx::query_as::<_, LinkedOidcIdentitySource>(
+        r#"
+        SELECT source.id AS source_id, source.name, source.display_name, mapping.created_at AS linked_at
+        FROM external_user_mappings AS mapping
+        INNER JOIN identity_sources AS source
+            ON mapping.provider = CONCAT('oidc_upstream:', source.id)
+        WHERE mapping.user_id = $1 AND source.source_type = 'oidc_upstream'
+        ORDER BY mapping.created_at DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
     .await?)
 }
 

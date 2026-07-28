@@ -23,6 +23,15 @@ pub struct IdentitySource {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A user-visible upstream source currently associated with the caller's Keylo account.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct LinkedOidcIdentitySource {
+    pub source_id: String,
+    pub name: String,
+    pub display_name: String,
+    pub linked_at: chrono::NaiveDateTime,
+}
+
 impl IdentitySource {
     /// Return metadata safe for API responses by redacting credential-bearing config values.
     pub fn redacted_for_response(mut self) -> Self {

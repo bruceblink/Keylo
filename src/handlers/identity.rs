@@ -626,6 +626,24 @@ pub async fn unlink_oidc_upstream_identity(
     }
 }
 
+/// Return the caller's linked upstream OIDC sources so they can make a safe unlink decision.
+pub async fn list_my_oidc_upstream_identities(
+    claims: Claims,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, AuthError> {
+    if matches!(claims.principal_type.as_deref(), Some(kind) if kind != "user") {
+        return Err(AuthError::Unauthorized);
+    }
+    let user_id = claims.uid.as_deref().ok_or(AuthError::Unauthorized)?;
+    let db = require_db(&state)?;
+    let identity_sources = identity_db::list_linked_oidc_identity_sources(db, user_id)
+        .await
+        .map_err(|_| {
+            AuthError::DatabaseError("Failed to list linked identity sources".to_string())
+        })?;
+    Ok(Json(json!({"identity_sources": identity_sources})))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
