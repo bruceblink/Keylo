@@ -78,10 +78,13 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | GET | `/v1/admin/oidc/clients` | 查询 OIDC relying party 客户端 |
 | POST | `/v1/admin/oidc/clients` | 注册 OIDC 客户端 |
 | PUT | `/v1/admin/oidc/clients/{client_id}` | 更新客户端元数据或启用状态 |
+| POST | `/v1/admin/oidc/clients/{client_id}/rotate-secret` | 轮换 confidential client secret |
 
 当前仅接受 `authorization_code` grant。`public` 客户端不能登记 secret；`confidential` 客户端必须提供至少 16 个字符的 secret，服务端仅保存 bcrypt hash。redirect URI 必须为 HTTPS，开发期仅允许 `127.0.0.1` 或 `[::1]` 回环地址使用 HTTP，且不得含 fragment。
 
 当前可登记的 OIDC scope 为 `openid`、`profile`、`email`，且必须包含 `openid`、不得重复。Keylo 拒绝尚未实现 claims 或授权语义的自定义 scope。
+
+`POST /v1/admin/oidc/clients/{client_id}/rotate-secret` 请求体为 `{ "new_secret": "至少 16 个字符" }`。仅 active confidential client 可轮换，服务端仅保存新 secret 的 bcrypt hash，响应不会回显 secret。
 
 示例响应：
 

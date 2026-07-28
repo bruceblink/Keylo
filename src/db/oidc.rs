@@ -89,6 +89,23 @@ pub async fn update_oidc_client(
         .bind(client_id).bind(&request.name).bind(&request.description).bind(&request.redirect_uris).bind(&request.grant_types).bind(&request.scopes).bind(request.active).bind(now).fetch_optional(pool).await?)
 }
 
+/// Rotate only confidential-client credentials; public clients never own a reusable secret.
+pub async fn rotate_oidc_client_secret(
+    pool: &PgPool,
+    client_id: &str,
+    new_secret: &str,
+) -> Result<bool> {
+    let secret_hash = hash(new_secret, DEFAULT_COST)?;
+    let result = sqlx::query(
+        "UPDATE oidc_clients SET client_secret_hash = $2, updated_at = NOW() WHERE client_id = $1 AND client_type = 'confidential' AND active = TRUE",
+    )
+    .bind(client_id)
+    .bind(secret_hash)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Store an authorization code as a hash; the raw value is only ever returned to its redirect URI.
 pub async fn create_authorization_code(
     pool: &PgPool,

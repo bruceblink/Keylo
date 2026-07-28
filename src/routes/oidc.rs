@@ -14,6 +14,10 @@ pub fn admin_routes() -> Router<AppState> {
             "/v1/admin/oidc/clients/{client_id}",
             put(oidc::update_client),
         )
+        .route(
+            "/v1/admin/oidc/clients/{client_id}/rotate-secret",
+            post(oidc::rotate_client_secret),
+        )
 }
 
 pub fn public_routes() -> Router<AppState> {

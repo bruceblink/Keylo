@@ -16,7 +16,7 @@ use crate::{
         validate_oidc_scopes, validate_redirect_uris, verify_pkce_s256, CreateOidcClientRequest,
         OidcAccessTokenClaims, OidcAuthorizationCode, OidcAuthorizeRequest, OidcBrowserSession,
         OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest, OidcTokenResponse,
-        UpdateOidcClientRequest,
+        RotateClientSecretRequest, UpdateOidcClientRequest,
     },
     state::AppState,
 };
@@ -143,6 +143,30 @@ pub async fn update_client(
     client
         .map(|value| Json(json!({"success": true, "data": value})))
         .ok_or(AuthError::NotFound)
+}
+
+/// Rotate a confidential OIDC client secret without exposing any stored credential material.
+pub async fn rotate_client_secret(
+    State(state): State<AppState>,
+    Path(client_id): Path<String>,
+    Json(request): Json<RotateClientSecretRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let new_secret = request
+        .new_secret
+        .as_deref()
+        .filter(|secret| secret.trim().len() >= 16)
+        .ok_or_else(|| {
+            AuthError::InvalidRequest("new_secret must contain at least 16 characters".to_string())
+        })?;
+    let rotated = crate::db::rotate_oidc_client_secret(database(&state)?, &client_id, new_secret)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    if !rotated {
+        return Err(AuthError::NotFound);
+    }
+    Ok(Json(
+        json!({"success": true, "message": "OIDC client secret rotated"}),
+    ))
 }
 
 /// Publish only OIDC capabilities that relying parties can use today.
