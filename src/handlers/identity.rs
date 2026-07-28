@@ -6,13 +6,21 @@ use crate::models::{
     UpdateIdentitySourceRequest,
 };
 use crate::state::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::Redirect;
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::Duration;
 
 const SUPPORTED_SOURCE_TYPES: [&str; 4] = ["local_password", "oauth2", "oidc_upstream", "ldap"];
+
+#[derive(Deserialize)]
+pub struct OidcUpstreamCallbackQuery {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+}
 
 fn require_db(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {
     state
@@ -274,6 +282,127 @@ pub async fn begin_oidc_upstream_login(
         urlencoding::encode(&transaction.code_challenge),
     );
     Ok(Redirect::temporary(&url))
+}
+
+/// Consume an upstream callback, exchange its code, and return only a verified external subject.
+pub async fn complete_oidc_upstream_login(
+    State(state): State<AppState>,
+    Query(query): Query<OidcUpstreamCallbackQuery>,
+) -> Result<Json<Value>, AuthError> {
+    if query.error.is_some() {
+        return Err(AuthError::InvalidRequest(
+            "Upstream OIDC authorization was denied".to_string(),
+        ));
+    }
+    let db = require_db(&state)?;
+    let state_value = query
+        .state
+        .as_deref()
+        .ok_or_else(|| AuthError::InvalidRequest("Missing OIDC callback state".to_string()))?;
+    let code = query
+        .code
+        .as_deref()
+        .ok_or_else(|| AuthError::InvalidRequest("Missing OIDC authorization code".to_string()))?;
+    let transaction = crate::db::consume_oidc_upstream_authorization(db, state_value)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or_else(|| {
+            AuthError::InvalidRequest("Invalid or expired OIDC callback state".to_string())
+        })?;
+    let source = identity_db::get_identity_source(db, &transaction.source_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .filter(|source| source.active && source.source_type == "oidc_upstream")
+        .ok_or(AuthError::NotFound)?;
+    let config = parse_oidc_upstream_config(&source.config).map_err(AuthError::InvalidRequest)?;
+    let key = state.config.mfa_secret_key_bytes().map_err(|_| {
+        AuthError::DatabaseError("MFA_SECRET_KEY is required for upstream OIDC login".to_string())
+    })?;
+    let verifier = crate::models::decrypt_totp_seed(&transaction.code_verifier_encrypted, &key)
+        .map_err(|_| {
+            AuthError::InvalidRequest(
+                "OIDC authorization transaction cannot be decrypted".to_string(),
+            )
+        })?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC HTTP client".to_string()))?;
+    let discovery_document = client
+        .get(oidc_discovery_url(&config.issuer))
+        .send()
+        .await
+        .map_err(|_| {
+            AuthError::InvalidRequest("Unable to fetch OIDC Discovery document".to_string())
+        })?
+        .error_for_status()
+        .map_err(|_| {
+            AuthError::InvalidRequest(
+                "OIDC Discovery endpoint returned an unsuccessful status".to_string(),
+            )
+        })?
+        .json::<Value>()
+        .await
+        .map_err(|_| {
+            AuthError::InvalidRequest("OIDC Discovery document is not valid JSON".to_string())
+        })?;
+    let discovery = parse_oidc_upstream_discovery(&config.issuer, &discovery_document)
+        .map_err(AuthError::InvalidRequest)?;
+    let token = client
+        .post(&discovery.token_endpoint)
+        .basic_auth(&config.client_id, Some(&config.client_secret))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", &config.redirect_uri),
+            ("code_verifier", &verifier),
+        ])
+        .send()
+        .await
+        .map_err(|_| {
+            AuthError::InvalidRequest("Unable to exchange OIDC authorization code".to_string())
+        })?
+        .error_for_status()
+        .map_err(|_| {
+            AuthError::InvalidRequest("OIDC token endpoint rejected authorization code".to_string())
+        })?
+        .json::<Value>()
+        .await
+        .map_err(|_| AuthError::InvalidRequest("OIDC token response is invalid".to_string()))?;
+    let id_token = token
+        .get("id_token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AuthError::InvalidRequest("OIDC token response is missing id_token".to_string())
+        })?;
+    let jwks = client
+        .get(&discovery.jwks_uri)
+        .send()
+        .await
+        .map_err(|_| AuthError::InvalidRequest("Unable to fetch OIDC JWKS".to_string()))?
+        .error_for_status()
+        .map_err(|_| {
+            AuthError::InvalidRequest(
+                "OIDC JWKS endpoint returned an unsuccessful status".to_string(),
+            )
+        })?
+        .json::<crate::models::OidcUpstreamJwks>()
+        .await
+        .map_err(|_| AuthError::InvalidRequest("OIDC JWKS is invalid".to_string()))?;
+    let claims = crate::models::verify_oidc_upstream_id_token(id_token, &jwks)
+        .map_err(AuthError::InvalidRequest)?;
+    crate::models::validate_oidc_upstream_id_token_claims(
+        &claims,
+        &config.issuer,
+        &config.client_id,
+        &transaction.nonce_hash,
+        chrono::Utc::now().timestamp(),
+    )
+    .map_err(AuthError::InvalidRequest)?;
+    Ok(Json(
+        json!({"subject": claims.sub, "email": claims.email, "username": claims.preferred_username}),
+    ))
 }
 
 pub async fn update_identity_source(
