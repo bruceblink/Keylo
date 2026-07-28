@@ -286,6 +286,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | POST | `/v1/user/change-password` | user access token | 修改当前用户密码 |
 | POST | `/v1/user/mfa/totp/enroll` | user access token | 创建待确认的 TOTP enrollment |
 | POST | `/v1/user/mfa/totp/verify` | user access token | 用验证码确认并启用待确认的 TOTP |
+| POST | `/v1/user/mfa/totp/reset` | user access token + recent MFA | 删除当前 TOTP 与全部恢复码 |
 | POST | `/v1/user/mfa/verify` | user access token | 验证 TOTP 或恢复码，创建短时 MFA 凭据 |
 
 `POST /v1/user/mfa/totp/enroll` 只可由带稳定 `uid` 的用户 token 调用。它会生成新 Base32 seed、加密保存待确认状态，并一次性返回 `manual_entry_key` 和标准 `provisioning_uri`；响应不得写入客户端日志。已经启用 TOTP 的账户不能通过此接口直接覆盖现有凭据。
@@ -301,6 +302,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 `POST /v1/user/mfa/verify` 请求体必须且只能提交 `totp_code` 或 `recovery_code` 其中之一。验证成功后，Keylo 将最近 MFA 凭据绑定到当前 access token 的 `jti`，有效期为 10 分钟；TOTP 的同一时间步只能成功一次，恢复码成功后立即作废。该接口为改密和管理敏感操作提供二次认证前置条件，审计记录仅保存验证方式。
 
 已启用 TOTP 的用户调用 `POST /v1/user/change-password` 前必须先调用 `/v1/user/mfa/verify` 并使用同一 access token；缺少或过期的近期 MFA 凭据会返回 `403` 与 `mfa_required=true`，不会修改密码。尚未启用 MFA 的既有用户在管理员强制 MFA 策略上线前保持兼容。
+
+`POST /v1/user/mfa/totp/reset` 必须先使用同一 access token 调用 `/v1/user/mfa/verify`。成功后会删除 TOTP seed、所有未使用恢复码和该用户的近期 MFA 凭据，并写入 `mfa.totp.reset` 审计事件；用户随后可重新 enrollment。该接口不接受验证码或恢复码明文。
 
 管理端由已启用 TOTP 的用户 access token 发起的写操作同样要求近期 MFA；范围包括 `POST`、`PUT`、`DELETE`。设置 `MFA_REQUIRE_FOR_ADMINS=true` 后，所有人类管理员必须先 enrollment 再执行写操作。管理员客户端 access token 面向受控自动化，不适用交互式 MFA 校验。管理端查询接口不要求重复验证。
 

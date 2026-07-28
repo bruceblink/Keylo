@@ -5,7 +5,7 @@ use serde_json::json;
 use crate::{
     db::{
         consume_recovery_code_and_record_recent_verification,
-        consume_totp_step_and_record_recent_verification, create_audit_log,
+        consume_totp_step_and_record_recent_verification, create_audit_log, delete_totp_credential,
         enable_totp_credential_with_recovery_codes, get_totp_credential,
         has_recent_mfa_verification, save_pending_totp_credential,
     },
@@ -24,6 +24,7 @@ pub fn mfa_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/user/mfa/totp/enroll", post(start_totp_enrollment))
         .route("/v1/user/mfa/totp/verify", post(verify_totp_enrollment))
+        .route("/v1/user/mfa/totp/reset", post(reset_totp_enrollment))
         .route("/v1/user/mfa/verify", post(verify_recent_mfa))
 }
 
@@ -138,6 +139,32 @@ async fn verify_recent_mfa(
         "success": true,
         "data": MfaVerificationResponse { method: method.to_string(), verified_until }
     })))
+}
+
+/// Reset enabled TOTP only after a proof from the same access token was recently verified.
+async fn reset_totp_enrollment(claims: Claims, State(state): State<AppState>) -> ApiResponse {
+    let db = require_db(&state)?;
+    let user_id = require_user_id(&claims)?;
+    require_recent_mfa_for_enabled_user(&state, &user_id, &claims.jti).await?;
+    match delete_totp_credential(db, &user_id).await {
+        Ok(true) => {}
+        Ok(false) => return Err(not_found_response("TOTP is not enabled")),
+        Err(error) => return Err(internal_error_response("Failed to reset TOTP", &error)),
+    }
+    if let Err(error) = create_audit_log(
+        db,
+        "mfa.totp.reset",
+        Some(&claims.sub),
+        Some(&format!("user_id={user_id}")),
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "Failed to write TOTP reset audit log");
+    }
+
+    Ok(Json(
+        json!({ "success": true, "data": { "enabled": false } }),
+    ))
 }
 
 /// Start a replacement-safe TOTP enrollment and return the secret only to its owner.

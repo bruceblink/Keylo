@@ -256,12 +256,21 @@ async fn save_recent_verification(
 
 /// Remove all TOTP state; callers must enforce recent MFA before using it on enabled accounts.
 pub async fn delete_totp_credential(pool: &PgPool, user_id: &str) -> Result<bool> {
-    Ok(
-        sqlx::query("DELETE FROM mfa_totp_credentials WHERE user_id = $1")
+    let mut transaction = pool.begin().await?;
+    let deleted = sqlx::query("DELETE FROM mfa_totp_credentials WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected()
+        > 0;
+    if deleted {
+        // Resetting an MFA method invalidates proofs created by that method immediately.
+        sqlx::query("DELETE FROM mfa_recent_verifications WHERE user_id = $1")
             .bind(user_id)
-            .execute(pool)
-            .await?
-            .rows_affected()
-            > 0,
-    )
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await?;
+
+    Ok(deleted)
 }
