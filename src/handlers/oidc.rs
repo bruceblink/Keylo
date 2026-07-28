@@ -20,6 +20,76 @@ use crate::{
     state::AppState,
 };
 
+#[derive(serde::Serialize)]
+struct OidcErrorBody {
+    error: &'static str,
+    error_description: String,
+}
+
+/// OAuth 2.0-compliant error format for the public token endpoint.
+pub struct OidcProtocolError {
+    status: StatusCode,
+    error: &'static str,
+    description: String,
+}
+
+impl OidcProtocolError {
+    fn invalid_grant(description: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            error: "invalid_grant",
+            description: description.into(),
+        }
+    }
+}
+
+impl From<AuthError> for OidcProtocolError {
+    fn from(error: AuthError) -> Self {
+        let (status, code, description) = match error {
+            AuthError::Unauthorized
+            | AuthError::WrongCredentials
+            | AuthError::MissingCredentials => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "client authentication failed".to_string(),
+            ),
+            AuthError::InvalidRequest(message) => {
+                (StatusCode::BAD_REQUEST, "invalid_request", message)
+            }
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "the authorization server could not complete the request".to_string(),
+            ),
+        };
+        Self {
+            status,
+            error: code,
+            description,
+        }
+    }
+}
+
+impl IntoResponse for OidcProtocolError {
+    fn into_response(self) -> Response {
+        let mut response = (
+            self.status,
+            Json(OidcErrorBody {
+                error: self.error,
+                error_description: self.description,
+            }),
+        )
+            .into_response();
+        if self.error == "invalid_client" {
+            response.headers_mut().insert(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_static("Basic realm=\"oidc-token\""),
+            );
+        }
+        response
+    }
+}
+
 fn database(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {
     state
         .db
@@ -257,11 +327,12 @@ pub async fn login(
 pub async fn token(
     State(state): State<AppState>,
     Form(request): Form<OidcTokenRequest>,
-) -> Result<Json<OidcTokenResponse>, AuthError> {
+) -> Result<Json<OidcTokenResponse>, OidcProtocolError> {
     if request.grant_type != "authorization_code" {
         return Err(AuthError::InvalidRequest(
             "only grant_type=authorization_code is supported".to_string(),
-        ));
+        )
+        .into());
     }
     let db = database(&state)?;
     let Some((client_type, secret_hash, active)) =
@@ -269,7 +340,7 @@ pub async fn token(
             .await
             .map_err(|error| AuthError::DatabaseError(error.to_string()))?
     else {
-        return Err(AuthError::Unauthorized);
+        return Err(AuthError::Unauthorized.into());
     };
     if !active
         || (client_type == "confidential"
@@ -279,20 +350,20 @@ pub async fn token(
                     .is_some_and(|hash| verify(secret, hash).unwrap_or(false))
             }))
     {
-        return Err(AuthError::Unauthorized);
+        return Err(AuthError::Unauthorized.into());
     }
     let authorization = crate::db::get_active_authorization_code(db, &request.code)
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
-        .ok_or(AuthError::InvalidRequest(
-            "authorization code is invalid or expired".to_string(),
-        ))?;
+        .ok_or_else(|| {
+            OidcProtocolError::invalid_grant("authorization code is invalid or expired")
+        })?;
     if authorization.client_id != request.client_id
         || authorization.redirect_uri != request.redirect_uri
         || !verify_pkce_s256(&request.code_verifier, &authorization.code_challenge)
     {
-        return Err(AuthError::InvalidRequest(
-            "authorization code binding or PKCE verification failed".to_string(),
+        return Err(OidcProtocolError::invalid_grant(
+            "authorization code binding or PKCE verification failed",
         ));
     }
     if crate::db::consume_authorization_code(db, &request.code)
@@ -300,8 +371,8 @@ pub async fn token(
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .is_none()
     {
-        return Err(AuthError::InvalidRequest(
-            "authorization code has already been consumed".to_string(),
+        return Err(OidcProtocolError::invalid_grant(
+            "authorization code has already been consumed",
         ));
     }
     let user = crate::db::user::get_user_by_id(db, &authorization.user_id)
