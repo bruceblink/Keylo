@@ -4,8 +4,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::{
-    authorization_code_hash, CreateOidcClientRequest, OidcAuthorizationCode, OidcClient,
-    UpdateOidcClientRequest,
+    authorization_code_hash, browser_session_hash, CreateOidcClientRequest, OidcAuthorizationCode,
+    OidcBrowserSession, OidcClient, UpdateOidcClientRequest,
 };
 
 /// Persist a validated OIDC relying-party registration without ever storing its secret in plaintext.
@@ -96,4 +96,39 @@ pub async fn consume_authorization_code(
             }
         },
     ))
+}
+
+/// Create an opaque browser session with a hash-only database representation.
+pub async fn create_browser_session(
+    pool: &PgPool,
+    raw_session: &str,
+    session: &OidcBrowserSession,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO oidc_browser_sessions (id, session_hash, user_id, expires_at) VALUES ($1,$2,$3,to_timestamp($4))",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(browser_session_hash(raw_session))
+    .bind(&session.user_id)
+    .bind(session.expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Resolve an active browser cookie and touch it without extending its absolute expiry.
+pub async fn resolve_browser_session(
+    pool: &PgPool,
+    raw_session: &str,
+) -> Result<Option<OidcBrowserSession>> {
+    let row = sqlx::query_as::<_, (String, i64)>(
+        "UPDATE oidc_browser_sessions SET last_seen_at = NOW() WHERE session_hash = $1 AND revoked_at IS NULL AND expires_at > NOW() RETURNING user_id, extract(epoch from expires_at)::bigint",
+    )
+    .bind(browser_session_hash(raw_session))
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(user_id, expires_at)| OidcBrowserSession {
+        user_id,
+        expires_at,
+    }))
 }

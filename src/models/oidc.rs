@@ -53,6 +53,13 @@ pub struct OidcAuthorizationCode {
     pub expires_at: i64,
 }
 
+/// Authenticated browser state used only by the OIDC authorization UI, never as an API token.
+#[derive(Debug, Clone)]
+pub struct OidcBrowserSession {
+    pub user_id: String,
+    pub expires_at: i64,
+}
+
 /// Query parameters accepted by the future browser-facing authorization endpoint.
 #[derive(Debug, Deserialize)]
 pub struct OidcAuthorizeRequest {
@@ -137,6 +144,11 @@ pub fn verify_pkce_s256(verifier: &str, challenge: &str) -> bool {
 /// Hash an opaque authorization code so database disclosure cannot mint access tokens.
 pub fn authorization_code_hash(code: &str) -> String {
     hex::encode(Sha256::digest(code.as_bytes()))
+}
+
+/// Hash the opaque browser-session cookie before it reaches persistent storage.
+pub fn browser_session_hash(session: &str) -> String {
+    hex::encode(Sha256::digest(session.as_bytes()))
 }
 
 fn validate_pkce_value(label: &str, value: &str) -> Result<(), String> {
@@ -307,5 +319,14 @@ mod tests {
             ..request
         };
         assert!(validate_authorization_request(&client, &invalid_redirect).is_err());
+    }
+
+    #[test]
+    fn browser_session_hash_is_stable_and_does_not_echo_cookie() {
+        let cookie = "opaque-browser-cookie";
+        let hash = browser_session_hash(cookie);
+        assert_eq!(hash, browser_session_hash(cookie));
+        assert_ne!(hash, cookie);
+        assert_eq!(hash.len(), 64);
     }
 }
