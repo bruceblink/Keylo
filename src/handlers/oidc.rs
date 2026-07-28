@@ -402,6 +402,29 @@ pub async fn consent(
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .ok_or(AuthError::Unauthorized)?;
+    let event_type = match request.decision.as_str() {
+        "approve" => "oidc.authorization.approved",
+        "deny" => "oidc.authorization.denied",
+        _ => {
+            return Err(AuthError::InvalidRequest(
+                "decision must be approve or deny".to_string(),
+            ))
+        }
+    };
+    let detail = format!(
+        "client_id={}, scopes={}",
+        request.authorization.client_id, request.authorization.scope
+    );
+    if let Err(error) = crate::db::create_audit_log(
+        database(&state)?,
+        event_type,
+        Some(&session.user_id),
+        Some(&detail),
+    )
+    .await
+    {
+        tracing::warn!("Failed to record OIDC consent audit event: {error}");
+    }
     if request.decision == "approve" {
         return Ok(
             authorize_for_user(&state, &request.authorization, session.user_id)
@@ -416,9 +439,7 @@ pub async fn consent(
         )
             .into_response());
     }
-    Err(AuthError::InvalidRequest(
-        "decision must be approve or deny".to_string(),
-    ))
+    unreachable!("validated OIDC consent decision")
 }
 
 /// End the browser-only OIDC session and expire its cookie without affecting API refresh sessions.
