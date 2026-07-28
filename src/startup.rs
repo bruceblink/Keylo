@@ -250,42 +250,51 @@ fn protected_routes(app_state: &AppState) -> Router<AppState> {
                 .route_layer(middleware::from_fn(auth::user_authorization_middleware)),
         )
         .merge(
-            routes::auth::admin_router()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+            routes::auth::admin_router().route_layer(middleware::from_fn_with_state(
+                app_state.clone(),
+                auth::admin_authorization_middleware,
+            )),
         )
         .merge(
-            routes::oidc::admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+            routes::oidc::admin_routes().route_layer(middleware::from_fn_with_state(
+                app_state.clone(),
+                auth::admin_authorization_middleware,
+            )),
         )
-        .merge(
-            routes::principal::principal_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
-        .merge(
-            routes::resource::resource_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
+        .merge(routes::principal::principal_admin_routes().route_layer(
+            middleware::from_fn_with_state(app_state.clone(), auth::admin_authorization_middleware),
+        ))
+        .merge(routes::resource::resource_admin_routes().route_layer(
+            middleware::from_fn_with_state(app_state.clone(), auth::admin_authorization_middleware),
+        ))
         .nest(
             "/api/oauth",
-            routes::oauth::oauth_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+            routes::oauth::oauth_admin_routes().route_layer(middleware::from_fn_with_state(
+                app_state.clone(),
+                auth::admin_authorization_middleware,
+            )),
         )
         .nest(
             "/api/rbac",
-            routes::rbac::rbac_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+            routes::rbac::rbac_routes().route_layer(middleware::from_fn_with_state(
+                app_state.clone(),
+                auth::admin_authorization_middleware,
+            )),
         )
         .merge(
-            routes::service::service_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+            routes::service::service_admin_routes().route_layer(middleware::from_fn_with_state(
+                app_state.clone(),
+                auth::admin_authorization_middleware,
+            )),
         )
+        .merge(routes::identity::identity_admin_routes().route_layer(
+            middleware::from_fn_with_state(app_state.clone(), auth::admin_authorization_middleware),
+        ))
         .merge(
-            routes::identity::identity_admin_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
-        )
-        .merge(
-            routes::user::admin_user_routes()
-                .route_layer(middleware::from_fn(auth::admin_authorization_middleware)),
+            routes::user::admin_user_routes().route_layer(middleware::from_fn_with_state(
+                app_state.clone(),
+                auth::admin_authorization_middleware,
+            )),
         )
         .layer(middleware::from_fn_with_state(
             app_state.clone(),

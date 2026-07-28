@@ -4,12 +4,13 @@ use crate::models::Claims;
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{Request, StatusCode};
+use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
+use serde_json::json;
 
 fn bearer_token(auth: Option<TypedHeader<Authorization<Bearer>>>) -> Result<String, AuthError> {
     auth.map(|TypedHeader(Authorization(bearer))| bearer.token().to_string())
@@ -131,6 +132,7 @@ pub async fn auth_middleware(
 
 /// 管理端鉴权：仅允许 admin 角色访问管理接口
 pub async fn admin_authorization_middleware(
+    State(state): State<AppState>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -143,6 +145,53 @@ pub async fn admin_authorization_middleware(
         ensure_access_claims(claims, Some("admin"), Some("admin"), Some("admin-backend"))
     {
         return Ok(err.into_response());
+    }
+
+    if request.method() != Method::GET && claims.principal_type.as_deref() == Some("user") {
+        if let Some(user_id) = claims.uid.as_deref() {
+            let db = match state.db.as_deref() {
+                Some(db) => db,
+                None => {
+                    return Ok(AuthError::DatabaseError(
+                        "Database unavailable for MFA check".to_string(),
+                    )
+                    .into_response())
+                }
+            };
+            let mfa_enabled = match crate::db::get_totp_credential(db, user_id).await {
+                Ok(credential) => {
+                    credential.is_some_and(|credential| credential.enabled_at.is_some())
+                }
+                Err(_) => {
+                    return Ok(AuthError::DatabaseError(
+                        "Database error during MFA check".to_string(),
+                    )
+                    .into_response())
+                }
+            };
+            if mfa_enabled {
+                match crate::db::has_recent_mfa_verification(db, user_id, &claims.jti).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Ok((
+                            StatusCode::FORBIDDEN,
+                            axum::Json(json!({
+                                "success": false,
+                                "error": "Recent MFA verification is required",
+                                "mfa_required": true,
+                            })),
+                        )
+                            .into_response())
+                    }
+                    Err(_) => {
+                        return Ok(AuthError::DatabaseError(
+                            "Database error during MFA verification check".to_string(),
+                        )
+                        .into_response())
+                    }
+                }
+            }
+        }
     }
 
     Ok(next.run(request).await)
