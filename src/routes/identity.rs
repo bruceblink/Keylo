@@ -1,5 +1,6 @@
 use crate::handlers::identity::{
-    create_identity_source, get_identity_source, list_identity_sources, update_identity_source,
+    create_identity_source, discover_oidc_upstream, get_identity_source, list_identity_sources,
+    update_identity_source,
 };
 use crate::state::AppState;
 use axum::routing::{get, post, put};
@@ -17,5 +18,9 @@ pub fn identity_admin_routes() -> Router<AppState> {
         .route(
             "/v1/admin/identity-sources/{source_id}",
             put(update_identity_source),
+        )
+        .route(
+            "/v1/admin/identity-sources/{source_id}/oidc/discover",
+            post(discover_oidc_upstream),
         )
 }

@@ -78,7 +78,7 @@ pub struct OidcUpstreamConfig {
 }
 
 /// Minimal OIDC Discovery document required for authorization-code login.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OidcUpstreamDiscovery {
     pub issuer: String,
     pub authorization_endpoint: String,
@@ -87,6 +87,14 @@ pub struct OidcUpstreamDiscovery {
     pub userinfo_endpoint: Option<String>,
     pub response_types_supported: Vec<String>,
     pub grant_types_supported: Option<Vec<String>>,
+}
+
+/// Build the standard Discovery address from the previously validated issuer.
+pub fn oidc_discovery_url(issuer: &str) -> String {
+    format!(
+        "{}/.well-known/openid-configuration",
+        issuer.trim_end_matches('/')
+    )
 }
 
 fn default_oidc_scopes() -> Vec<String> {

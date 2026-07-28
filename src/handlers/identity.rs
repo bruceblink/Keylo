@@ -1,13 +1,15 @@
 use crate::db::identity as identity_db;
 use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
-    parse_oidc_upstream_config, CreateIdentitySourceRequest, IdentitySource,
+    oidc_discovery_url, parse_oidc_upstream_config, parse_oidc_upstream_discovery,
+    CreateIdentitySourceRequest, IdentitySource, OidcUpstreamDiscovery,
     UpdateIdentitySourceRequest,
 };
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::Json;
 use serde_json::{json, Value};
+use std::time::Duration;
 
 const SUPPORTED_SOURCE_TYPES: [&str; 4] = ["local_password", "oauth2", "oidc_upstream", "ldap"];
 
@@ -162,6 +164,47 @@ pub async fn get_identity_source(
         .ok_or(AuthError::NotFound)?;
 
     Ok(Json(source.redacted_for_response()))
+}
+
+/// Fetch and validate public OIDC Discovery metadata for an active upstream source.
+pub async fn discover_oidc_upstream(
+    State(state): State<AppState>,
+    Path(source_id): Path<String>,
+) -> Result<Json<OidcUpstreamDiscovery>, AuthError> {
+    let db = require_db(&state)?;
+    let source = identity_db::get_identity_source(db, &source_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or(AuthError::NotFound)?;
+    if !source.active || source.source_type != "oidc_upstream" {
+        return Err(AuthError::InvalidRequest(
+            "An active oidc_upstream identity source is required".to_string(),
+        ));
+    }
+    let config = parse_oidc_upstream_config(&source.config).map_err(AuthError::InvalidRequest)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC HTTP client".to_string()))?;
+    let response = client
+        .get(oidc_discovery_url(&config.issuer))
+        .send()
+        .await
+        .map_err(|_| {
+            AuthError::InvalidRequest("Unable to fetch OIDC Discovery document".to_string())
+        })?;
+    if !response.status().is_success() {
+        return Err(AuthError::InvalidRequest(
+            "OIDC Discovery endpoint returned an unsuccessful status".to_string(),
+        ));
+    }
+    let document = response.json::<Value>().await.map_err(|_| {
+        AuthError::InvalidRequest("OIDC Discovery document is not valid JSON".to_string())
+    })?;
+    let discovery = parse_oidc_upstream_discovery(&config.issuer, &document)
+        .map_err(AuthError::InvalidRequest)?;
+    Ok(Json(discovery))
 }
 
 pub async fn update_identity_source(
