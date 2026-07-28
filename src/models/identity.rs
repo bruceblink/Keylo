@@ -115,6 +115,51 @@ pub struct OidcUpstreamIdTokenClaims {
     pub preferred_username: Option<String>,
 }
 
+/// Normalized local profile fields derived from a verified upstream identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcUpstreamProfile {
+    pub external_subject: String,
+    pub username: String,
+    pub email: String,
+}
+
+/// Map verified standard OIDC claims into safe local user fields for linking or JIT creation.
+pub fn oidc_upstream_profile(
+    claims: &OidcUpstreamIdTokenClaims,
+) -> Result<OidcUpstreamProfile, String> {
+    let email = claims
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| value.contains('@'))
+        .ok_or_else(|| {
+            "Upstream ID Token must contain a valid email for account mapping".to_string()
+        })?
+        .to_ascii_lowercase();
+    let candidate = claims
+        .preferred_username
+        .as_deref()
+        .unwrap_or_else(|| email.split('@').next().unwrap_or("user"));
+    let username = candidate
+        .chars()
+        .filter_map(|character| {
+            (character.is_ascii_alphanumeric()
+                || character == '_'
+                || character == '-'
+                || character == '.')
+                .then_some(character.to_ascii_lowercase())
+        })
+        .collect::<String>();
+    if username.is_empty() {
+        return Err("Upstream identity does not provide a usable username".to_string());
+    }
+    Ok(OidcUpstreamProfile {
+        external_subject: claims.sub.clone(),
+        username,
+        email,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct OidcUpstreamJwks {
     pub keys: Vec<OidcUpstreamJwk>,
@@ -432,5 +477,21 @@ mod tests {
             1_000,
         )
         .is_err());
+    }
+
+    #[test]
+    fn upstream_profile_normalizes_email_and_username() {
+        let claims = super::OidcUpstreamIdTokenClaims {
+            iss: "https://idp.example".to_string(),
+            sub: "external-1".to_string(),
+            aud: json!("keylo"),
+            exp: 2_000,
+            nonce: None,
+            email: Some(" Alice@Example.COM ".to_string()),
+            preferred_username: Some("Alice Smith!".to_string()),
+        };
+        let profile = super::oidc_upstream_profile(&claims).unwrap();
+        assert_eq!(profile.email, "alice@example.com");
+        assert_eq!(profile.username, "alicesmith");
     }
 }
