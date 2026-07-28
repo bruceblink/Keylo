@@ -1,4 +1,4 @@
-use crate::models::{MfaTotpCredential, RECOVERY_CODE_COUNT};
+use crate::models::{normalize_recovery_code, MfaTotpCredential, RECOVERY_CODE_COUNT};
 use anyhow::{bail, Result};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use sqlx::PgPool;
@@ -68,7 +68,9 @@ pub async fn enable_totp_credential_with_recovery_codes(
     }
     let mut hashes = Vec::with_capacity(recovery_codes.len());
     for code in recovery_codes {
-        hashes.push(hash(code, DEFAULT_COST)?);
+        let normalized = normalize_recovery_code(code)
+            .ok_or_else(|| anyhow::anyhow!("recovery code has an invalid format"))?;
+        hashes.push(hash(normalized, DEFAULT_COST)?);
     }
 
     let mut transaction = pool.begin().await?;
