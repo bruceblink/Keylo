@@ -80,6 +80,32 @@ fn ensure_service_claims(
     Ok(())
 }
 
+/// Reject disabled Principals on every protected request so user disable takes effect immediately.
+async fn ensure_claim_principal_active(
+    db: &sqlx::PgPool,
+    claims: &Claims,
+) -> Result<(), AuthError> {
+    if let Some(principal_id) = claims.principal_id.as_deref() {
+        return crate::db::get_principal_by_id(db, principal_id)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to resolve token principal".to_string()))?
+            .filter(|principal| principal.active)
+            .map(|_| ())
+            .ok_or(AuthError::InvalidToken);
+    }
+    if claims.principal_type.as_deref() == Some("user") {
+        if let Some(user_id) = claims.uid.as_deref() {
+            return crate::db::get_user_by_id(db, user_id)
+                .await
+                .map_err(|_| AuthError::DatabaseError("Failed to resolve token user".to_string()))?
+                .filter(|user| user.active)
+                .map(|_| ())
+                .ok_or(AuthError::InvalidToken);
+        }
+    }
+    Ok(())
+}
+
 /// 认证中间件 - 检查token是否在黑名单中
 pub async fn auth_middleware(
     State(state): State<AppState>,
@@ -120,6 +146,9 @@ pub async fn auth_middleware(
                     AuthError::DatabaseError("Database error during token validation".to_string());
                 return Ok(error_response.into_response());
             }
+        }
+        if let Err(error) = ensure_claim_principal_active(db, &claims).await {
+            return Ok(error.into_response());
         }
     }
 
