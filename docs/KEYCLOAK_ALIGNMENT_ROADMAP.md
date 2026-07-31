@@ -36,7 +36,7 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 | Token 与会话 | RS256、JWKS、服务 Token、OIDC 授权码、PKCE、Refresh Session 原子轮换与重放撤销 | 标准测试 IdP 的端到端兼容矩阵仍需持续覆盖。 |
 | 外部身份 | OAuth 登录、OIDC upstream Discovery/回调/UserInfo、claim 映射、JIT、关联/解除关联 | LDAP、SCIM 等目录生命周期能力尚未进入范围。 |
 | 安全 | 密码策略、限流、审计、密钥轮换、TOTP MFA、恢复码、敏感操作二次认证 | Passkey 与企业目录生命周期由明确需求触发。 |
-| 运维 | health/ready 检查、结构化日志、审计日志 | 缺少指标、分布式追踪、事件投递与 HA 演练基线。 |
+| 运维 | health/ready 检查、结构化日志、审计日志、`/metrics` Prometheus HTTP/认证结果/refresh replay 指标 | 缺少限流与数据库/Redis 延迟指标、分布式追踪、事件投递与 HA 演练基线。 |
 
 ## 3. 分阶段计划
 
@@ -107,7 +107,7 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 范围：
 
 1. 依据客户需求实现 SCIM 2.0 用户/组 provisioning，并定义禁用、删除、角色回收和冲突处理语义。
-2. 引入 Prometheus 指标与 OpenTelemetry Trace：认证成功/失败、限流、刷新重放、授权拒绝、数据库/Redis 延迟。
+2. 扩展现有 Prometheus 基线并引入 OpenTelemetry Trace：当前已提供 HTTP、认证成功/失败、刷新重放和授权拒绝的固定基数指标；后续补齐限流、数据库/Redis 延迟、按客户端/身份源的受控维度与 Trace。
 3. 使用 outbox 发布安全事件；Webhook 必须包含签名、重试、幂等键、死信和投递审计。
 4. 完成多实例部署契约：Redis/数据库依赖、JWKS key 保留窗口、滚动迁移、备份恢复与故障演练。
 
