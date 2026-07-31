@@ -604,6 +604,8 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 
 `oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调；scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience、`azp` 和 expiry。多受众 ID Token 必须把 `azp` 设为 Keylo 的 client ID；单受众 token 若带 `azp`，它也必须匹配。Keylo 目前以 `client_secret_basic` 完成 confidential client 的 token 认证；若 Discovery 显式声明的 `token_endpoint_auth_methods_supported` 不包含它，注册和登录都会拒绝，避免进入必然失败的兼容性路径。若 Discovery 提供 `userinfo_endpoint`，Keylo 会用 token response 的 access token 获取资料，并要求 UserInfo 的 `sub` 与已验证 ID Token 完全一致；UserInfo 只补齐 ID Token 缺失的 profile fields，不能覆盖已验证声明。
 
+Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `id_token_signing_alg_values_supported` 不包含 RS256，注册和登录都会拒绝，避免将授权码交给无法被当前验证器安全处理的上游身份源。
+
 成功回调返回标准 Keylo `AuthBody`，包含 Bearer access token、可轮换 refresh token 和 `expires_in`。令牌代表已关联的本地用户，沿用本地用户的角色、权限和会话策略；令牌及上游 ID Token 不会出现在审计详情中。
 
 上游 `(source, sub)` 到 Keylo 用户的绑定是不可改绑的：并发登录若发现该上游主体已经关联到其他用户，回调会返回冲突，绝不会覆盖既有映射。JIT 创建若在绑定阶段发生该冲突，会清理刚创建的无密码用户。

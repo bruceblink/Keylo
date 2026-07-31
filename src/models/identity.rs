@@ -110,6 +110,7 @@ pub struct OidcUpstreamDiscovery {
     pub response_types_supported: Vec<String>,
     pub grant_types_supported: Option<Vec<String>>,
     pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
+    pub id_token_signing_alg_values_supported: Option<Vec<String>>,
 }
 
 /// Opaque state retained only for one upstream authorization-code round trip.
@@ -533,6 +534,13 @@ pub fn parse_oidc_upstream_discovery(
                 .to_string(),
         );
     }
+    if parsed
+        .id_token_signing_alg_values_supported
+        .as_ref()
+        .is_some_and(|algorithms| !algorithms.iter().any(|algorithm| algorithm == "RS256"))
+    {
+        return Err("OIDC Discovery must support ID Token signing algorithm RS256".to_string());
+    }
     Ok(parsed)
 }
 
@@ -621,6 +629,24 @@ mod tests {
                 .unwrap_err();
 
         assert!(error.contains("client_secret_basic"));
+    }
+
+    #[test]
+    fn oidc_discovery_rejects_an_incompatible_id_token_signing_algorithm() {
+        let discovery = json!({
+            "issuer": "https://idp.example/realms/acme",
+            "authorization_endpoint": "https://idp.example/realms/acme/protocol/openid-connect/auth",
+            "token_endpoint": "https://idp.example/realms/acme/protocol/openid-connect/token",
+            "jwks_uri": "https://idp.example/realms/acme/protocol/openid-connect/certs",
+            "response_types_supported": ["code"],
+            "id_token_signing_alg_values_supported": ["ES256"]
+        });
+
+        let error =
+            super::parse_oidc_upstream_discovery("https://idp.example/realms/acme", &discovery)
+                .unwrap_err();
+
+        assert!(error.contains("RS256"));
     }
 
     #[test]
