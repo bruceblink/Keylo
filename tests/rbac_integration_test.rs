@@ -157,6 +157,35 @@ mod tests {
         let body: serde_json::Value = response.json();
         assert!(body["success"].as_bool().unwrap());
         assert_eq!(body["data"]["name"], permission_name);
+        let permission_id = body["data"]["id"].as_str().unwrap();
+        let version = body["data"]["version"].as_i64().unwrap();
+
+        let update_response = server
+            .put(&format!("/api/rbac/permissions/{}", permission_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "description": "Updated permission description",
+                "expected_version": version,
+            }))
+            .await;
+        update_response.assert_status_ok();
+        let updated: serde_json::Value = update_response.json();
+        assert_eq!(updated["data"]["version"], version + 1);
+
+        let stale_update_response = server
+            .put(&format!("/api/rbac/permissions/{}", permission_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "description": "Stale permission description",
+                "expected_version": version,
+            }))
+            .await;
+        assert_eq!(
+            stale_update_response.status_code(),
+            axum::http::StatusCode::CONFLICT
+        );
+        let stale_update: serde_json::Value = stale_update_response.json();
+        assert_eq!(stale_update["error"], "permission_version_conflict");
     }
 
     #[tokio::test]

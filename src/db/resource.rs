@@ -127,7 +127,7 @@ pub async fn assign_permission_to_resource(
 pub async fn get_resource_permissions(pool: &PgPool, resource_id: &str) -> Result<Vec<Permission>> {
     Ok(sqlx::query_as::<_, Permission>(
         r#"
-        SELECT p.id, p.name, p.description, p.created_at, p.updated_at
+        SELECT p.id, p.name, p.description, p.version, p.created_at, p.updated_at
         FROM permissions p
         INNER JOIN resource_permissions rp ON rp.permission_id = p.id
         WHERE rp.resource_id = $1
@@ -233,7 +233,7 @@ async fn resource_permission_map(
     let rows = sqlx::query(
         r#"
         SELECT rp.resource_id,
-               p.id, p.name, p.description, p.created_at, p.updated_at
+               p.id, p.name, p.description, p.version, p.created_at, p.updated_at
         FROM resource_permissions rp
         INNER JOIN permissions p ON p.id = rp.permission_id
         WHERE rp.resource_id = ANY($1)
@@ -251,6 +251,7 @@ async fn resource_permission_map(
             id: row.get("id"),
             name: row.get("name"),
             description: row.get("description"),
+            version: row.get("version"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         });

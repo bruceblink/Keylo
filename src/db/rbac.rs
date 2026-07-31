@@ -222,7 +222,7 @@ pub async fn create_permission(
         r#"
         INSERT INTO permissions (id, name, description, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, name, description, created_at, updated_at
+        RETURNING id, name, description, version, created_at, updated_at
         "#,
     )
     .bind(&id)
@@ -239,7 +239,7 @@ pub async fn create_permission(
 /// 获取所有权限
 pub async fn get_all_permissions(pool: &PgPool) -> Result<Vec<Permission>> {
     let permissions = sqlx::query_as::<_, Permission>(
-        "SELECT id, name, description, created_at, updated_at FROM permissions ORDER BY name",
+        "SELECT id, name, description, version, created_at, updated_at FROM permissions ORDER BY name",
     )
     .fetch_all(pool)
     .await?;
@@ -251,7 +251,7 @@ pub async fn get_all_permissions(pool: &PgPool) -> Result<Vec<Permission>> {
 pub async fn get_permissions_by_prefix(pool: &PgPool, prefix: &str) -> Result<Vec<Permission>> {
     let pattern = format!("{}%", prefix);
     let permissions = sqlx::query_as::<_, Permission>(
-        "SELECT id, name, description, created_at, updated_at FROM permissions WHERE name LIKE $1 ORDER BY name",
+        "SELECT id, name, description, version, created_at, updated_at FROM permissions WHERE name LIKE $1 ORDER BY name",
     )
     .bind(pattern)
     .fetch_all(pool)
@@ -266,7 +266,7 @@ pub async fn get_permission_by_id(
     permission_id: &str,
 ) -> Result<Option<Permission>> {
     let permission = sqlx::query_as::<_, Permission>(
-        "SELECT id, name, description, created_at, updated_at FROM permissions WHERE id = $1",
+        "SELECT id, name, description, version, created_at, updated_at FROM permissions WHERE id = $1",
     )
     .bind(permission_id)
     .fetch_optional(pool)
@@ -278,7 +278,7 @@ pub async fn get_permission_by_id(
 /// 根据名称获取权限
 pub async fn get_permission_by_name(pool: &PgPool, name: &str) -> Result<Option<Permission>> {
     let permission = sqlx::query_as::<_, Permission>(
-        "SELECT id, name, description, created_at, updated_at FROM permissions WHERE name = $1",
+        "SELECT id, name, description, version, created_at, updated_at FROM permissions WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(pool)
@@ -293,6 +293,7 @@ pub async fn update_permission(
     permission_id: &str,
     name: Option<&str>,
     description: Option<&str>,
+    expected_version: Option<i64>,
 ) -> Result<Option<Permission>> {
     let now = chrono::Local::now().naive_utc();
 
@@ -301,15 +302,17 @@ pub async fn update_permission(
         UPDATE permissions
         SET name = COALESCE($2, name),
             description = COALESCE($3, description),
+            version = version + 1,
             updated_at = $4
-        WHERE id = $1
-        RETURNING id, name, description, created_at, updated_at
+        WHERE id = $1 AND ($5::BIGINT IS NULL OR version = $5)
+        RETURNING id, name, description, version, created_at, updated_at
         "#,
     )
     .bind(permission_id)
     .bind(name)
     .bind(description)
     .bind(now)
+    .bind(expected_version)
     .fetch_optional(pool)
     .await?;
 
@@ -473,7 +476,7 @@ pub async fn revoke_permission_from_role(
 pub async fn get_role_permissions(pool: &PgPool, role_id: &str) -> Result<Vec<Permission>> {
     let permissions = sqlx::query_as::<_, Permission>(
         r#"
-        SELECT p.id, p.name, p.description, p.created_at, p.updated_at
+        SELECT p.id, p.name, p.description, p.version, p.created_at, p.updated_at
         FROM permissions p
         INNER JOIN role_permissions rp ON p.id = rp.permission_id
         WHERE rp.role_id = $1
@@ -525,7 +528,7 @@ pub async fn user_has_permission(
 pub async fn get_user_permissions(pool: &PgPool, user_id: &str) -> Result<Vec<Permission>> {
     let permissions = sqlx::query_as::<_, Permission>(
         r#"
-        SELECT DISTINCT p.id, p.name, p.description, p.created_at, p.updated_at
+        SELECT DISTINCT p.id, p.name, p.description, p.version, p.created_at, p.updated_at
         FROM permissions p
         INNER JOIN role_permissions rp ON p.id = rp.permission_id
         INNER JOIN user_roles ur ON rp.role_id = ur.role_id

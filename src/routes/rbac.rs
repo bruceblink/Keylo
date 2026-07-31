@@ -478,6 +478,7 @@ async fn update_permission_handler(
         &permission_id,
         req.name.as_deref(),
         req.description.as_deref(),
+        req.expected_version,
     )
     .await
     {
@@ -497,13 +498,34 @@ async fn update_permission_handler(
                 "data": permission
             })))
         }
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "success": false,
-                "error": "Permission not found"
-            })),
-        )),
+        Ok(None) => {
+            if req.expected_version.is_some()
+                && get_permission_by_id(require_db(&state)?, &permission_id)
+                    .await
+                    .map_err(|e| {
+                        error_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "permission_lookup_failed",
+                            &format!("Failed to look up permission: {}", e),
+                        )
+                    })?
+                    .is_some()
+            {
+                Err(error_response(
+                    StatusCode::CONFLICT,
+                    "permission_version_conflict",
+                    "Permission changed since the supplied expected_version",
+                ))
+            } else {
+                Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "success": false,
+                        "error": "Permission not found"
+                    })),
+                ))
+            }
+        }
         Err(e) => {
             if is_unique_violation(e.as_ref()) {
                 Err((

@@ -489,6 +489,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 更新角色时可提供读取结果中的 `expected_version`。版本不一致返回 `409 role_version_conflict`；省略该字段保持兼容更新。
 
+更新权限同样可提供 `expected_version`，版本不一致返回 `409 permission_version_conflict`。
+
 ### 7.4 Resource 管理
 
 > 统一要求：admin access token

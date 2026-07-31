@@ -39,6 +39,7 @@ pub struct Permission {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub version: i64,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
@@ -55,6 +56,7 @@ pub struct CreatePermissionRequest {
 pub struct UpdatePermissionRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub expected_version: Option<i64>,
 }
 
 /// 用户角色关系

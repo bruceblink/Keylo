@@ -263,7 +263,7 @@ pub async fn get_principal_permissions(
 ) -> Result<Vec<Permission>> {
     Ok(sqlx::query_as::<_, Permission>(
         r#"
-        SELECT DISTINCT p.id, p.name, p.description, p.created_at, p.updated_at
+        SELECT DISTINCT p.id, p.name, p.description, p.version, p.created_at, p.updated_at
         FROM permissions p
         INNER JOIN role_permissions rp ON rp.permission_id = p.id
         INNER JOIN principal_roles pr ON pr.role_id = rp.role_id
