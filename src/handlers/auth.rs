@@ -376,6 +376,7 @@ pub async fn auth_token(
         )
         .await
     {
+        state.runtime_metrics.rate_limit_rejection_observed();
         audit_event(
             &state,
             "auth.token.rate_limited.global",
@@ -394,6 +395,7 @@ pub async fn auth_token(
         )
         .await
     {
+        state.runtime_metrics.rate_limit_rejection_observed();
         audit_event(
             &state,
             "auth.token.rate_limited",
@@ -575,6 +577,7 @@ pub async fn admin_token(
         )
         .await
     {
+        state.runtime_metrics.rate_limit_rejection_observed();
         return Err(AuthError::TooManyRequests);
     }
 

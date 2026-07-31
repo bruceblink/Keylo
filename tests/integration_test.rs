@@ -398,6 +398,11 @@ mod tests {
 
         let limited = server.post("/v1/auth/token").json(&auth_payload).await;
         assert_eq!(limited.status_code(), StatusCode::TOO_MANY_REQUESTS);
+
+        let metrics_resp = server.get("/metrics").await;
+        metrics_resp.assert_status_ok();
+        let metrics = metrics_resp.text();
+        assert!(metrics.contains("keylo_rate_limit_rejections_total 1"));
     }
 
     #[tokio::test]
