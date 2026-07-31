@@ -57,6 +57,8 @@ pub struct RuntimeMetrics {
     refresh_replays_total: AtomicU64,
     in_flight: AtomicU64,
     duration_milliseconds_total: AtomicU64,
+    duration_milliseconds_count: AtomicU64,
+    duration_milliseconds_buckets: [AtomicU64; 5],
 }
 
 impl RuntimeMetrics {
@@ -72,6 +74,8 @@ impl RuntimeMetrics {
             refresh_replays_total: AtomicU64::new(0),
             in_flight: AtomicU64::new(0),
             duration_milliseconds_total: AtomicU64::new(0),
+            duration_milliseconds_count: AtomicU64::new(0),
+            duration_milliseconds_buckets: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
 
@@ -91,6 +95,13 @@ impl RuntimeMetrics {
         };
         self.duration_milliseconds_total
             .fetch_add(duration_milliseconds, Ordering::Relaxed);
+        self.duration_milliseconds_count
+            .fetch_add(1, Ordering::Relaxed);
+        for (index, upper_bound) in [10, 50, 100, 500, 1_000].iter().enumerate() {
+            if duration_milliseconds <= *upper_bound {
+                self.duration_milliseconds_buckets[index].fetch_add(1, Ordering::Relaxed);
+            }
+        }
         self.in_flight.fetch_sub(1, Ordering::Relaxed);
     }
 
@@ -122,7 +133,7 @@ impl RuntimeMetrics {
     /// Render Prometheus text exposition without labels that could leak request or identity values.
     pub fn prometheus_text(&self) -> String {
         format!(
-            "# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_authentication_successes_total counter\nkeylo_authentication_successes_total {}\n# TYPE keylo_authentication_failures_total counter\nkeylo_authentication_failures_total {}\n# TYPE keylo_authorization_denials_total counter\nkeylo_authorization_denials_total {}\n# TYPE keylo_refresh_replays_total counter\nkeylo_refresh_replays_total {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds_total counter\nkeylo_http_request_duration_milliseconds_total {}\n",
+            "# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_authentication_successes_total counter\nkeylo_authentication_successes_total {}\n# TYPE keylo_authentication_failures_total counter\nkeylo_authentication_failures_total {}\n# TYPE keylo_authorization_denials_total counter\nkeylo_authorization_denials_total {}\n# TYPE keylo_refresh_replays_total counter\nkeylo_refresh_replays_total {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds histogram\nkeylo_http_request_duration_milliseconds_bucket{{le=\"10\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"50\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"100\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"500\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"1000\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"+Inf\"}} {}\nkeylo_http_request_duration_milliseconds_sum {}\nkeylo_http_request_duration_milliseconds_count {}\n",
             self.requests_total.load(Ordering::Relaxed),
             self.responses_2xx_total.load(Ordering::Relaxed),
             self.responses_4xx_total.load(Ordering::Relaxed),
@@ -132,7 +143,14 @@ impl RuntimeMetrics {
             self.authorization_denials_total.load(Ordering::Relaxed),
             self.refresh_replays_total.load(Ordering::Relaxed),
             self.in_flight.load(Ordering::Relaxed),
+            self.duration_milliseconds_buckets[0].load(Ordering::Relaxed),
+            self.duration_milliseconds_buckets[1].load(Ordering::Relaxed),
+            self.duration_milliseconds_buckets[2].load(Ordering::Relaxed),
+            self.duration_milliseconds_buckets[3].load(Ordering::Relaxed),
+            self.duration_milliseconds_buckets[4].load(Ordering::Relaxed),
+            self.duration_milliseconds_count.load(Ordering::Relaxed),
             self.duration_milliseconds_total.load(Ordering::Relaxed),
+            self.duration_milliseconds_count.load(Ordering::Relaxed),
         )
     }
 }
@@ -512,5 +530,7 @@ mod tests {
         assert!(text.contains("keylo_authorization_denials_total 1"));
         assert!(text.contains("keylo_refresh_replays_total 1"));
         assert!(text.contains("keylo_http_requests_in_flight 0"));
+        assert!(text.contains("keylo_http_request_duration_milliseconds_bucket{le=\"10\"} 3"));
+        assert!(text.contains("keylo_http_request_duration_milliseconds_bucket{le=\"+Inf\"} 3"));
     }
 }
