@@ -223,7 +223,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_disabling_oidc_client_invalidates_pending_authorization_codes() {
+    async fn test_oidc_client_security_updates_invalidate_pending_authorization_codes() {
         let server = setup_test_server().await;
         let admin_login = server
             .post("/v1/admin/token")
@@ -276,10 +276,51 @@ mod tests {
             &code,
             &keylo::models::OidcAuthorizationCode {
                 client_id: client_id.clone(),
-                user_id: user.id,
+                user_id: user.id.clone(),
                 redirect_uri: "https://client.example.test/callback".to_string(),
                 scopes: vec!["openid".to_string()],
                 nonce: Some("test-nonce".to_string()),
+                code_challenge: "a".repeat(43),
+                expires_at: chrono::Utc::now().timestamp() + 300,
+            },
+        )
+        .await
+        .unwrap();
+
+        let reconfigure = server
+            .put(&format!("/v1/admin/oidc/clients/{client_id}"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "redirect_uris": ["https://client.example.test/new-callback"]
+            }))
+            .await;
+        reconfigure.assert_status_ok();
+        assert!(
+            db::get_active_authorization_code(&pool, &code)
+                .await
+                .unwrap()
+                .is_none(),
+            "changing redirect URIs must invalidate codes bound to the old URI"
+        );
+        let reconfigure_audits = db::get_recent_audit_logs(&pool, 20).await.unwrap();
+        assert!(reconfigure_audits.iter().any(|(event_type, _, detail, _)| {
+            event_type == "oidc_client.reconfigured"
+                && detail.as_deref().is_some_and(|value| {
+                    value.contains(&client_id)
+                        && value.contains("invalidated_authorization_codes=1")
+                })
+        }));
+
+        let code_after_reconfigure = format!("oidc-pending-code-{}", uuid::Uuid::new_v4());
+        db::create_authorization_code(
+            &pool,
+            &code_after_reconfigure,
+            &keylo::models::OidcAuthorizationCode {
+                client_id: client_id.clone(),
+                user_id: user.id,
+                redirect_uri: "https://client.example.test/new-callback".to_string(),
+                scopes: vec!["openid".to_string()],
+                nonce: Some("test-nonce-after-reconfigure".to_string()),
                 code_challenge: "a".repeat(43),
                 expires_at: chrono::Utc::now().timestamp() + 300,
             },
@@ -294,7 +335,7 @@ mod tests {
             .await;
         disable.assert_status_ok();
         assert!(
-            db::get_active_authorization_code(&pool, &code)
+            db::get_active_authorization_code(&pool, &code_after_reconfigure)
                 .await
                 .unwrap()
                 .is_none(),
