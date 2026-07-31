@@ -115,9 +115,13 @@ fn token_client_credentials(
             )
             .into());
         }
-        let encoded = basic
-            .strip_prefix("Basic ")
+        let (scheme, encoded) = basic
+            .split_once(char::is_whitespace)
             .ok_or(AuthError::Unauthorized)?;
+        if !scheme.eq_ignore_ascii_case("Basic") || encoded.trim().is_empty() {
+            return Err(AuthError::Unauthorized.into());
+        }
+        let encoded = encoded.trim();
         let decoded = STANDARD
             .decode(encoded)
             .map_err(|_| AuthError::Unauthorized)?;
@@ -670,5 +674,19 @@ mod tests {
 
         assert_eq!(credentials.0, "client-id");
         assert_eq!(credentials.1.as_deref(), Some("secret:with+symbols"));
+    }
+
+    #[test]
+    fn token_client_credentials_accepts_case_insensitive_basic_scheme() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("basic Y2xpZW50OnNlY3JldA=="),
+        );
+
+        let credentials = token_client_credentials(&headers, &token_request(None, None)).unwrap();
+
+        assert_eq!(credentials.0, "client");
+        assert_eq!(credentials.1.as_deref(), Some("secret"));
     }
 }
