@@ -557,6 +557,8 @@ mod tests {
             }))
             .await;
         resource_resp.assert_status_ok();
+        let resource_body: serde_json::Value = resource_resp.json();
+        let resource_id = resource_body["data"]["id"].as_str().unwrap();
 
         let service_token_resp = server
             .post("/v1/service/token")
@@ -581,6 +583,36 @@ mod tests {
         assert_eq!(check_body["data"]["allowed"], true);
         assert_eq!(check_body["data"]["decision"], "allow");
         assert_eq!(check_body["data"]["reason"], "permission_granted");
+
+        let resource_check_resp = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {}", service_token))
+            .json(&json!({
+                "app": "crawler",
+                "resource_type": "service",
+                "resource_code": resource_code,
+            }))
+            .await;
+        resource_check_resp.assert_status_ok();
+
+        let authorization_audits_resp = server
+            .get(&format!(
+                "/v1/admin/authorization-audit-logs?resource_id={}",
+                resource_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        authorization_audits_resp.assert_status_ok();
+        let authorization_audits: serde_json::Value = authorization_audits_resp.json();
+        assert!(authorization_audits["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|audit| {
+                audit["resource_id"] == resource_id
+                    && audit["permission_name"] == permission_name
+                    && audit["decision"] == "allow"
+            }));
 
         let tree_resp = server
             .get("/v1/principals/me/resource-tree?app=crawler&type=service")

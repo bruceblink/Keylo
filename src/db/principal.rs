@@ -322,10 +322,10 @@ pub async fn permission_for_resource(
     app: &str,
     resource_type: &str,
     resource_code: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, String)>> {
     let row = sqlx::query(
         r#"
-        SELECT p.name
+        SELECT r.id, p.name
         FROM resources r
         INNER JOIN resource_permissions rp ON rp.resource_id = r.id
         INNER JOIN permissions p ON p.id = rp.permission_id
@@ -340,7 +340,7 @@ pub async fn permission_for_resource(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|row| row.get("name")))
+    Ok(row.map(|row| (row.get("name"), row.get("id"))))
 }
 
 pub async fn create_authorization_audit_log(

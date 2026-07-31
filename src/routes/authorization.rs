@@ -125,14 +125,15 @@ async fn resolve_access_principal(
     Ok(principal)
 }
 
-async fn resolve_permission_name(
+/// Resolves an authorization target into its permission and optional concrete resource ID for auditing.
+async fn resolve_permission_target(
     db: &sqlx::PgPool,
     request: &AuthorizeCheckRequest,
-) -> Result<Option<String>, AuthError> {
+) -> Result<(Option<String>, Option<String>), AuthError> {
     if let Some(permission) = request.permission.as_deref() {
         let permission = permission.trim();
         if !permission.is_empty() {
-            return Ok(Some(permission.to_string()));
+            return Ok((Some(permission.to_string()), None));
         }
     }
 
@@ -144,9 +145,15 @@ async fn resolve_permission_name(
         (Some(app), Some(resource_type), Some(resource_code)) => {
             crate::db::permission_for_resource(db, app, resource_type, resource_code)
                 .await
+                .map(|target| match target {
+                    Some((permission_name, resource_id)) => {
+                        (Some(permission_name), Some(resource_id))
+                    }
+                    None => (None, None),
+                })
                 .map_err(|e| AuthError::DatabaseError(e.to_string()))
         }
-        _ => Ok(None),
+        _ => Ok((None, None)),
     }
 }
 
@@ -155,7 +162,7 @@ async fn check_one(
     principal: &Principal,
     request: &AuthorizeCheckRequest,
 ) -> Result<AuthorizeCheckResponse, AuthError> {
-    let permission_name = resolve_permission_name(db, request).await?;
+    let (permission_name, resource_id) = resolve_permission_target(db, request).await?;
     let (allowed, reason) = match permission_name.as_deref() {
         Some(permission) => {
             let allowed = crate::db::principal_has_permission(db, &principal.id, permission)
@@ -179,7 +186,7 @@ async fn check_one(
         Some(&principal.id),
         decision,
         permission_name.as_deref(),
-        None,
+        resource_id.as_deref(),
         Some(&format!("reason={reason}")),
     )
     .await;
