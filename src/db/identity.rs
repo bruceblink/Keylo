@@ -147,10 +147,32 @@ pub async fn list_oidc_identity_source_links(
     .await?)
 }
 
+/// Update one source and atomically invalidate OIDC state when its trust boundary changes.
+///
+/// The actor is recorded with the security event, so a failed audit write rolls back the
+/// configuration update rather than leaving changed trust settings without an audit trail.
 pub async fn update_identity_source(
     pool: &PgPool,
     params: UpdateIdentitySourceParams<'_>,
+    actor: Option<&str>,
 ) -> Result<Option<IdentitySource>> {
+    let mut transaction = pool.begin().await?;
+    let previous = sqlx::query_as::<_, IdentitySource>(
+        r#"
+        SELECT id, name, source_type, display_name, description, config, claim_mapping,
+               jit_enabled, auto_link_enabled, active, created_at, updated_at
+        FROM identity_sources
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(params.id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(previous) = previous else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
     let source = sqlx::query_as::<_, IdentitySource>(
         r#"
         UPDATE identity_sources
@@ -175,8 +197,57 @@ pub async fn update_identity_source(
     .bind(params.jit_enabled)
     .bind(params.auto_link_enabled)
     .bind(params.active)
-    .fetch_optional(pool)
+    .fetch_one(&mut *transaction)
     .await?;
 
-    Ok(source)
+    let source_reconfigured = previous.active
+        && source.active
+        && previous.source_type == "oidc_upstream"
+        && previous.config != source.config;
+    let source_disabled =
+        previous.active && !source.active && previous.source_type == "oidc_upstream";
+    if source_disabled || source_reconfigured {
+        let (revoke_reason, audit_event) = if source_disabled {
+            ("identity_source_disabled", "identity_source.disabled")
+        } else {
+            (
+                "identity_source_reconfigured",
+                "identity_source.reconfigured",
+            )
+        };
+        let provider = format!("oidc_upstream:{}", source.id);
+        let revoked_sessions = sqlx::query(
+            "UPDATE refresh_sessions
+             SET revoked_at = COALESCE(revoked_at, NOW()),
+                 revoke_reason = COALESCE(revoke_reason, $2)
+             WHERE client_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(&provider)
+        .bind(revoke_reason)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        let invalidated_authorizations = sqlx::query(
+            "DELETE FROM oidc_upstream_authorizations WHERE source_id = $1 AND consumed_at IS NULL",
+        )
+        .bind(&source.id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        sqlx::query(
+            "INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(audit_event)
+        .bind(actor)
+        .bind(format!(
+            "source_id={}; revoked_sessions={}; invalidated_authorizations={}",
+            source.id, revoked_sessions, invalidated_authorizations
+        ))
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+
+    Ok(Some(source))
 }

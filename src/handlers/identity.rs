@@ -806,58 +806,11 @@ pub async fn update_identity_source(
             auto_link_enabled: payload.auto_link_enabled,
             active: payload.active,
         },
+        Some(&claims.sub),
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?
     .ok_or(AuthError::NotFound)?;
-
-    let upstream_source_disabled = existing.as_ref().is_some_and(|previous| {
-        previous.active && !source.active && previous.source_type == "oidc_upstream"
-    });
-    let upstream_source_reconfigured = existing.as_ref().is_some_and(|previous| {
-        previous.active
-            && source.active
-            && previous.source_type == "oidc_upstream"
-            && previous.config != source.config
-    });
-    if upstream_source_disabled || upstream_source_reconfigured {
-        let (revoke_reason, audit_event) = if upstream_source_disabled {
-            ("identity_source_disabled", "identity_source.disabled")
-        } else {
-            (
-                "identity_source_reconfigured",
-                "identity_source.reconfigured",
-            )
-        };
-        let revoked_sessions = crate::db::revoke_client_refresh_sessions(
-            db,
-            &oidc_mapping_provider(&source),
-            Some(revoke_reason),
-        )
-        .await
-        .map_err(|_| AuthError::DatabaseError("Failed to revoke upstream sessions".to_string()))?;
-        let invalidated_authorizations =
-            crate::db::invalidate_oidc_upstream_authorizations(db, &source.id)
-                .await
-                .map_err(|_| {
-                    AuthError::DatabaseError(
-                        "Failed to invalidate upstream authorizations".to_string(),
-                    )
-                })?;
-        crate::db::create_audit_log(
-            db,
-            audit_event,
-            Some(&claims.sub),
-            Some(&format!(
-                "source_id={}; revoked_sessions={}; invalidated_authorizations={}",
-                source.id, revoked_sessions, invalidated_authorizations
-            )),
-        )
-        .await
-        .map_err(|_| {
-            AuthError::DatabaseError("Failed to audit identity source disable".to_string())
-        })?;
-    }
 
     Ok(Json(source.redacted_for_response()))
 }
