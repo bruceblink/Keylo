@@ -18,6 +18,7 @@ pub async fn request_response_logging_middleware(
     next: Next,
 ) -> Response {
     let started_at = Instant::now();
+    state.runtime_metrics.request_started();
     let method = request.method().clone();
     let uri = request.uri().clone();
     let version = request.version();
@@ -47,6 +48,9 @@ pub async fn request_response_logging_middleware(
                     error = %error,
                     "Failed to read HTTP request body for logging"
                 );
+                state
+                    .runtime_metrics
+                    .request_finished(400, started_at.elapsed().as_millis() as u64);
                 return StatusCode::BAD_REQUEST.into_response();
             }
         };
@@ -90,6 +94,9 @@ pub async fn request_response_logging_middleware(
     };
     let response_headers = format_headers_for_log(&response_headers);
     let duration_ms = started_at.elapsed().as_millis();
+    state
+        .runtime_metrics
+        .request_finished(status.as_u16(), duration_ms as u64);
 
     tracing::info!(
         client_ip = %client_ip,

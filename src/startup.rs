@@ -1,5 +1,5 @@
 use crate::config::{build_database_url, database_password_from_env_result, Config};
-use crate::handlers::{favicon, healthz, index, protected, readyz};
+use crate::handlers::{favicon, healthz, index, metrics, protected, readyz};
 use crate::middleware::{auth, http_log};
 use crate::routes;
 use crate::state::AppState;
@@ -198,6 +198,7 @@ fn base_public_routes(include_oauth: bool) -> Router<AppState> {
         .merge(routes::oidc::public_routes())
         .merge(routes::identity::identity_public_routes())
         .route("/healthz", get(healthz))
+        .route("/metrics", get(metrics))
         .route("/readyz", get(readyz))
         .route("/favicon.ico", get(favicon))
         .route("/", get(index));
@@ -590,6 +591,43 @@ wwIDAQAB
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["status"], "ok");
         assert_eq!(body["service"], "keylo");
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_exposes_fixed_cardinality_prometheus_metrics() {
+        let app = init_app_router_with_config(test_config());
+
+        let health_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health_response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain; version=0.0.4"));
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert!(body.contains("keylo_http_requests_total 2"));
+        assert!(body.contains("keylo_http_responses_total{status_class=\"2xx\"} 1"));
+        assert!(body.contains("keylo_http_requests_in_flight 1"));
     }
 
     #[tokio::test]

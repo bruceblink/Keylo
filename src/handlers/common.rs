@@ -75,6 +75,15 @@ pub async fn healthz() -> Json<Value> {
     }))
 }
 
+/// Expose process-local Prometheus metrics without labels that reveal request or identity data.
+pub async fn metrics(State(state): State<AppState>) -> Response {
+    (
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        state.runtime_metrics.prometheus_text(),
+    )
+        .into_response()
+}
+
 pub async fn favicon() -> StatusCode {
     StatusCode::NO_CONTENT
 }

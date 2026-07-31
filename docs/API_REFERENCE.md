@@ -52,6 +52,7 @@
 | GET | `/` | 否 | 欢迎页 |
 | GET | `/healthz` | 否 | 存活检查 |
 | GET | `/readyz` | 否 | 就绪检查 |
+| GET | `/metrics` | 否 | Prometheus 运行时指标 |
 | GET | `/protected` | 是（access） | 受保护示例接口 |
 
 ### 2.2 发现配置与 JWT 公钥

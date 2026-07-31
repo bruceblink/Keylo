@@ -5,6 +5,7 @@ use bcrypt::verify;
 use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -39,6 +40,70 @@ pub struct AppState {
 
     /// 异步迁移任务状态
     pub migration_jobs: Arc<RwLock<HashMap<String, MigrationBatchJob>>>,
+
+    /// Process-local HTTP metrics exposed through the Prometheus text endpoint.
+    pub runtime_metrics: Arc<RuntimeMetrics>,
+}
+
+/// Small fixed-cardinality HTTP metrics that remain safe to expose without request identifiers.
+pub struct RuntimeMetrics {
+    requests_total: AtomicU64,
+    responses_2xx_total: AtomicU64,
+    responses_4xx_total: AtomicU64,
+    responses_5xx_total: AtomicU64,
+    in_flight: AtomicU64,
+    duration_milliseconds_total: AtomicU64,
+}
+
+impl RuntimeMetrics {
+    pub fn new() -> Self {
+        Self {
+            requests_total: AtomicU64::new(0),
+            responses_2xx_total: AtomicU64::new(0),
+            responses_4xx_total: AtomicU64::new(0),
+            responses_5xx_total: AtomicU64::new(0),
+            in_flight: AtomicU64::new(0),
+            duration_milliseconds_total: AtomicU64::new(0),
+        }
+    }
+
+    /// Start one request and return a snapshot that can later emit only fixed-cardinality metrics.
+    pub fn request_started(&self) {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+        self.in_flight.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record the completed response while balancing the in-flight request counter.
+    pub fn request_finished(&self, status: u16, duration_milliseconds: u64) {
+        match status / 100 {
+            2 => self.responses_2xx_total.fetch_add(1, Ordering::Relaxed),
+            4 => self.responses_4xx_total.fetch_add(1, Ordering::Relaxed),
+            5 => self.responses_5xx_total.fetch_add(1, Ordering::Relaxed),
+            _ => 0,
+        };
+        self.duration_milliseconds_total
+            .fetch_add(duration_milliseconds, Ordering::Relaxed);
+        self.in_flight.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Render Prometheus text exposition without labels that could leak request or identity values.
+    pub fn prometheus_text(&self) -> String {
+        format!(
+            "# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds_total counter\nkeylo_http_request_duration_milliseconds_total {}\n",
+            self.requests_total.load(Ordering::Relaxed),
+            self.responses_2xx_total.load(Ordering::Relaxed),
+            self.responses_4xx_total.load(Ordering::Relaxed),
+            self.responses_5xx_total.load(Ordering::Relaxed),
+            self.in_flight.load(Ordering::Relaxed),
+            self.duration_milliseconds_total.load(Ordering::Relaxed),
+        )
+    }
+}
+
+impl Default for RuntimeMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Default for AppState {
@@ -77,6 +142,7 @@ impl AppState {
             auth_rate_limits: Arc::new(RwLock::new(HashMap::new())),
             redis_client,
             migration_jobs: Arc::new(RwLock::new(HashMap::new())),
+            runtime_metrics: Arc::new(RuntimeMetrics::new()),
         })
     }
 
