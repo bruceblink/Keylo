@@ -298,6 +298,33 @@ pub async fn upsert_external_user_mapping(
     Ok(())
 }
 
+/// Create an immutable external identity binding; callers must never reassign an existing subject.
+pub async fn create_external_user_mapping(
+    pool: &PgPool,
+    provider: &str,
+    external_user_id: &str,
+    user_id: &str,
+    metadata: Option<&Value>,
+) -> Result<()> {
+    let now = chrono::Local::now().naive_utc();
+    sqlx::query(
+        r#"
+        INSERT INTO external_user_mappings
+            (id, provider, external_user_id, user_id, metadata, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $6)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(provider)
+    .bind(external_user_id)
+    .bind(user_id)
+    .bind(metadata)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Remove one upstream source from a user only when another login method remains available.
 pub async fn unlink_external_user_mapping(
     pool: &PgPool,

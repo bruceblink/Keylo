@@ -123,6 +123,47 @@ fn oidc_jit_username(source: &IdentitySource, profile: &OidcUpstreamProfile) -> 
     format!("{}-{}", profile.username, hex::encode(&digest[..4]))
 }
 
+/// Bind an OIDC subject once; a concurrent binding to another user is a conflict, never a reassignment.
+async fn create_oidc_user_mapping(
+    db: &sqlx::PgPool,
+    source: &IdentitySource,
+    profile: &OidcUpstreamProfile,
+    user_id: &str,
+) -> Result<(), AuthError> {
+    let provider = oidc_mapping_provider(source);
+    match crate::db::create_external_user_mapping(
+        db,
+        &provider,
+        &profile.external_subject,
+        user_id,
+        Some(&json!({"source_name": source.name, "email": profile.email})),
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if is_unique_violation(error.as_ref()) => {
+            let existing_user_id =
+                crate::db::get_mapped_user_id(db, &provider, &profile.external_subject)
+                    .await
+                    .map_err(|_| {
+                        AuthError::DatabaseError(
+                            "Failed to resolve OIDC mapping conflict".to_string(),
+                        )
+                    })?;
+            if existing_user_id.as_deref() == Some(user_id) {
+                Ok(())
+            } else {
+                Err(AuthError::Conflict(
+                    "Upstream OIDC identity is already linked to another Keylo user".to_string(),
+                ))
+            }
+        }
+        Err(_) => Err(AuthError::DatabaseError(
+            "Failed to create OIDC user mapping".to_string(),
+        )),
+    }
+}
+
 /// Resolve a verified OIDC identity to an active Keylo user, creating a mapping only under source policy.
 async fn resolve_oidc_upstream_user(
     db: &sqlx::PgPool,
@@ -153,15 +194,7 @@ async fn resolve_oidc_upstream_user(
         if !user.active {
             return Err(AuthError::Forbidden);
         }
-        crate::db::upsert_external_user_mapping(
-            db,
-            &provider,
-            &profile.external_subject,
-            &user.id,
-            Some(&json!({"source_name": source.name, "email": profile.email})),
-        )
-        .await
-        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC user mapping".to_string()))?;
+        create_oidc_user_mapping(db, source, profile, &user.id).await?;
         return Ok(user);
     }
 
@@ -187,15 +220,12 @@ async fn resolve_oidc_upstream_user(
                 AuthError::DatabaseError("Failed to create JIT OIDC user".to_string())
             }
         })?;
-    crate::db::upsert_external_user_mapping(
-        db,
-        &provider,
-        &profile.external_subject,
-        &user.id,
-        Some(&json!({"source_name": source.name, "email": profile.email})),
-    )
-    .await
-    .map_err(|_| AuthError::DatabaseError("Failed to create OIDC user mapping".to_string()))?;
+    if let Err(error) = create_oidc_user_mapping(db, source, profile, &user.id).await {
+        crate::db::delete_user(db, &user.id).await.map_err(|_| {
+            AuthError::DatabaseError("Failed to clean up conflicting JIT OIDC user".to_string())
+        })?;
+        return Err(error);
+    }
     Ok(user)
 }
 
