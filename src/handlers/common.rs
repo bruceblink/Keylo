@@ -89,6 +89,24 @@ pub async fn favicon() -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
+/// Return a stable public readiness error while retaining dependency details only in server logs.
+fn readiness_unavailable(
+    checks: Value,
+    error: &str,
+    diagnostic: &str,
+) -> (StatusCode, Json<Value>) {
+    tracing::warn!(diagnostic, "Readiness probe failed");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "status": "error",
+            "service": "keylo",
+            "checks": checks,
+            "error": error
+        })),
+    )
+}
+
 pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let mut checks = json!({
         "database": if state.config.allow_in_memory_fallback { "disabled" } else { "missing" },
@@ -112,41 +130,21 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
         match probe_result {
             Ok(_) => checks["database"] = json!("ok"),
             Err(err) => {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({
-                        "status": "error",
-                        "service": "keylo",
-                        "checks": checks,
-                        "error": format!("database not ready: {}", err)
-                    })),
-                );
+                return readiness_unavailable(checks, "database not ready", &err.to_string())
             }
         }
     }
 
     if state.db.is_none() && !state.config.allow_in_memory_fallback {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status": "error",
-                "service": "keylo",
-                "checks": checks,
-                "error": "database not configured"
-            })),
+        return readiness_unavailable(
+            checks,
+            "database not configured",
+            "database is not configured",
         );
     }
 
     if state.config.enable_setup_wizard && checks["setup"]["completed"] == json!(false) {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status": "error",
-                "service": "keylo",
-                "checks": checks,
-                "error": "setup is not completed"
-            })),
-        );
+        return readiness_unavailable(checks, "setup is not completed", "setup is not completed");
     }
 
     if state.config.redis_url.is_some() {
@@ -168,15 +166,7 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
             match probe_result {
                 Ok(_) => checks["redis"] = json!("ok"),
                 Err(err) => {
-                    return (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(json!({
-                            "status": "error",
-                            "service": "keylo",
-                            "checks": checks,
-                                "error": format!("redis not ready: {}", err)
-                        })),
-                    );
+                    return readiness_unavailable(checks, "redis not ready", &err.to_string())
                 }
             }
         }
@@ -190,4 +180,22 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
             "checks": checks
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readiness_unavailable;
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    #[test]
+    fn readiness_error_does_not_expose_dependency_diagnostics() {
+        let diagnostic = "connection failed for redis://keylo:secret@redis:6379/0";
+        let (status, body) =
+            readiness_unavailable(json!({"redis": "disabled"}), "redis not ready", diagnostic);
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.0["error"], "redis not ready");
+        assert!(!body.0.to_string().contains("secret"));
+    }
 }
