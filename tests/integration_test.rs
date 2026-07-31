@@ -171,6 +171,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_oidc_public_client_token_request_rejects_a_secret() {
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login.json();
+        let admin_token = admin_body["access_token"].as_str().unwrap();
+        let client_id = format!(
+            "public-oidc-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+        let create = server
+            .post("/v1/admin/oidc/clients")
+            .add_header("Authorization", format!("Bearer {}", admin_token))
+            .json(&json!({
+                "client_id": client_id,
+                "name": "Public OIDC test client",
+                "client_type": "public",
+                "redirect_uris": ["https://client.example.test/callback"]
+            }))
+            .await;
+        create.assert_status_ok();
+
+        let body = format!(
+            "grant_type=authorization_code&code=invalid&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcallback&client_id={}&client_secret=not-allowed&code_verifier={}",
+            client_id,
+            "a".repeat(43)
+        );
+        let response = server
+            .post("/v1/oidc/token")
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .bytes(Bytes::from(body))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+        let response_body: serde_json::Value = response.json();
+        assert_eq!(response_body["error"], "invalid_client");
+    }
+
+    #[tokio::test]
     async fn test_keylo_configuration_endpoint() {
         let config = Config {
             server_addr: "127.0.0.1".to_string(),

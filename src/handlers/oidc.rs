@@ -536,6 +536,7 @@ pub async fn token(
                     .as_deref()
                     .is_some_and(|hash| verify(secret, hash).unwrap_or(false))
             }))
+        || (client_type == "public" && client_secret.is_some())
     {
         return Err(AuthError::Unauthorized.into());
     }
