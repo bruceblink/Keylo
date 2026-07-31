@@ -237,6 +237,48 @@ mod database_tests {
     }
 
     #[tokio::test]
+    async fn test_external_identity_mapping_hashes_subject_at_rest() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_external_identity_mapping_hashes_subject_at_rest: {msg}");
+                return;
+            }
+        };
+        let username = format!("external-subject-user-{}", uuid::Uuid::new_v4());
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some("ExternalSubject#123"),
+        )
+        .await
+        .expect("Failed to create external mapping user");
+        let subject = "upstream-subject-should-not-be-stored";
+
+        db::create_external_user_mapping(&pool, "oidc_upstream:test", subject, &user.id, None)
+            .await
+            .expect("Failed to create external mapping");
+
+        let stored_subject: String = sqlx::query_scalar(
+            "SELECT external_user_id FROM external_user_mappings WHERE provider = $1",
+        )
+        .bind("oidc_upstream:test")
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to read stored external mapping key");
+        assert_ne!(stored_subject, subject);
+        assert_eq!(stored_subject.len(), 64);
+        assert_eq!(
+            db::get_mapped_user_id(&pool, "oidc_upstream:test", subject)
+                .await
+                .expect("Failed to resolve hashed external mapping"),
+            Some(user.id)
+        );
+    }
+
+    #[tokio::test]
     async fn test_refresh_token_operations() {
         let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {

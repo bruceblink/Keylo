@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
@@ -28,6 +29,11 @@ fn hash_password(password: &str) -> Result<String> {
 
 fn verify_password_hash(password: &str, password_hash: &str) -> Result<bool> {
     Ok(verify(password, password_hash)?)
+}
+
+/// Derive the database lookup key for an external subject without retaining the subject itself.
+fn external_subject_hash(external_user_id: &str) -> String {
+    hex::encode(Sha256::digest(external_user_id.as_bytes()))
 }
 
 /// 获取用户
@@ -259,11 +265,12 @@ pub async fn get_mapped_user_id(
     provider: &str,
     external_user_id: &str,
 ) -> Result<Option<String>> {
+    let external_subject_hash = external_subject_hash(external_user_id);
     let row = sqlx::query(
         "SELECT user_id FROM external_user_mappings WHERE provider = $1 AND external_user_id = $2",
     )
     .bind(provider)
-    .bind(external_user_id)
+    .bind(external_subject_hash)
     .fetch_optional(pool)
     .await?;
 
@@ -276,11 +283,12 @@ pub async fn get_external_user_mapping(
     provider: &str,
     external_user_id: &str,
 ) -> Result<Option<ExternalUserMapping>> {
+    let external_subject_hash = external_subject_hash(external_user_id);
     let row = sqlx::query(
         "SELECT user_id, metadata FROM external_user_mappings WHERE provider = $1 AND external_user_id = $2",
     )
     .bind(provider)
-    .bind(external_user_id)
+    .bind(external_subject_hash)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|row| ExternalUserMapping {
@@ -297,11 +305,12 @@ pub async fn update_external_user_mapping_email(
     user_id: &str,
     metadata: &Value,
 ) -> Result<bool> {
+    let external_subject_hash = external_subject_hash(external_user_id);
     let result = sqlx::query(
         "UPDATE external_user_mappings SET metadata = $5, updated_at = $6 WHERE provider = $1 AND external_user_id = $2 AND user_id = $3 AND metadata IS DISTINCT FROM $4",
     )
     .bind(provider)
-    .bind(external_user_id)
+    .bind(external_subject_hash)
     .bind(user_id)
     .bind(metadata)
     .bind(metadata)
@@ -321,6 +330,7 @@ pub async fn upsert_external_user_mapping(
 ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().naive_utc();
+    let external_subject_hash = external_subject_hash(external_user_id);
 
     sqlx::query(
         r#"
@@ -335,7 +345,7 @@ pub async fn upsert_external_user_mapping(
     )
     .bind(id)
     .bind(provider)
-    .bind(external_user_id)
+    .bind(external_subject_hash)
     .bind(user_id)
     .bind(metadata)
     .bind(now)
@@ -354,6 +364,7 @@ pub async fn create_external_user_mapping(
     metadata: Option<&Value>,
 ) -> Result<()> {
     let now = chrono::Local::now().naive_utc();
+    let external_subject_hash = external_subject_hash(external_user_id);
     sqlx::query(
         r#"
         INSERT INTO external_user_mappings
@@ -363,7 +374,7 @@ pub async fn create_external_user_mapping(
     )
     .bind(Uuid::new_v4().to_string())
     .bind(provider)
-    .bind(external_user_id)
+    .bind(external_subject_hash)
     .bind(user_id)
     .bind(metadata)
     .bind(now)
