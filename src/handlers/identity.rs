@@ -811,19 +811,34 @@ pub async fn update_identity_source(
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?
     .ok_or(AuthError::NotFound)?;
 
-    if existing.is_some_and(|previous| {
+    let upstream_source_disabled = existing.as_ref().is_some_and(|previous| {
         previous.active && !source.active && previous.source_type == "oidc_upstream"
-    }) {
+    });
+    let upstream_source_reconfigured = existing.as_ref().is_some_and(|previous| {
+        previous.active
+            && source.active
+            && previous.source_type == "oidc_upstream"
+            && previous.config != source.config
+    });
+    if upstream_source_disabled || upstream_source_reconfigured {
+        let (revoke_reason, audit_event) = if upstream_source_disabled {
+            ("identity_source_disabled", "identity_source.disabled")
+        } else {
+            (
+                "identity_source_reconfigured",
+                "identity_source.reconfigured",
+            )
+        };
         let revoked_sessions = crate::db::revoke_client_refresh_sessions(
             db,
             &oidc_mapping_provider(&source),
-            Some("identity_source_disabled"),
+            Some(revoke_reason),
         )
         .await
         .map_err(|_| AuthError::DatabaseError("Failed to revoke upstream sessions".to_string()))?;
         crate::db::create_audit_log(
             db,
-            "identity_source.disabled",
+            audit_event,
             Some(&claims.sub),
             Some(&format!(
                 "source_id={}; revoked_sessions={}",

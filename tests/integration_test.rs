@@ -1391,6 +1391,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_reconfiguring_oidc_identity_source_revokes_upstream_refresh_sessions() {
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let source_name = format!(
+            "upstream-reconfigure-{}",
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let create_source = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "name": source_name,
+                "source_type": "oidc_upstream",
+                "display_name": "Upstream reconfigure test",
+                "config": {
+                    "issuer": "https://idp.example.test",
+                    "client_id": "keylo-old-client",
+                    "client_secret": "old-upstream-secret",
+                    "redirect_uri": "https://keylo.example.test/v1/upstream/oidc/callback"
+                }
+            }))
+            .await;
+        create_source.assert_status_ok();
+        let source = create_source.json::<serde_json::Value>();
+        let source_id = source["id"].as_str().unwrap();
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = match db::init_db_pool(&database_url).await {
+            Ok(pool) => pool,
+            Err(_) => return,
+        };
+        let username = format!("upstream-reconfigure-user-{}", uuid::Uuid::new_v4());
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some("UpstreamReconfigure#123"),
+        )
+        .await
+        .unwrap();
+        let principal = db::ensure_user_principal(&pool, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let session_id = format!("upstream-session-{}", uuid::Uuid::new_v4());
+        let refresh_token_id = format!("upstream-refresh-id-{}", uuid::Uuid::new_v4());
+        let refresh_token = format!("upstream-refresh-token-{}", uuid::Uuid::new_v4());
+        db::create_refresh_session(
+            &pool,
+            db::CreateRefreshSessionParams {
+                session_id: &session_id,
+                principal_id: &principal.id,
+                client_id: &format!("oidc_upstream:{source_id}"),
+                refresh_token_id: &refresh_token_id,
+                refresh_token: &refresh_token,
+                access_jti: "upstream-access-jti",
+                login_ip: None,
+                user_agent: None,
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .unwrap();
+
+        let reconfigure = server
+            .put(&format!("/v1/admin/identity-sources/{source_id}"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "config": {
+                    "issuer": "https://idp.example.test",
+                    "client_id": "keylo-new-client",
+                    "client_secret": "new-upstream-secret",
+                    "redirect_uri": "https://keylo.example.test/v1/upstream/oidc/callback"
+                }
+            }))
+            .await;
+        reconfigure.assert_status_ok();
+
+        let sessions = db::list_refresh_sessions_for_principal(&pool, &principal.id, true)
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].revoked_at.is_some());
+        assert_eq!(
+            sessions[0].revoke_reason.as_deref(),
+            Some("identity_source_reconfigured")
+        );
+        let audit_logs = db::get_recent_audit_logs(&pool, 20).await.unwrap();
+        assert!(audit_logs.iter().any(|(event_type, _, detail, _)| {
+            event_type == "identity_source.reconfigured"
+                && detail
+                    .as_deref()
+                    .is_some_and(|value| value.contains(source_id))
+        }));
+    }
+
+    #[tokio::test]
     async fn test_upstream_oidc_denial_consumes_callback_state() {
         let server = setup_test_server().await;
         let admin_login = server
