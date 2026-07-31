@@ -438,6 +438,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 }
 ```
 
+每个检查必须二选一：提供非空 `permission`，或同时提供非空 `app`、`resource_type`、`resource_code`。混用两种目标、空权限或不完整资源坐标返回 `invalid_request`，不会被静默降级为拒绝。
+
 响应：
 
 ```json

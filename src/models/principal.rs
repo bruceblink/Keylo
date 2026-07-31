@@ -38,6 +38,40 @@ pub struct AuthorizeCheckRequest {
     pub resource_code: Option<String>,
 }
 
+impl AuthorizeCheckRequest {
+    /// Require exactly one unambiguous authorization target before it reaches the database.
+    pub fn validate(&self) -> Result<(), String> {
+        let permission = self.permission.as_deref().map(str::trim);
+        if permission.is_some_and(str::is_empty) {
+            return Err("permission must not be empty when provided".to_string());
+        }
+        let resource_fields = [
+            self.app.as_deref(),
+            self.resource_type.as_deref(),
+            self.resource_code.as_deref(),
+        ];
+        let supplied_resource_fields = resource_fields
+            .iter()
+            .filter(|value| value.is_some())
+            .count();
+        if permission.is_some() && supplied_resource_fields > 0 {
+            return Err("provide either permission or resource coordinates, not both".to_string());
+        }
+        if permission.is_none()
+            && (supplied_resource_fields != resource_fields.len()
+                || resource_fields
+                    .iter()
+                    .flatten()
+                    .any(|value| value.trim().is_empty()))
+        {
+            return Err(
+                "provide permission or non-empty app, resource_type, and resource_code".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AuthorizeBatchCheckRequest {
     pub checks: Vec<AuthorizeCheckRequest>,
@@ -53,6 +87,9 @@ impl AuthorizeBatchCheckRequest {
             return Err(format!(
                 "checks must not contain more than {MAX_AUTHORIZE_BATCH_CHECKS} authorization requests"
             ));
+        }
+        for check in &self.checks {
+            check.validate()?;
         }
         Ok(())
     }
@@ -97,6 +134,42 @@ mod tests {
         .is_err());
         assert!(AuthorizeBatchCheckRequest {
             checks: (0..MAX_AUTHORIZE_BATCH_CHECKS).map(|_| check()).collect(),
+        }
+        .validate()
+        .is_ok());
+    }
+
+    #[test]
+    fn authorization_check_validation_requires_one_complete_target() {
+        assert!(AuthorizeCheckRequest {
+            permission: Some(" ".to_string()),
+            app: None,
+            resource_type: None,
+            resource_code: None,
+        }
+        .validate()
+        .is_err());
+        assert!(AuthorizeCheckRequest {
+            permission: Some("system:read".to_string()),
+            app: Some("app".to_string()),
+            resource_type: None,
+            resource_code: None,
+        }
+        .validate()
+        .is_err());
+        assert!(AuthorizeCheckRequest {
+            permission: None,
+            app: Some("app".to_string()),
+            resource_type: Some("service".to_string()),
+            resource_code: None,
+        }
+        .validate()
+        .is_err());
+        assert!(AuthorizeCheckRequest {
+            permission: None,
+            app: Some("app".to_string()),
+            resource_type: Some("service".to_string()),
+            resource_code: Some("sync".to_string()),
         }
         .validate()
         .is_ok());

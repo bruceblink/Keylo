@@ -198,6 +198,7 @@ async fn authorize_check(
     TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
     Json(payload): Json<AuthorizeCheckRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
+    payload.validate().map_err(AuthError::InvalidRequest)?;
     let (principal, _) = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
