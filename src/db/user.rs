@@ -218,14 +218,48 @@ pub async fn set_user_active(pool: &PgPool, user_id: &str, active: bool) -> Resu
     Ok(result.rows_affected() > 0)
 }
 
-/// 删除用户
-pub async fn delete_user(pool: &PgPool, user_id: &str) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM users WHERE id = $1")
+/// Delete a user and invalidate all sessions that can outlive the user row.
+pub async fn delete_user(pool: &PgPool, user_id: &str, actor: Option<&str>) -> Result<bool> {
+    let mut transaction = pool.begin().await?;
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 FOR UPDATE)",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !exists {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+    let revoked_refresh_sessions = sqlx::query(
+        "UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), revoke_reason = COALESCE(revoke_reason, 'user_deleted') WHERE principal_id IN (SELECT id FROM principals WHERE principal_type = 'user' AND ref_id = $1) AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    let deleted_browser_sessions =
+        sqlx::query("DELETE FROM oidc_browser_sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+    sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(user_id)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await?;
-
-    Ok(result.rows_affected() > 0)
+    sqlx::query("INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string())
+        .bind("user.deleted")
+        .bind(actor)
+        .bind(format!(
+            "user_id={}; revoked_refresh_sessions={}; deleted_oidc_browser_sessions={}",
+            user_id, revoked_refresh_sessions, deleted_browser_sessions
+        ))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(true)
 }
 
 /// 验证用户凭证

@@ -312,9 +312,11 @@ async fn resolve_oidc_upstream_user(
             }
         })?;
     if let Err(error) = create_oidc_user_mapping(db, source, profile, &user.id).await {
-        crate::db::delete_user(db, &user.id).await.map_err(|_| {
-            AuthError::DatabaseError("Failed to clean up conflicting JIT OIDC user".to_string())
-        })?;
+        crate::db::delete_user(db, &user.id, None)
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to clean up conflicting JIT OIDC user".to_string())
+            })?;
         return Err(error);
     }
     Ok(user)

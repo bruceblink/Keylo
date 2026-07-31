@@ -355,12 +355,13 @@ async fn update_user_handler(
 }
 
 async fn delete_user_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
 
-    match crate::db::user::delete_user(db, &user_id).await {
+    match crate::db::user::delete_user(db, &user_id, Some(&claims.sub)).await {
         Ok(true) => Ok(Json(json!({
             "success": true,
             "message": "User deleted successfully",
