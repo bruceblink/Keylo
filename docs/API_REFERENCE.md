@@ -67,6 +67,8 @@
 
 OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1/oidc/consent`、`POST /v1/oidc/logout`、`POST /v1/oidc/token`、`GET /v1/oidc/userinfo`。授权码有效期为 5 分钟，且只能原子消费一次。`/v1/oidc/login` 使用 `application/x-www-form-urlencoded` 提交用户名、密码及原授权请求参数，成功后创建 `HttpOnly; Secure; SameSite=Lax` 浏览器会话。登录后或已有会话访问 `/v1/oidc/authorize` 会显示客户端和 scope，必须通过同站点的 `/v1/oidc/consent` 明确确认才会重定向至已登记的 redirect URI 并签发 code；拒绝不会签发 code。`POST /v1/oidc/logout` 撤销该浏览器 OIDC session 并清除 cookie，不影响 API refresh session。UserInfo 只接受 OIDC access token；始终返回 `sub`，仅在被授予 `profile` 或 `email` scope 时返回对应 profile/email claims。
 
+`/v1/oidc/token` 支持标准 `client_secret_basic`：confidential client 可将 `client_id:client_secret` 以 Base64 放入 `Authorization: Basic`，并在表单中省略 `client_id` 与 `client_secret`；同时保留 `client_secret_post` 兼容既有表单客户端。一次请求只能使用其中一种客户端认证方式。public client 继续在表单中提交 `client_id`，不提交 secret。
+
 `/v1/oidc/token` 失败时使用 OAuth 2.0 错误响应：`invalid_request` 表示 grant 参数不支持，`invalid_client` 表示客户端认证失败（同时返回 `WWW-Authenticate`），`invalid_grant` 表示授权码、redirect URI 或 PKCE verifier 不匹配、失效或已被消费。内部错误统一返回 `server_error`，不泄露数据库或签名细节。
 
 ### 2.2 OIDC 客户端注册

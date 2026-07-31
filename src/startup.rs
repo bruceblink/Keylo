@@ -620,6 +620,10 @@ wwIDAQAB
             body["userinfo_endpoint"],
             "http://127.0.0.1:2345/v1/oidc/userinfo"
         );
+        assert_eq!(
+            body["token_endpoint_auth_methods_supported"],
+            serde_json::json!(["client_secret_basic", "client_secret_post"])
+        );
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     Json,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bcrypt::verify;
 use chrono::Utc;
 use serde_json::json;
@@ -28,6 +29,7 @@ struct OidcErrorBody {
 }
 
 /// OAuth 2.0-compliant error format for the public token endpoint.
+#[derive(Debug)]
 pub struct OidcProtocolError {
     status: StatusCode,
     error: &'static str,
@@ -89,6 +91,49 @@ impl IntoResponse for OidcProtocolError {
         }
         response
     }
+}
+
+/// Extract one token-endpoint client authentication method without allowing ambiguous credentials.
+fn token_client_credentials(
+    headers: &HeaderMap,
+    request: &OidcTokenRequest,
+) -> Result<(String, Option<String>), OidcProtocolError> {
+    let form_client_id = request
+        .client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let basic = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(basic) = basic {
+        if form_client_id.is_some() || request.client_secret.is_some() {
+            return Err(AuthError::InvalidRequest(
+                "OIDC token request must use exactly one client authentication method".to_string(),
+            )
+            .into());
+        }
+        let encoded = basic
+            .strip_prefix("Basic ")
+            .ok_or(AuthError::Unauthorized)?;
+        let decoded = STANDARD
+            .decode(encoded)
+            .map_err(|_| AuthError::Unauthorized)?;
+        let decoded = std::str::from_utf8(&decoded).map_err(|_| AuthError::Unauthorized)?;
+        let (client_id, client_secret) = decoded.split_once(':').ok_or(AuthError::Unauthorized)?;
+        if client_id.trim().is_empty() || client_secret.is_empty() {
+            return Err(AuthError::Unauthorized.into());
+        }
+        return Ok((client_id.to_string(), Some(client_secret.to_string())));
+    }
+    let client_id = form_client_id.ok_or_else(|| {
+        OidcProtocolError::from(AuthError::InvalidRequest(
+            "OIDC token request is missing client_id".to_string(),
+        ))
+    })?;
+    Ok((client_id.to_string(), request.client_secret.clone()))
 }
 
 fn database(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {
@@ -182,6 +227,7 @@ pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value>
         "grant_types_supported": ["authorization_code"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
+        "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
         "code_challenge_methods_supported": ["S256"],
         "scopes_supported": ["openid", "profile", "email"]
     }))
@@ -465,6 +511,7 @@ pub async fn logout(
 /// Exchange one authorization code exactly once after validating its client, redirect URI, and PKCE verifier.
 pub async fn token(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Form(request): Form<OidcTokenRequest>,
 ) -> Result<Json<OidcTokenResponse>, OidcProtocolError> {
     if request.grant_type != "authorization_code" {
@@ -473,9 +520,10 @@ pub async fn token(
         )
         .into());
     }
+    let (client_id, client_secret) = token_client_credentials(&headers, &request)?;
     let db = database(&state)?;
     let Some((client_type, secret_hash, active)) =
-        crate::db::get_oidc_client_secret_hash(db, &request.client_id)
+        crate::db::get_oidc_client_secret_hash(db, &client_id)
             .await
             .map_err(|error| AuthError::DatabaseError(error.to_string()))?
     else {
@@ -483,7 +531,7 @@ pub async fn token(
     };
     if !active
         || (client_type == "confidential"
-            && !request.client_secret.as_deref().is_some_and(|secret| {
+            && !client_secret.as_deref().is_some_and(|secret| {
                 secret_hash
                     .as_deref()
                     .is_some_and(|hash| verify(secret, hash).unwrap_or(false))
@@ -497,7 +545,7 @@ pub async fn token(
         .ok_or_else(|| {
             OidcProtocolError::invalid_grant("authorization code is invalid or expired")
         })?;
-    if authorization.client_id != request.client_id
+    if authorization.client_id != client_id
         || authorization.redirect_uri != request.redirect_uri
         || !verify_pkce_s256(&request.code_verifier, &authorization.code_challenge)
     {
@@ -525,7 +573,7 @@ pub async fn token(
     let access_token = state.jwt_keys.sign_token(&OidcAccessTokenClaims {
         iss: state.config.oidc_issuer(),
         sub: user.id.clone(),
-        aud: request.client_id.clone(),
+        aud: client_id.clone(),
         exp: expires_at,
         iat: now,
         jti: Uuid::new_v4().to_string(),
@@ -535,7 +583,7 @@ pub async fn token(
     let id_token = state.jwt_keys.sign_token(&OidcIdTokenClaims {
         iss: state.config.oidc_issuer(),
         sub: user.id,
-        aud: request.client_id,
+        aud: client_id,
         exp: expires_at,
         iat: now,
         nonce: authorization.nonce.ok_or(AuthError::InvalidToken)?,
@@ -559,4 +607,45 @@ pub async fn token(
         expires_in: state.config.token_expiry_seconds,
         scope,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token_request(client_id: Option<&str>, client_secret: Option<&str>) -> OidcTokenRequest {
+        OidcTokenRequest {
+            grant_type: "authorization_code".to_string(),
+            code: "code".to_string(),
+            redirect_uri: "https://client.example/callback".to_string(),
+            client_id: client_id.map(str::to_string),
+            client_secret: client_secret.map(str::to_string),
+            code_verifier: "a".repeat(43),
+        }
+    }
+
+    #[test]
+    fn token_client_credentials_accepts_standard_basic_authentication() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic Y2xpZW50OnNlY3JldA=="),
+        );
+
+        let credentials = token_client_credentials(&headers, &token_request(None, None)).unwrap();
+
+        assert_eq!(credentials.0, "client");
+        assert_eq!(credentials.1.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn token_client_credentials_rejects_mixed_client_authentication_methods() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic Y2xpZW50OnNlY3JldA=="),
+        );
+
+        assert!(token_client_credentials(&headers, &token_request(Some("client"), None)).is_err());
+    }
 }
