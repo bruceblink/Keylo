@@ -208,14 +208,49 @@ pub async fn update_user(
 
 /// 更新用户激活状态
 pub async fn set_user_active(pool: &PgPool, user_id: &str, active: bool) -> Result<bool> {
+    let mut transaction = pool.begin().await?;
     let result = sqlx::query("UPDATE users SET active = $2, updated_at = $3 WHERE id = $1")
         .bind(user_id)
         .bind(active)
         .bind(chrono::Local::now().naive_utc())
-        .execute(pool)
+        .execute(&mut *transaction)
         .await?;
+    if result.rows_affected() == 0 {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+    if !active {
+        // Keep non-HTTP callers subject to the same session invalidation policy.
+        let revoked_refresh_sessions = sqlx::query(
+            "UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), revoke_reason = COALESCE(revoke_reason, 'user_disabled') WHERE principal_id IN (SELECT id FROM principals WHERE principal_type = 'user' AND ref_id = $1) AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        let revoked_browser_sessions = sqlx::query(
+            "UPDATE oidc_browser_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        sqlx::query(
+            "INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind("user.disabled")
+        .bind(Option::<&str>::None)
+        .bind(format!(
+            "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
+            user_id, revoked_refresh_sessions, revoked_browser_sessions
+        ))
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
 
-    Ok(result.rows_affected() > 0)
+    Ok(true)
 }
 
 /// Delete a user and invalidate all sessions that can outlive the user row.
