@@ -198,6 +198,57 @@ pub async fn update_role(
     Ok(role)
 }
 
+/// Stores immutable before/after role snapshots so administrators can investigate a configuration change.
+pub async fn create_role_change_history(
+    pool: &PgPool,
+    actor: Option<&str>,
+    change_reason: Option<&str>,
+    before: &Role,
+    after: &Role,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO role_change_history
+            (id, role_id, version, actor, change_reason, before_state, after_state)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(&after.id)
+    .bind(after.version)
+    .bind(actor)
+    .bind(change_reason)
+    .bind(serde_json::to_value(before)?)
+    .bind(serde_json::to_value(after)?)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Lists role change snapshots from newest to oldest for a bounded administrator investigation view.
+pub async fn list_role_change_history(
+    pool: &PgPool,
+    role_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<RoleChangeHistory>> {
+    Ok(sqlx::query_as::<_, RoleChangeHistory>(
+        r#"
+        SELECT id, role_id, version, actor, change_reason, before_state, after_state, created_at
+        FROM role_change_history
+        WHERE role_id = $1
+        ORDER BY version DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(role_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// 删除角色
 pub async fn delete_role(pool: &PgPool, role_id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM roles WHERE id = $1")

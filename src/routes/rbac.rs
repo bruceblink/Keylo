@@ -25,6 +25,7 @@ pub fn rbac_routes() -> Router<AppState> {
         .route("/roles/{role_id}", get(get_role))
         .route("/roles/{role_id}", put(update_role_handler))
         .route("/roles/{role_id}", delete(delete_role_handler))
+        .route("/roles/{role_id}/changes", get(list_role_changes_handler))
         // 权限管理路由
         .route("/permissions", get(get_permissions))
         .route("/permissions", post(create_permission_handler))
@@ -262,8 +263,20 @@ async fn update_role_handler(
         }
     }
 
+    let db = require_db(&state)?;
+    let before = get_role_by_id(db, &role_id)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "role_lookup_failed",
+                &format!("Failed to look up role: {}", e),
+            )
+        })?
+        .ok_or_else(|| error_response(StatusCode::NOT_FOUND, "role_not_found", "Role not found"))?;
+
     match update_role(
-        require_db(&state)?,
+        db,
         &role_id,
         req.name.as_deref(),
         req.description.as_deref(),
@@ -274,11 +287,33 @@ async fn update_role_handler(
     .await
     {
         Ok(Some(role)) => {
+            let change_reason = req
+                .change_reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty());
+            create_role_change_history(db, Some(&claims.sub), change_reason, &before, &role)
+                .await
+                .map_err(|e| {
+                    error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "role_history_failed",
+                        &format!("Failed to record role change: {}", e),
+                    )
+                })?;
             audit_event(
                 &state,
                 "rbac.role.updated",
                 Some(&claims.sub),
-                format!("role_id={}, role_name={}", role.id, role.name),
+                format!(
+                    "role_id={}, role_name={}, version={}{}",
+                    role.id,
+                    role.name,
+                    role.version,
+                    change_reason
+                        .map(|reason| format!(", reason={reason}"))
+                        .unwrap_or_default(),
+                ),
             )
             .await;
             Ok(Json(json!({
@@ -287,18 +322,7 @@ async fn update_role_handler(
             })))
         }
         Ok(None) => {
-            if req.expected_version.is_some()
-                && get_role_by_id(require_db(&state)?, &role_id)
-                    .await
-                    .map_err(|e| {
-                        error_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "role_lookup_failed",
-                            &format!("Failed to look up role: {}", e),
-                        )
-                    })?
-                    .is_some()
-            {
+            if req.expected_version.is_some() {
                 Err(error_response(
                     StatusCode::CONFLICT,
                     "role_version_conflict",
@@ -328,6 +352,38 @@ async fn update_role_handler(
             }
         }
     }
+}
+
+async fn list_role_changes_handler(
+    State(state): State<AppState>,
+    Path(role_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let changes = list_role_change_history(db, &role_id, limit, offset)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "role_history_failed",
+                &format!("Failed to list role changes: {}", e),
+            )
+        })?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": changes
+    })))
 }
 
 /// 删除角色

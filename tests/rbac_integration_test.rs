@@ -111,6 +111,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_role_change_history_records_before_and_after_snapshots() {
+        let Some(server) = setup_test_server().await else {
+            return;
+        };
+        let token = get_access_token(&server).await;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let role_resp = server
+            .post("/api/rbac/roles")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "name": format!("history_role_{}", ts) }))
+            .await;
+        role_resp.assert_status_ok();
+        let role: serde_json::Value = role_resp.json();
+        let role_id = role["data"]["id"].as_str().unwrap();
+        let version = role["data"]["version"].as_i64().unwrap();
+
+        let update_resp = server
+            .put(&format!("/api/rbac/roles/{}", role_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "description": "Auditable role update",
+                "expected_version": version,
+                "change_reason": "approved operator scope clarification",
+            }))
+            .await;
+        update_resp.assert_status_ok();
+
+        let changes_resp = server
+            .get(&format!("/api/rbac/roles/{}/changes", role_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        changes_resp.assert_status_ok();
+        let changes: serde_json::Value = changes_resp.json();
+        let change = changes["data"].as_array().unwrap().first().unwrap();
+        assert_eq!(change["version"], version + 1);
+        assert_eq!(
+            change["change_reason"],
+            "approved operator scope clarification"
+        );
+        assert_eq!(
+            change["before_state"]["description"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            change["after_state"]["description"],
+            "Auditable role update"
+        );
+    }
+
+    #[tokio::test]
     async fn test_get_roles() {
         let Some(server) = setup_test_server().await else {
             return;

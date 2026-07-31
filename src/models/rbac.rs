@@ -31,6 +31,19 @@ pub struct UpdateRoleRequest {
     pub assignable_to: Option<String>,
     pub system: Option<bool>,
     pub expected_version: Option<i64>,
+    pub change_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct RoleChangeHistory {
+    pub id: String,
+    pub role_id: String,
+    pub version: i64,
+    pub actor: Option<String>,
+    pub change_reason: Option<String>,
+    pub before_state: serde_json::Value,
+    pub after_state: serde_json::Value,
+    pub created_at: chrono::NaiveDateTime,
 }
 
 /// 权限模型
