@@ -390,6 +390,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_password_change_revokes_refresh_and_oidc_browser_sessions() {
+        let server = setup_test_server().await;
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = match db::init_db_pool(&database_url).await {
+            Ok(pool) => pool,
+            Err(_) => return,
+        };
+        let username = format!("password-session-user-{}", uuid::Uuid::new_v4());
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some("OldPassword#123"),
+        )
+        .await
+        .unwrap();
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "OldPassword#123"
+            }))
+            .await;
+        login.assert_status_ok();
+        let tokens = login.json::<serde_json::Value>();
+        let access_token = tokens["access_token"].as_str().unwrap();
+        let refresh_token = tokens["refresh_token"].as_str().unwrap();
+        let browser_cookie = format!("oidc-password-session-{}", uuid::Uuid::new_v4());
+        db::create_browser_session(
+            &pool,
+            &browser_cookie,
+            &keylo::models::OidcBrowserSession {
+                user_id: user.id.clone(),
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .unwrap();
+
+        let change = server
+            .post("/v1/user/change-password")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .json(&json!({
+                "current_password": "OldPassword#123",
+                "new_password": "NewPassword#123"
+            }))
+            .await;
+        change.assert_status_ok();
+        assert!(
+            db::resolve_browser_session(&pool, &browser_cookie)
+                .await
+                .unwrap()
+                .is_none(),
+            "password changes must revoke existing OIDC browser sessions"
+        );
+        let refresh = server
+            .post("/v1/auth/refresh")
+            .json(&json!({"refresh_token": refresh_token}))
+            .await;
+        assert_eq!(refresh.status_code(), StatusCode::UNAUTHORIZED);
+        let audit_logs = db::get_recent_audit_logs(&pool, 20).await.unwrap();
+        assert!(audit_logs.iter().any(|(event_type, _, detail, _)| {
+            event_type == "user.password_changed"
+                && detail.as_deref().is_some_and(|value| {
+                    value.contains(&user.id)
+                        && value.contains("revoked_refresh_sessions=1")
+                        && value.contains("revoked_oidc_browser_sessions=1")
+                })
+        }));
+    }
+
+    #[tokio::test]
     async fn test_keylo_configuration_endpoint() {
         let config = Config {
             server_addr: "127.0.0.1".to_string(),

@@ -527,6 +527,7 @@ async fn change_password_handler(
         &user_id,
         &req.current_password,
         &req.new_password,
+        Some(&claims.sub),
     )
     .await
     {

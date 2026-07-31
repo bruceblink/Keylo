@@ -228,35 +228,84 @@ pub async fn change_user_password(
     user_id: &str,
     current_password: &str,
     new_password: &str,
+    actor: Option<&str>,
 ) -> Result<bool> {
-    // 首先验证当前密码
-    if let Some(user) = get_user_by_id(pool, user_id).await? {
+    let mut transaction = pool.begin().await?;
+    // Lock the account so concurrent password changes cannot both validate the same old password.
+    let user = sqlx::query_as::<_, User>(
+        "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE id = $1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if let Some(user) = user {
         if !user.active {
+            transaction.commit().await?;
             return Ok(false);
         }
 
         if let Some(password_hash) = user.password_hash.as_deref() {
             if !verify_password_hash(current_password, password_hash)? {
+                transaction.commit().await?;
                 return Ok(false); // 当前密码不正确
             }
         } else {
+            transaction.commit().await?;
             return Ok(false); // 用户没有密码
         }
     } else {
+        transaction.commit().await?;
         return Ok(false); // 用户不存在
     }
 
-    // 验证通过，更新密码
+    // Update the credential and invalidate every session type in one transaction.
     let new_password_hash = hash_password(new_password)?;
-
-    let result = sqlx::query("UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1")
+    let updated = sqlx::query("UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1")
         .bind(user_id)
         .bind(new_password_hash)
         .bind(chrono::Local::now().naive_utc())
-        .execute(pool)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected()
+        > 0;
+    if !updated {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+    let revoked_refresh_sessions = sqlx::query(
+        "UPDATE refresh_sessions
+         SET revoked_at = COALESCE(revoked_at, NOW()),
+             revoke_reason = COALESCE(revoke_reason, 'password_changed')
+         WHERE principal_id IN (
+             SELECT id FROM principals WHERE principal_type = 'user' AND ref_id = $1
+         ) AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    let revoked_browser_sessions = sqlx::query(
+        "UPDATE oidc_browser_sessions
+         SET revoked_at = COALESCE(revoked_at, NOW())
+         WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    sqlx::query("INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string())
+        .bind("user.password_changed")
+        .bind(actor)
+        .bind(format!(
+            "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
+            user_id, revoked_refresh_sessions, revoked_browser_sessions
+        ))
+        .execute(&mut *transaction)
         .await?;
+    transaction.commit().await?;
 
-    Ok(result.rows_affected() > 0)
+    Ok(true)
 }
 
 /// 根据外部系统映射查询用户ID
