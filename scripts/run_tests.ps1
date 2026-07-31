@@ -73,7 +73,7 @@ $dockerRunExitCode = Invoke-NativeQuiet {
         -e POSTGRES_PASSWORD_FILE=/run/secrets/.postgres_password `
         -e POSTGRES_DB=keylo_test `
         -v "${testPasswordFile}:/run/secrets/.postgres_password:ro" `
-        -p 5432:5432 postgres:15
+        -p 5432:5432 postgres:17-alpine
 }
 if ($dockerRunExitCode -eq 0) {
     $script:cleanupTestDatabase = $true

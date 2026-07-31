@@ -53,7 +53,7 @@ if docker run -d --name keylo-test-db \
     -e POSTGRES_PASSWORD_FILE=/run/secrets/.postgres_password \
     -e POSTGRES_DB=keylo_test \
     -v "$(pwd)/.secrets/.test_postgres_password:/run/secrets/.postgres_password:ro" \
-    -p 5432:5432 postgres:15 > /dev/null 2>&1; then
+    -p 5432:5432 postgres:17-alpine > /dev/null 2>&1; then
     print_success "PostgreSQL test database started"
 else
     print_warning "PostgreSQL container already exists or failed to start"
