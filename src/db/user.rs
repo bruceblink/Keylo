@@ -279,6 +279,13 @@ pub async fn delete_user(pool: &PgPool, user_id: &str, actor: Option<&str>) -> R
             .execute(&mut *transaction)
             .await?
             .rows_affected();
+    // Principal roles cascade from this delete, preventing orphaned authorization subjects.
+    let deleted_principals =
+        sqlx::query("DELETE FROM principals WHERE principal_type = 'user' AND ref_id = $1")
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(user_id)
         .execute(&mut *transaction)
@@ -288,8 +295,8 @@ pub async fn delete_user(pool: &PgPool, user_id: &str, actor: Option<&str>) -> R
         .bind("user.deleted")
         .bind(actor)
         .bind(format!(
-            "user_id={}; revoked_refresh_sessions={}; deleted_oidc_browser_sessions={}",
-            user_id, revoked_refresh_sessions, deleted_browser_sessions
+            "user_id={}; revoked_refresh_sessions={}; deleted_oidc_browser_sessions={}; deleted_principals={}",
+            user_id, revoked_refresh_sessions, deleted_browser_sessions, deleted_principals
         ))
         .execute(&mut *transaction)
         .await?;

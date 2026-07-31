@@ -85,6 +85,41 @@ mod database_tests {
     }
 
     #[tokio::test]
+    async fn test_deleting_user_removes_linked_principal() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_deleting_user_removes_linked_principal: {}",
+                    msg
+                );
+                return;
+            }
+        };
+        let user = db::create_user(
+            &pool,
+            "deleted-principal-user",
+            "deleted-principal-user@example.test",
+            Some("Password123!"),
+        )
+        .await
+        .unwrap();
+        assert!(db::get_principal_by_ref(&pool, "user", &user.id)
+            .await
+            .unwrap()
+            .is_some());
+
+        assert!(db::delete_user(&pool, &user.id, Some("test-admin"))
+            .await
+            .unwrap());
+        assert!(db::get_principal_by_ref(&pool, "user", &user.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn test_client_creation_and_validation() {
         let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {

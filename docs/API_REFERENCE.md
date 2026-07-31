@@ -278,7 +278,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 管理员通过同一更新接口设置 `password` 时，Keylo 会在密码生效前撤销该用户的全部 refresh session 和 OIDC 浏览器会话，并记录 `user.password_updated` 审计事件；旧 refresh token 与浏览器 OIDC cookie 不能继续使用。
 
-管理员删除用户时，Keylo 会在删除账户的同一事务中撤销 refresh session、删除该用户的 OIDC 浏览器会话，并写入 `user.deleted` 审计事件。
+管理员删除用户时，Keylo 会在删除账户的同一事务中撤销 refresh session、删除该用户的 OIDC 浏览器会话和关联 Principal（及其角色绑定），并写入 `user.deleted` 审计事件。
 
 ### 5.1 Provision 请求体
 
