@@ -122,11 +122,19 @@ fn token_client_credentials(
             .decode(encoded)
             .map_err(|_| AuthError::Unauthorized)?;
         let decoded = std::str::from_utf8(&decoded).map_err(|_| AuthError::Unauthorized)?;
-        let (client_id, client_secret) = decoded.split_once(':').ok_or(AuthError::Unauthorized)?;
+        let (encoded_client_id, encoded_client_secret) =
+            decoded.split_once(':').ok_or(AuthError::Unauthorized)?;
+        let decode_form_component = |value: &str| {
+            urlencoding::decode(&value.replace('+', " "))
+                .map(|value| value.into_owned())
+                .map_err(|_| AuthError::Unauthorized)
+        };
+        let client_id = decode_form_component(encoded_client_id)?;
+        let client_secret = decode_form_component(encoded_client_secret)?;
         if client_id.trim().is_empty() || client_secret.is_empty() {
             return Err(AuthError::Unauthorized.into());
         }
-        return Ok((client_id.to_string(), Some(client_secret.to_string())));
+        return Ok((client_id, Some(client_secret)));
     }
     let client_id = form_client_id.ok_or_else(|| {
         OidcProtocolError::from(AuthError::InvalidRequest(
@@ -648,5 +656,19 @@ mod tests {
         );
 
         assert!(token_client_credentials(&headers, &token_request(Some("client"), None)).is_err());
+    }
+
+    #[test]
+    fn token_client_credentials_decodes_standard_basic_form_encoding() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic Y2xpZW50JTJEaWQ6c2VjcmV0JTNBd2l0aCUyQnN5bWJvbHM="),
+        );
+
+        let credentials = token_client_credentials(&headers, &token_request(None, None)).unwrap();
+
+        assert_eq!(credentials.0, "client-id");
+        assert_eq!(credentials.1.as_deref(), Some("secret:with+symbols"));
     }
 }
