@@ -1166,6 +1166,26 @@ mod tests {
             .await;
         disable_user.assert_status_ok();
 
+        let audit_logs = db::list_audit_logs(
+            &sqlx::PgPool::connect(
+                &std::env::var("TEST_DATABASE_URL")
+                    .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string()),
+            )
+            .await
+            .unwrap(),
+            20,
+            0,
+        )
+        .await
+        .unwrap();
+        assert!(audit_logs.iter().any(|log| {
+            log.0 == "user.disabled"
+                && log.2.as_deref().is_some_and(|detail| {
+                    detail.contains("revoked_refresh_sessions=1")
+                        && detail.contains("revoked_oidc_browser_sessions=0")
+                })
+        }));
+
         let protected_response = server
             .get("/protected")
             .add_header("Authorization", format!("Bearer {}", user_access_token))

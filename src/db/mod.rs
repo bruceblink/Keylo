@@ -215,6 +215,7 @@ pub async fn seed_super_admin_user(pool: &PgPool, config: &Config) -> Result<()>
             Some(email),
             Some(password),
             Some(true),
+            None,
         )
         .await?
         .unwrap_or(existing)
@@ -226,6 +227,7 @@ pub async fn seed_super_admin_user(pool: &PgPool, config: &Config) -> Result<()>
             Some(email),
             Some(password),
             Some(true),
+            None,
         )
         .await?
         .unwrap_or(existing_email)

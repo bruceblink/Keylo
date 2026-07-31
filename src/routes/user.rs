@@ -329,59 +329,14 @@ async fn update_user_handler(
         req.email.as_deref(),
         req.password.as_deref(),
         req.active,
+        Some(&claims.sub),
     )
     .await
     {
-        Ok(Some(user)) => {
-            if req.active == Some(false) {
-                let revoked_sessions = if let Some(principal) = crate::db::ensure_user_principal(
-                    db, &user.id,
-                )
-                .await
-                .map_err(|error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "success": false,
-                            "error": format!("Failed to resolve disabled user principal: {error}"),
-                        })),
-                    )
-                })? {
-                    crate::db::revoke_principal_refresh_sessions(
-                        db,
-                        &principal.id,
-                        Some("user_disabled"),
-                    )
-                    .await
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "success": false,
-                                "error": format!("Failed to revoke disabled user sessions: {error}"),
-                            })),
-                        )
-                    })?
-                } else {
-                    0
-                };
-                create_audit_log(
-                    db,
-                    "user.disabled",
-                    Some(&claims.sub),
-                    Some(&format!(
-                        "user_id={}; revoked_sessions={}",
-                        user.id, revoked_sessions
-                    )),
-                )
-                .await
-                .ok();
-            }
-            Ok(Json(json!({
-                "success": true,
-                "data": user,
-            })))
-        }
+        Ok(Some(user)) => Ok(Json(json!({
+            "success": true,
+            "data": user,
+        }))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({

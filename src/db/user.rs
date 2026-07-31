@@ -129,6 +129,7 @@ pub async fn update_user(
     email: Option<&str>,
     password: Option<&str>,
     active: Option<bool>,
+    actor: Option<&str>,
 ) -> Result<Option<User>> {
     let password_hash = if let Some(p) = password {
         Some(hash_password(p)?)
@@ -137,6 +138,7 @@ pub async fn update_user(
     };
     let now = chrono::Local::now().naive_utc();
 
+    let mut transaction = pool.begin().await?;
     let user = sqlx::query_as::<_, User>(
         r#"
         UPDATE users
@@ -155,8 +157,41 @@ pub async fn update_user(
     .bind(password_hash)
     .bind(active)
     .bind(now)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *transaction)
     .await?;
+
+    if let Some(user) = &user {
+        if active == Some(false) {
+            // Disable every long-lived session in the same transaction as the account change.
+            let revoked_refresh_sessions = sqlx::query(
+                "UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), revoke_reason = COALESCE(revoke_reason, 'user_disabled') WHERE principal_id IN (SELECT id FROM principals WHERE principal_type = 'user' AND ref_id = $1) AND revoked_at IS NULL",
+            )
+            .bind(&user.id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+            let revoked_browser_sessions = sqlx::query(
+                "UPDATE oidc_browser_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE user_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(&user.id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+            sqlx::query(
+                "INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind("user.disabled")
+            .bind(actor)
+            .bind(format!(
+                "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
+                user.id, revoked_refresh_sessions, revoked_browser_sessions
+            ))
+            .execute(&mut *transaction)
+            .await?;
+        }
+    }
+    transaction.commit().await?;
 
     if let Some(user) = &user {
         crate::db::ensure_user_principal(pool, &user.id).await?;
