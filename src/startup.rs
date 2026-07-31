@@ -624,6 +624,7 @@ wwIDAQAB
             body["token_endpoint_auth_methods_supported"],
             serde_json::json!(["client_secret_basic", "client_secret_post"])
         );
+        assert_eq!(body["authorization_response_iss_parameter_supported"], true);
     }
 
     #[tokio::test]

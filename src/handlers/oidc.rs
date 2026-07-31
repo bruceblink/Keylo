@@ -240,6 +240,7 @@ pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value>
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
+        "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": ["S256"],
         "scopes_supported": ["openid", "profile", "email"]
     }))
@@ -296,7 +297,8 @@ fn browser_cookie(headers: &HeaderMap) -> Option<&str> {
         .find_map(|part| part.trim().strip_prefix("keylo_oidc_session="))
 }
 
-fn redirect_with_code(request: &OidcAuthorizeRequest, code: &str) -> Redirect {
+/// Redirect with an authorization code and issuer so relying parties can bind the response to Keylo.
+fn redirect_with_code(request: &OidcAuthorizeRequest, code: &str, issuer: &str) -> Redirect {
     let separator = if request.redirect_uri.contains('?') {
         '&'
     } else {
@@ -312,6 +314,8 @@ fn redirect_with_code(request: &OidcAuthorizeRequest, code: &str) -> Redirect {
         location.push_str("&state=");
         location.push_str(&urlencoding::encode(state));
     }
+    location.push_str("&iss=");
+    location.push_str(&urlencoding::encode(issuer));
     Redirect::to(&location)
 }
 
@@ -386,7 +390,11 @@ async fn authorize_for_user(
     )
     .await
     .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
-    Ok(redirect_with_code(request, &code))
+    Ok(redirect_with_code(
+        request,
+        &code,
+        &state.config.oidc_issuer(),
+    ))
 }
 
 /// Start an authorization-code flow. Existing browser sessions can immediately continue to the client redirect URI.
@@ -688,5 +696,27 @@ mod tests {
 
         assert_eq!(credentials.0, "client");
         assert_eq!(credentials.1.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn authorization_redirect_includes_the_issuer_response_parameter() {
+        let request = OidcAuthorizeRequest {
+            response_type: "code".to_string(),
+            client_id: "client".to_string(),
+            redirect_uri: "https://client.example/callback?from=keylo".to_string(),
+            scope: "openid".to_string(),
+            state: Some("request state".to_string()),
+            nonce: Some("nonce".to_string()),
+            code_challenge: "a".repeat(43),
+            code_challenge_method: "S256".to_string(),
+        };
+
+        let response =
+            redirect_with_code(&request, "code value", "https://identity.example").into_response();
+        let location = response.headers()[header::LOCATION].to_str().unwrap();
+
+        assert!(location.contains("code=code%20value"));
+        assert!(location.contains("state=request%20state"));
+        assert!(location.contains("iss=https%3A%2F%2Fidentity.example"));
     }
 }
