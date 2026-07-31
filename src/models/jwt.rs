@@ -297,7 +297,10 @@ mod tests {
 
     #[tokio::test]
     async fn claims_extractor_reuses_middleware_claims() {
-        let state = AppState::default();
+        let state = {
+            let _env_guard = crate::config::test_process_env_lock();
+            AppState::default()
+        };
         let claims = Claims {
             sub: "user:alice".to_string(),
             uid: Some("user-1".to_string()),

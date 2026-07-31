@@ -10,6 +10,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Once;
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 use urlencoding::encode;
 
 static DOTENV_INIT: Once = Once::new();
@@ -55,6 +57,18 @@ const DEFAULT_REDIS_PASSWORD_KEY_PATHS: [&str; 3] = [
     "/run/secrets/.redis_password.key",
     "/run/secrets/redis_password.key",
 ];
+
+/// Serializes test-only process environment access across modules.
+/// Environment variables are process-global, so separate test modules must not mutate them concurrently.
+#[cfg(test)]
+pub(crate) static TEST_PROCESS_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn test_process_env_lock() -> MutexGuard<'static, ()> {
+    TEST_PROCESS_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn read_env_or_file(value_key: &str, path_key: &str) -> Option<String> {
     if let Ok(value) = env::var(value_key) {
@@ -1074,15 +1088,6 @@ fn config_result(errors: Vec<String>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn env_lock() -> MutexGuard<'static, ()> {
-        ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     fn valid_config() -> Config {
         Config {
@@ -1270,7 +1275,7 @@ mod tests {
 
     #[test]
     fn production_database_startup_rejects_plaintext_password_source() {
-        let _guard = env_lock();
+        let _guard = test_process_env_lock();
         std::env::set_var("DATABASE_PASSWORD", "plain-secret");
         let mut config = valid_config();
         config.environment = "production".to_string();
@@ -1284,7 +1289,7 @@ mod tests {
 
     #[test]
     fn production_database_startup_rejects_plaintext_password_file_config() {
-        let _guard = env_lock();
+        let _guard = test_process_env_lock();
         std::env::set_var("DATABASE_PASSWORD_FILE", "./.secrets/.database_password");
         let mut config = valid_config();
         config.environment = "production".to_string();
@@ -1298,7 +1303,7 @@ mod tests {
 
     #[test]
     fn production_database_startup_rejects_password_in_database_url() {
-        let _guard = env_lock();
+        let _guard = test_process_env_lock();
         let previous_database_url = std::env::var("DATABASE_URL").ok();
         let mut config = valid_config();
         config.environment = "production".to_string();
@@ -1389,7 +1394,7 @@ mod tests {
 
     #[test]
     fn config_parses_jwt_audiences_from_csv() {
-        let _guard = env_lock();
+        let _guard = test_process_env_lock();
         std::env::set_var(
             "JWT_AUDIENCES",
             "admin-backend, inventory-svc,, payment-svc ",
@@ -1444,7 +1449,7 @@ mod tests {
 
     #[test]
     fn production_database_startup_rejects_plaintext_redis_url_source() {
-        let _guard = env_lock();
+        let _guard = test_process_env_lock();
         let previous_redis_url = std::env::var("REDIS_URL").ok();
         std::env::set_var("REDIS_URL", "redis://keylo:redis-secret@localhost:6379");
         let mut config = valid_config();
@@ -1459,7 +1464,7 @@ mod tests {
 
     #[test]
     fn config_builds_redis_url_from_encrypted_password_file() {
-        let _guard = env_lock();
+        let _guard = test_process_env_lock();
         let previous_redis_url = std::env::var("REDIS_URL").ok();
         let previous_redis_url_file = std::env::var("REDIS_URL_FILE").ok();
         let previous_redis_url_enc_file = std::env::var("REDIS_URL_ENC_FILE").ok();
@@ -1523,7 +1528,7 @@ mod tests {
 
     #[test]
     fn config_loads_redis_url_from_encrypted_file() {
-        let _guard = env_lock();
+        let _guard = test_process_env_lock();
         let previous_redis_url = std::env::var("REDIS_URL").ok();
         let previous_redis_url_file = std::env::var("REDIS_URL_FILE").ok();
         let previous_redis_url_enc_file = std::env::var("REDIS_URL_ENC_FILE").ok();

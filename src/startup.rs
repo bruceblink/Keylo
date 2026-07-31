@@ -517,6 +517,7 @@ wwIDAQAB
 
     #[test]
     fn config_loads_admin_client_credentials_from_environment() {
+        let _env_guard = crate::config::test_process_env_lock();
         std::env::set_var("ADMIN_CLIENT_ID", "env-admin-client");
         std::env::set_var("ADMIN_CLIENT_SECRET", "env-admin-secret");
 
