@@ -2,7 +2,7 @@ use crate::handlers::identity::{
     begin_oidc_upstream_login, complete_oidc_upstream_login, create_identity_source,
     discover_oidc_upstream, get_identity_source, list_identity_sources,
     list_my_oidc_upstream_identities, list_oidc_identity_source_links,
-    unlink_oidc_upstream_identity, update_identity_source,
+    unlink_oidc_identity_source_link, unlink_oidc_upstream_identity, update_identity_source,
 };
 use crate::state::AppState;
 use axum::routing::{delete, get, post, put};
@@ -28,6 +28,10 @@ pub fn identity_admin_routes() -> Router<AppState> {
         .route(
             "/v1/admin/identity-sources/{source_id}/links",
             get(list_oidc_identity_source_links),
+        )
+        .route(
+            "/v1/admin/identity-sources/{source_id}/links/{user_id}",
+            delete(unlink_oidc_identity_source_link),
         )
 }
 

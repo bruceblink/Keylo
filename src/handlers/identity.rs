@@ -416,6 +416,60 @@ pub async fn list_oidc_identity_source_links(
     Ok(Json(json!({"source_id": source.id, "links": links})))
 }
 
+/// Let an administrator remove one upstream link while preserving the last-login-method guard.
+pub async fn unlink_oidc_identity_source_link(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((source_id, user_id)): Path<(String, String)>,
+) -> Result<Json<Value>, AuthError> {
+    let db = require_db(&state)?;
+    let source = identity_db::get_identity_source(db, &source_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .filter(|source| source.source_type == "oidc_upstream")
+        .ok_or(AuthError::NotFound)?;
+    let provider = oidc_mapping_provider(&source);
+    match crate::db::unlink_external_user_mapping(db, &provider, &user_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    {
+        crate::db::ExternalUserMappingUnlinkResult::NotFound => Err(AuthError::NotFound),
+        crate::db::ExternalUserMappingUnlinkResult::LastLoginMethod => Err(AuthError::Conflict(
+            "Cannot unlink the last available login method".to_string(),
+        )),
+        crate::db::ExternalUserMappingUnlinkResult::Unlinked => {
+            if let Some(principal) = crate::db::ensure_user_principal(db, &user_id)
+                .await
+                .map_err(|_| {
+                    AuthError::DatabaseError("Failed to resolve user principal".to_string())
+                })?
+            {
+                crate::db::revoke_principal_client_refresh_sessions(
+                    db,
+                    &principal.id,
+                    &provider,
+                    Some("admin_upstream_identity_unlinked"),
+                )
+                .await
+                .map_err(|_| {
+                    AuthError::DatabaseError("Failed to revoke upstream sessions".to_string())
+                })?;
+            }
+            crate::db::create_audit_log(
+                db,
+                "identity_source.account.admin_unlinked",
+                Some(&claims.sub),
+                Some(&format!("user_id={}; source_id={}", user_id, source.id)),
+            )
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to audit identity unlink".to_string()))?;
+            Ok(Json(
+                json!({"success": true, "source_id": source.id, "user_id": user_id}),
+            ))
+        }
+    }
+}
+
 /// Fetch and validate public OIDC Discovery metadata for an active upstream source.
 pub async fn discover_oidc_upstream(
     State(state): State<AppState>,

@@ -1207,6 +1207,15 @@ mod tests {
         assert_eq!(body["source_id"], source_id);
         assert_eq!(body["links"], json!([]));
         assert!(body.get("external_subject").is_none());
+
+        let unlink_resp = server
+            .delete(&format!(
+                "/v1/admin/identity-sources/{}/links/00000000-0000-0000-0000-000000000000",
+                source_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .await;
+        assert_eq!(unlink_resp.status_code(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
