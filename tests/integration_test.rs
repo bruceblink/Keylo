@@ -223,6 +223,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_disabling_oidc_client_invalidates_pending_authorization_codes() {
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let client_id = format!(
+            "oidc-disable-code-{}",
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let create = server
+            .post("/v1/admin/oidc/clients")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "client_id": client_id,
+                "name": "OIDC code invalidation test",
+                "client_type": "public",
+                "redirect_uris": ["https://client.example.test/callback"]
+            }))
+            .await;
+        create.assert_status_ok();
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = match db::init_db_pool(&database_url).await {
+            Ok(pool) => pool,
+            Err(_) => return,
+        };
+        let username = format!("oidc-code-user-{}", uuid::Uuid::new_v4());
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some("OidcCodeInvalidation#123"),
+        )
+        .await
+        .unwrap();
+        let code = format!("oidc-pending-code-{}", uuid::Uuid::new_v4());
+        db::create_authorization_code(
+            &pool,
+            &code,
+            &keylo::models::OidcAuthorizationCode {
+                client_id: client_id.clone(),
+                user_id: user.id,
+                redirect_uri: "https://client.example.test/callback".to_string(),
+                scopes: vec!["openid".to_string()],
+                nonce: Some("test-nonce".to_string()),
+                code_challenge: "a".repeat(43),
+                expires_at: chrono::Utc::now().timestamp() + 300,
+            },
+        )
+        .await
+        .unwrap();
+
+        let disable = server
+            .put(&format!("/v1/admin/oidc/clients/{client_id}"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"active": false}))
+            .await;
+        disable.assert_status_ok();
+        assert!(
+            db::get_active_authorization_code(&pool, &code)
+                .await
+                .unwrap()
+                .is_none(),
+            "disabling a client must invalidate its unredeemed authorization codes"
+        );
+        let audit_logs = db::get_recent_audit_logs(&pool, 20).await.unwrap();
+        assert!(audit_logs.iter().any(|(event_type, _, detail, _)| {
+            event_type == "oidc_client.disabled"
+                && detail.as_deref().is_some_and(|value| {
+                    value.contains(&client_id)
+                        && value.contains("invalidated_authorization_codes=1")
+                })
+        }));
+    }
+
+    #[tokio::test]
     async fn test_keylo_configuration_endpoint() {
         let config = Config {
             server_addr: "127.0.0.1".to_string(),

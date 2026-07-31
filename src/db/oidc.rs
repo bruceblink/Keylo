@@ -79,14 +79,63 @@ pub async fn get_active_authorization_code(
     ))
 }
 
+/// Update a relying-party registration and remove pending codes when its grant boundary changes.
+///
+/// Audit and code invalidation share the transaction with the metadata update so an old code
+/// cannot survive a disabled client or a changed redirect/scope/grant policy.
 pub async fn update_oidc_client(
     pool: &PgPool,
     client_id: &str,
     request: &UpdateOidcClientRequest,
+    actor: Option<&str>,
 ) -> Result<Option<OidcClient>> {
     let now = chrono::Local::now().naive_utc();
-    Ok(sqlx::query_as::<_, OidcClient>("UPDATE oidc_clients SET name = COALESCE($2, name), description = COALESCE($3, description), redirect_uris = COALESCE($4, redirect_uris), grant_types = COALESCE($5, grant_types), scopes = COALESCE($6, scopes), active = COALESCE($7, active), updated_at = $8 WHERE client_id = $1 RETURNING id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, created_at, updated_at")
-        .bind(client_id).bind(&request.name).bind(&request.description).bind(&request.redirect_uris).bind(&request.grant_types).bind(&request.scopes).bind(request.active).bind(now).fetch_optional(pool).await?)
+    let mut transaction = pool.begin().await?;
+    let previous = sqlx::query_as::<_, OidcClient>(
+        "SELECT id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, created_at, updated_at FROM oidc_clients WHERE client_id = $1 FOR UPDATE",
+    )
+    .bind(client_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(previous) = previous else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let client = sqlx::query_as::<_, OidcClient>("UPDATE oidc_clients SET name = COALESCE($2, name), description = COALESCE($3, description), redirect_uris = COALESCE($4, redirect_uris), grant_types = COALESCE($5, grant_types), scopes = COALESCE($6, scopes), active = COALESCE($7, active), updated_at = $8 WHERE client_id = $1 RETURNING id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, created_at, updated_at")
+        .bind(client_id).bind(&request.name).bind(&request.description).bind(&request.redirect_uris).bind(&request.grant_types).bind(&request.scopes).bind(request.active).bind(now).fetch_one(&mut *transaction).await?;
+    let trust_boundary_changed = previous.active
+        && (!client.active
+            || previous.redirect_uris != client.redirect_uris
+            || previous.grant_types != client.grant_types
+            || previous.scopes != client.scopes);
+    if trust_boundary_changed {
+        let invalidated_authorization_codes = sqlx::query(
+            "DELETE FROM oidc_authorization_codes WHERE client_id = $1 AND consumed_at IS NULL",
+        )
+        .bind(client_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        let event_type = if client.active {
+            "oidc_client.reconfigured"
+        } else {
+            "oidc_client.disabled"
+        };
+        sqlx::query(
+            "INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(event_type)
+        .bind(actor)
+        .bind(format!(
+            "client_id={}; invalidated_authorization_codes={}",
+            client_id, invalidated_authorization_codes
+        ))
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(Some(client))
 }
 
 /// Rotate only confidential-client credentials; public clients never own a reusable secret.

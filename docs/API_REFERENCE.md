@@ -91,6 +91,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 `POST /v1/admin/oidc/clients/{client_id}/rotate-secret` 请求体为 `{ "new_secret": "至少 16 个字符" }`。仅 active confidential client 可轮换，服务端仅保存新 secret 的 bcrypt hash，响应不会回显 secret。
 
+`PUT /v1/admin/oidc/clients/{client_id}` 将 active 客户端设为 `false`，或修改其 redirect URI、grant type、scope 时，Keylo 会在同一事务中删除该客户端所有未兑换授权码，并记录 `oidc_client.disabled` 或 `oidc_client.reconfigured` 审计事件。重新启用客户端不会恢复旧 code。
+
 示例响应：
 
 ```json

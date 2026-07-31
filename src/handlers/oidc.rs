@@ -14,10 +14,11 @@ use crate::{
     errors::{is_unique_violation, AuthError},
     models::{
         validate_authorization_request, validate_grant_types, validate_oidc_client_registration,
-        validate_oidc_scopes, validate_redirect_uris, verify_pkce_s256, CreateOidcClientRequest,
-        OidcAccessTokenClaims, OidcAuthorizationCode, OidcAuthorizeRequest, OidcBrowserSession,
-        OidcConsentRequest, OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest,
-        OidcTokenResponse, RotateClientSecretRequest, UpdateOidcClientRequest,
+        validate_oidc_scopes, validate_redirect_uris, verify_pkce_s256, Claims,
+        CreateOidcClientRequest, OidcAccessTokenClaims, OidcAuthorizationCode,
+        OidcAuthorizeRequest, OidcBrowserSession, OidcConsentRequest, OidcIdTokenClaims,
+        OidcLoginRequest, OidcTokenRequest, OidcTokenResponse, RotateClientSecretRequest,
+        UpdateOidcClientRequest,
     },
     state::AppState,
 };
@@ -181,6 +182,7 @@ pub async fn list_clients(
 
 /// Update metadata only; client type and secrets remain immutable until explicit rotation is added.
 pub async fn update_client(
+    claims: Claims,
     State(state): State<AppState>,
     Path(client_id): Path<String>,
     Json(request): Json<UpdateOidcClientRequest>,
@@ -194,9 +196,10 @@ pub async fn update_client(
     if let Some(scopes) = &request.scopes {
         validate_oidc_scopes(scopes).map_err(AuthError::InvalidRequest)?;
     }
-    let client = crate::db::update_oidc_client(database(&state)?, &client_id, &request)
-        .await
-        .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    let client =
+        crate::db::update_oidc_client(database(&state)?, &client_id, &request, Some(&claims.sub))
+            .await
+            .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
     client
         .map(|value| Json(json!({"success": true, "data": value})))
         .ok_or(AuthError::NotFound)
