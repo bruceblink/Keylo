@@ -501,6 +501,37 @@ pub async fn complete_oidc_upstream_login(
         chrono::Utc::now().timestamp(),
     )
     .map_err(AuthError::InvalidRequest)?;
+    let claims = if let Some(userinfo_endpoint) = discovery.userinfo_endpoint.as_deref() {
+        let access_token = token
+            .get("access_token")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AuthError::InvalidRequest(
+                    "OIDC token response is missing access_token for UserInfo".to_string(),
+                )
+            })?;
+        let userinfo = client
+            .get(userinfo_endpoint)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|_| AuthError::InvalidRequest("Unable to fetch OIDC UserInfo".to_string()))?
+            .error_for_status()
+            .map_err(|_| {
+                AuthError::InvalidRequest(
+                    "OIDC UserInfo endpoint rejected access token".to_string(),
+                )
+            })?
+            .json::<Value>()
+            .await
+            .map_err(|_| {
+                AuthError::InvalidRequest("OIDC UserInfo response is invalid".to_string())
+            })?;
+        crate::models::merge_oidc_upstream_userinfo(claims, &userinfo)
+            .map_err(AuthError::InvalidRequest)?
+    } else {
+        claims
+    };
     let profile = crate::models::oidc_upstream_profile_with_mapping(&claims, &source.claim_mapping)
         .map_err(AuthError::InvalidRequest)?;
     let user = resolve_oidc_upstream_user(db, &source, &profile).await?;

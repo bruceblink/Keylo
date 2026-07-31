@@ -600,7 +600,7 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - `display_name`：面向管理界面或集成文档展示的名称。
 - `config`：身份源配置对象。Keylo 当前只校验它是 JSON object，具体 schema 由后续接入实现定义；响应会将 key 名含 `secret`、`password` 或等于 `token` 的配置值脱敏，提交后的敏感值不能通过读取接口回显。
 
-`oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调；scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience 和 expiry。
+`oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调；scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience 和 expiry。若 Discovery 提供 `userinfo_endpoint`，Keylo 会用 token response 的 access token 获取资料，并要求 UserInfo 的 `sub` 与已验证 ID Token 完全一致；UserInfo 只补齐 ID Token 缺失的 profile fields，不能覆盖已验证声明。
 
 成功回调返回标准 Keylo `AuthBody`，包含 Bearer access token、可轮换 refresh token 和 `expires_in`。令牌代表已关联的本地用户，沿用本地用户的角色、权限和会话策略；令牌及上游 ID Token 不会出现在审计详情中。
 

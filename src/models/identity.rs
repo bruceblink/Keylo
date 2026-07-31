@@ -136,6 +136,53 @@ pub struct OidcUpstreamProfile {
     pub email_verified: bool,
 }
 
+/// Merge UserInfo fields only after its subject has been bound to a verified ID Token subject.
+pub fn merge_oidc_upstream_userinfo(
+    mut id_token_claims: OidcUpstreamIdTokenClaims,
+    userinfo: &Value,
+) -> Result<OidcUpstreamIdTokenClaims, String> {
+    let claims = userinfo
+        .as_object()
+        .ok_or_else(|| "OIDC UserInfo response must be a JSON object".to_string())?;
+    let subject = claims
+        .get("sub")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "OIDC UserInfo response is missing subject".to_string())?;
+    if subject != id_token_claims.sub {
+        return Err("OIDC UserInfo subject does not match the ID Token".to_string());
+    }
+
+    if id_token_claims.email.is_none() {
+        id_token_claims.email = claims
+            .get("email")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    if id_token_claims.preferred_username.is_none() {
+        id_token_claims.preferred_username = claims
+            .get("preferred_username")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    if id_token_claims.email_verified.is_none() {
+        id_token_claims.email_verified = claims.get("email_verified").and_then(Value::as_bool);
+    }
+    for (name, value) in claims {
+        if !matches!(
+            name.as_str(),
+            "sub" | "email" | "preferred_username" | "email_verified"
+        ) {
+            id_token_claims
+                .additional_claims
+                .entry(name.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+    Ok(id_token_claims)
+}
+
 /// Map verified standard OIDC claims into safe local user fields for linking or JIT creation.
 pub fn oidc_upstream_profile(
     claims: &OidcUpstreamIdTokenClaims,
@@ -632,5 +679,53 @@ mod tests {
             super::parse_oidc_upstream_claim_mapping(&json!({"role": "groups"})).unwrap_err();
 
         assert!(error.contains("does not support"));
+    }
+
+    #[test]
+    fn userinfo_fills_missing_profile_claims_after_subject_binding() {
+        let claims = super::OidcUpstreamIdTokenClaims {
+            iss: "https://idp.example".to_string(),
+            sub: "external-1".to_string(),
+            aud: json!("keylo"),
+            exp: 2_000,
+            nonce: None,
+            email: None,
+            email_verified: None,
+            preferred_username: None,
+            additional_claims: serde_json::Map::new(),
+        };
+        let userinfo = json!({
+            "sub": "external-1",
+            "email": "alice@example.com",
+            "email_verified": true,
+            "preferred_username": "alice",
+            "employee_id": "E-17"
+        });
+
+        let merged = super::merge_oidc_upstream_userinfo(claims, &userinfo).unwrap();
+
+        assert_eq!(merged.email.as_deref(), Some("alice@example.com"));
+        assert_eq!(merged.additional_claims["employee_id"], "E-17");
+        assert_eq!(merged.email_verified, Some(true));
+    }
+
+    #[test]
+    fn userinfo_rejects_a_different_subject() {
+        let claims = super::OidcUpstreamIdTokenClaims {
+            iss: "https://idp.example".to_string(),
+            sub: "external-1".to_string(),
+            aud: json!("keylo"),
+            exp: 2_000,
+            nonce: None,
+            email: None,
+            email_verified: None,
+            preferred_username: None,
+            additional_claims: serde_json::Map::new(),
+        };
+
+        let error =
+            super::merge_oidc_upstream_userinfo(claims, &json!({"sub": "external-2"})).unwrap_err();
+
+        assert!(error.contains("does not match"));
     }
 }
