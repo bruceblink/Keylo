@@ -370,6 +370,58 @@ pub async fn update_permission(
     Ok(permission)
 }
 
+/// Stores immutable before/after permission snapshots for administrator investigations and rollback planning.
+pub async fn create_permission_change_history(
+    pool: &PgPool,
+    actor: Option<&str>,
+    change_reason: Option<&str>,
+    before: &Permission,
+    after: &Permission,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO permission_change_history
+            (id, permission_id, version, actor, change_reason, before_state, after_state)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(&after.id)
+    .bind(after.version)
+    .bind(actor)
+    .bind(change_reason)
+    .bind(serde_json::to_value(before)?)
+    .bind(serde_json::to_value(after)?)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Lists permission snapshots from newest to oldest with bounded pagination.
+pub async fn list_permission_change_history(
+    pool: &PgPool,
+    permission_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<PermissionChangeHistory>> {
+    Ok(sqlx::query_as::<_, PermissionChangeHistory>(
+        r#"
+        SELECT id, permission_id, version, actor, change_reason, before_state, after_state,
+               created_at
+        FROM permission_change_history
+        WHERE permission_id = $1
+        ORDER BY version DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(permission_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// 删除权限
 pub async fn delete_permission(pool: &PgPool, permission_id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM permissions WHERE id = $1")

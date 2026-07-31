@@ -38,6 +38,10 @@ pub fn rbac_routes() -> Router<AppState> {
             "/permissions/{permission_id}",
             delete(delete_permission_handler),
         )
+        .route(
+            "/permissions/{permission_id}/changes",
+            get(list_permission_changes_handler),
+        )
         // 用户角色管理路由
         .route("/users/{user_id}/roles", get(get_user_roles_handler))
         .route("/users/{user_id}/roles", post(assign_role_to_user_handler))
@@ -529,8 +533,26 @@ async fn update_permission_handler(
     Path(permission_id): Path<String>,
     Json(req): Json<UpdatePermissionRequest>,
 ) -> ApiResponse {
+    let db = require_db(&state)?;
+    let before = get_permission_by_id(db, &permission_id)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "permission_lookup_failed",
+                &format!("Failed to look up permission: {}", e),
+            )
+        })?
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::NOT_FOUND,
+                "permission_not_found",
+                "Permission not found",
+            )
+        })?;
+
     match update_permission(
-        require_db(&state)?,
+        db,
         &permission_id,
         req.name.as_deref(),
         req.description.as_deref(),
@@ -539,13 +561,38 @@ async fn update_permission_handler(
     .await
     {
         Ok(Some(permission)) => {
+            let change_reason = req
+                .change_reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty());
+            create_permission_change_history(
+                db,
+                Some(&claims.sub),
+                change_reason,
+                &before,
+                &permission,
+            )
+            .await
+            .map_err(|e| {
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "permission_history_failed",
+                    &format!("Failed to record permission change: {}", e),
+                )
+            })?;
             audit_event(
                 &state,
                 "rbac.permission.updated",
                 Some(&claims.sub),
                 format!(
-                    "permission_id={}, permission_name={}",
-                    permission.id, permission.name
+                    "permission_id={}, permission_name={}, version={}{}",
+                    permission.id,
+                    permission.name,
+                    permission.version,
+                    change_reason
+                        .map(|reason| format!(", reason={reason}"))
+                        .unwrap_or_default(),
                 ),
             )
             .await;
@@ -555,18 +602,7 @@ async fn update_permission_handler(
             })))
         }
         Ok(None) => {
-            if req.expected_version.is_some()
-                && get_permission_by_id(require_db(&state)?, &permission_id)
-                    .await
-                    .map_err(|e| {
-                        error_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "permission_lookup_failed",
-                            &format!("Failed to look up permission: {}", e),
-                        )
-                    })?
-                    .is_some()
-            {
+            if req.expected_version.is_some() {
                 Err(error_response(
                     StatusCode::CONFLICT,
                     "permission_version_conflict",
@@ -602,6 +638,38 @@ async fn update_permission_handler(
             }
         }
     }
+}
+
+async fn list_permission_changes_handler(
+    State(state): State<AppState>,
+    Path(permission_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let changes = list_permission_change_history(db, &permission_id, limit, offset)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "permission_history_failed",
+                &format!("Failed to list permission changes: {}", e),
+            )
+        })?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": changes
+    })))
 }
 
 /// 删除权限

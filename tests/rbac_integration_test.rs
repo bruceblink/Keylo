@@ -219,11 +219,30 @@ mod tests {
             .json(&json!({
                 "description": "Updated permission description",
                 "expected_version": version,
+                "change_reason": "clarify delegated access",
             }))
             .await;
         update_response.assert_status_ok();
         let updated: serde_json::Value = update_response.json();
         assert_eq!(updated["data"]["version"], version + 1);
+
+        let changes_response = server
+            .get(&format!("/api/rbac/permissions/{}/changes", permission_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        changes_response.assert_status_ok();
+        let changes: serde_json::Value = changes_response.json();
+        let change = changes["data"].as_array().unwrap().first().unwrap();
+        assert_eq!(change["version"], version + 1);
+        assert_eq!(change["change_reason"], "clarify delegated access");
+        assert_eq!(
+            change["before_state"]["description"],
+            "Manage users permission"
+        );
+        assert_eq!(
+            change["after_state"]["description"],
+            "Updated permission description"
+        );
 
         let stale_update_response = server
             .put(&format!("/api/rbac/permissions/{}", permission_id))

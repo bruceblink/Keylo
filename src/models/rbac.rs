@@ -70,6 +70,19 @@ pub struct UpdatePermissionRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub expected_version: Option<i64>,
+    pub change_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct PermissionChangeHistory {
+    pub id: String,
+    pub permission_id: String,
+    pub version: i64,
+    pub actor: Option<String>,
+    pub change_reason: Option<String>,
+    pub before_state: serde_json::Value,
+    pub after_state: serde_json::Value,
+    pub created_at: chrono::NaiveDateTime,
 }
 
 /// 用户角色关系
