@@ -817,6 +817,8 @@ mod tests {
             }))
             .await;
         register_resp.assert_status_ok();
+        let registered_user: serde_json::Value = register_resp.json();
+        let user_id = registered_user["data"]["id"].as_str().unwrap();
 
         let user_login_resp = server
             .post("/v1/auth/token")
@@ -828,6 +830,7 @@ mod tests {
         user_login_resp.assert_status_ok();
         let user_login_body: serde_json::Value = user_login_resp.json();
         let user_access_token = user_login_body["access_token"].as_str().unwrap();
+        let user_refresh_token = user_login_body["refresh_token"].as_str().unwrap();
 
         let introspect_resp = server
             .post("/v1/auth/introspect")
@@ -844,6 +847,34 @@ mod tests {
         assert_eq!(introspect_body["aud"], "admin-backend");
         assert_eq!(introspect_body["role"], json!(["user"]));
         assert_eq!(introspect_body["token_type"], "access");
+
+        let disable_user = server
+            .put(&format!("/v1/admin/users/{}", user_id))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({ "active": false }))
+            .await;
+        disable_user.assert_status_ok();
+
+        let protected_response = server
+            .get("/protected")
+            .add_header("Authorization", format!("Bearer {}", user_access_token))
+            .await;
+        assert_eq!(protected_response.status_code(), StatusCode::UNAUTHORIZED);
+
+        let disabled_introspection = server
+            .post("/v1/auth/introspect")
+            .add_header("Authorization", format!("Bearer {}", service_access_token))
+            .json(&json!({ "token": user_access_token }))
+            .await;
+        disabled_introspection.assert_status_ok();
+        let disabled_body: serde_json::Value = disabled_introspection.json();
+        assert_eq!(disabled_body, json!({ "active": false }));
+
+        let refresh_response = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": user_refresh_token }))
+            .await;
+        assert_eq!(refresh_response.status_code(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

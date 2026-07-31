@@ -1074,6 +1074,26 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
     }))
 }
 
+/// Resolve the current database state for a token so introspection does not advertise disabled identities as active.
+async fn introspected_claims_are_active(db: &sqlx::PgPool, claims: &Claims) -> bool {
+    if let Some(principal_id) = claims.principal_id.as_deref() {
+        return matches!(
+            crate::db::get_principal_by_id(db, principal_id).await,
+            Ok(Some(principal)) if principal.active
+        );
+    }
+    if claims.principal_type.as_deref() == Some("user") {
+        if let Some(user_id) = claims.uid.as_deref() {
+            return matches!(
+                crate::db::get_user_by_id(db, user_id).await,
+                Ok(Some(user)) if user.active
+            );
+        }
+    }
+    // Keep pre-Principal client tokens compatible; newer tokens always carry principal_id.
+    true
+}
+
 pub async fn auth_introspect(
     State(state): State<AppState>,
     PeerAddr(peer_addr): PeerAddr,
@@ -1098,7 +1118,8 @@ pub async fn auth_introspect(
             if let Some(db) = &state.db {
                 if crate::db::is_token_blacklisted(db, &payload.token)
                     .await
-                    .unwrap_or(false)
+                    .unwrap_or(true)
+                    || !introspected_claims_are_active(db, &claims).await
                 {
                     return Json(TokenIntrospectResponse::inactive());
                 }
