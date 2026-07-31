@@ -393,6 +393,7 @@ mod tests {
         role_resp.assert_status_ok();
         let role_body: serde_json::Value = role_resp.json();
         let role_id = role_body["data"]["id"].as_str().unwrap().to_string();
+        let initial_version = role_body["data"]["version"].as_i64().unwrap();
 
         let provision_resp = server
             .post("/v1/admin/users/provision")
@@ -410,7 +411,8 @@ mod tests {
             .put(&format!("/api/rbac/roles/{}", role_id))
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-                "assignable_to": "service"
+                "assignable_to": "service",
+                "expected_version": initial_version
             }))
             .await;
         assert_eq!(update_resp.status_code(), axum::http::StatusCode::CONFLICT);
@@ -424,6 +426,21 @@ mod tests {
         get_role_resp.assert_status_ok();
         let get_role_body: serde_json::Value = get_role_resp.json();
         assert_eq!(get_role_body["data"]["role"]["assignable_to"], "all");
+
+        let version_conflict_resp = server
+            .put(&format!("/api/rbac/roles/{}", role_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "description": "stale update",
+                "expected_version": initial_version - 1
+            }))
+            .await;
+        assert_eq!(
+            version_conflict_resp.status_code(),
+            axum::http::StatusCode::CONFLICT
+        );
+        let version_conflict_body: serde_json::Value = version_conflict_resp.json();
+        assert_eq!(version_conflict_body["error"], "role_version_conflict");
     }
 
     #[tokio::test]

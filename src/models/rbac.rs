@@ -9,6 +9,7 @@ pub struct Role {
     pub description: Option<String>,
     pub assignable_to: String,
     pub system: bool,
+    pub version: i64,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
@@ -29,6 +30,7 @@ pub struct UpdateRoleRequest {
     pub description: Option<String>,
     pub assignable_to: Option<String>,
     pub system: Option<bool>,
+    pub expected_version: Option<i64>,
 }
 
 /// 权限模型

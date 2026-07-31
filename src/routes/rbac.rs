@@ -269,6 +269,7 @@ async fn update_role_handler(
         req.description.as_deref(),
         req.assignable_to.as_deref(),
         req.system,
+        req.expected_version,
     )
     .await
     {
@@ -285,13 +286,34 @@ async fn update_role_handler(
                 "data": role
             })))
         }
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "success": false,
-                "error": "Role not found"
-            })),
-        )),
+        Ok(None) => {
+            if req.expected_version.is_some()
+                && get_role_by_id(require_db(&state)?, &role_id)
+                    .await
+                    .map_err(|e| {
+                        error_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "role_lookup_failed",
+                            &format!("Failed to look up role: {}", e),
+                        )
+                    })?
+                    .is_some()
+            {
+                Err(error_response(
+                    StatusCode::CONFLICT,
+                    "role_version_conflict",
+                    "Role changed since the supplied expected_version",
+                ))
+            } else {
+                Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "success": false,
+                        "error": "Role not found"
+                    })),
+                ))
+            }
+        }
         Err(e) => {
             if is_unique_violation(e.as_ref()) {
                 Err((

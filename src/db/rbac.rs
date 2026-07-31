@@ -102,7 +102,7 @@ pub async fn create_role_with_options(
         r#"
         INSERT INTO roles (id, name, description, assignable_to, system, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, name, description, assignable_to, system, created_at, updated_at
+        RETURNING id, name, description, assignable_to, system, version, created_at, updated_at
         "#,
     )
     .bind(&id)
@@ -121,7 +121,7 @@ pub async fn create_role_with_options(
 /// 获取所有角色
 pub async fn get_all_roles(pool: &PgPool) -> Result<Vec<Role>> {
     let roles = sqlx::query_as::<_, Role>(
-        "SELECT id, name, description, assignable_to, system, created_at, updated_at FROM roles ORDER BY name",
+        "SELECT id, name, description, assignable_to, system, version, created_at, updated_at FROM roles ORDER BY name",
     )
     .fetch_all(pool)
     .await?;
@@ -132,7 +132,7 @@ pub async fn get_all_roles(pool: &PgPool) -> Result<Vec<Role>> {
 /// 根据ID获取角色
 pub async fn get_role_by_id(pool: &PgPool, role_id: &str) -> Result<Option<Role>> {
     let role = sqlx::query_as::<_, Role>(
-        "SELECT id, name, description, assignable_to, system, created_at, updated_at FROM roles WHERE id = $1",
+        "SELECT id, name, description, assignable_to, system, version, created_at, updated_at FROM roles WHERE id = $1",
     )
     .bind(role_id)
     .fetch_optional(pool)
@@ -144,7 +144,7 @@ pub async fn get_role_by_id(pool: &PgPool, role_id: &str) -> Result<Option<Role>
 /// 根据名称获取角色
 pub async fn get_role_by_name(pool: &PgPool, name: &str) -> Result<Option<Role>> {
     let role = sqlx::query_as::<_, Role>(
-        "SELECT id, name, description, assignable_to, system, created_at, updated_at FROM roles WHERE name = $1",
+        "SELECT id, name, description, assignable_to, system, version, created_at, updated_at FROM roles WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(pool)
@@ -161,6 +161,7 @@ pub async fn update_role(
     description: Option<&str>,
     assignable_to: Option<&str>,
     system: Option<bool>,
+    expected_version: Option<i64>,
 ) -> Result<Option<Role>> {
     if let Some(assignable_to) = assignable_to {
         if !valid_role_assignable_to(assignable_to) {
@@ -178,9 +179,10 @@ pub async fn update_role(
             description = COALESCE($3, description),
             assignable_to = COALESCE($4, assignable_to),
             system = COALESCE($5, system),
+            version = version + 1,
             updated_at = $6
-        WHERE id = $1
-        RETURNING id, name, description, assignable_to, system, created_at, updated_at
+        WHERE id = $1 AND ($7::BIGINT IS NULL OR version = $7)
+        RETURNING id, name, description, assignable_to, system, version, created_at, updated_at
         "#,
     )
     .bind(role_id)
@@ -189,6 +191,7 @@ pub async fn update_role(
     .bind(assignable_to)
     .bind(system)
     .bind(now)
+    .bind(expected_version)
     .fetch_optional(pool)
     .await?;
 
