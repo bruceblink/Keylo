@@ -276,6 +276,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 管理员通过更新接口将用户设为 `active: false` 时，Keylo 会在同一事务中撤销该用户全部 refresh session 和 OIDC 浏览器会话，并记录包含撤销数量的 `user.disabled` 审计事件。带 Principal 的既有 access token 会在下一次受保护请求时被拒绝，不会继续等待其自然过期；已存在的 OIDC 浏览器 cookie 也不能再进入授权或同意流程。
 
+管理员通过同一更新接口设置 `password` 时，Keylo 会在密码生效前撤销该用户的全部 refresh session 和 OIDC 浏览器会话，并记录 `user.password_updated` 审计事件；旧 refresh token 与浏览器 OIDC cookie 不能继续使用。
+
 ### 5.1 Provision 请求体
 
 ```json

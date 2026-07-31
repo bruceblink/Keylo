@@ -161,12 +161,18 @@ pub async fn update_user(
     .await?;
 
     if let Some(user) = &user {
-        if active == Some(false) {
-            // Disable every long-lived session in the same transaction as the account change.
+        if active == Some(false) || password.is_some() {
+            let (event_type, revoke_reason) = if active == Some(false) {
+                ("user.disabled", "user_disabled")
+            } else {
+                ("user.password_updated", "password_updated")
+            };
+            // Credential and status changes must invalidate every long-lived session atomically.
             let revoked_refresh_sessions = sqlx::query(
-                "UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), revoke_reason = COALESCE(revoke_reason, 'user_disabled') WHERE principal_id IN (SELECT id FROM principals WHERE principal_type = 'user' AND ref_id = $1) AND revoked_at IS NULL",
+                "UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), revoke_reason = COALESCE(revoke_reason, $2) WHERE principal_id IN (SELECT id FROM principals WHERE principal_type = 'user' AND ref_id = $1) AND revoked_at IS NULL",
             )
             .bind(&user.id)
+            .bind(revoke_reason)
             .execute(&mut *transaction)
             .await?
             .rows_affected();
@@ -181,7 +187,7 @@ pub async fn update_user(
                 "INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)",
             )
             .bind(Uuid::new_v4().to_string())
-            .bind("user.disabled")
+            .bind(event_type)
             .bind(actor)
             .bind(format!(
                 "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
