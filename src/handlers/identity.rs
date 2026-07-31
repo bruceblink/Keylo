@@ -164,6 +164,56 @@ async fn create_oidc_user_mapping(
     }
 }
 
+/// Keep the local email immutable while retaining the latest upstream email for review and audit.
+async fn record_oidc_email_change(
+    db: &sqlx::PgPool,
+    source: &IdentitySource,
+    profile: &OidcUpstreamProfile,
+    mapping: &crate::db::ExternalUserMapping,
+) -> Result<(), AuthError> {
+    let observed_email = mapping
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("email"))
+        .and_then(Value::as_str);
+    if observed_email == Some(profile.email.as_str()) {
+        return Ok(());
+    }
+    let mut metadata = mapping.metadata.clone().unwrap_or_else(|| json!({}));
+    let object = metadata.as_object_mut().ok_or_else(|| {
+        AuthError::DatabaseError("OIDC identity mapping metadata is invalid".to_string())
+    })?;
+    object.insert("source_name".to_string(), json!(source.name));
+    object.insert("email".to_string(), json!(profile.email));
+    object.insert("email_verified".to_string(), json!(profile.email_verified));
+    let provider = oidc_mapping_provider(source);
+    if crate::db::update_external_user_mapping_email(
+        db,
+        &provider,
+        &profile.external_subject,
+        &mapping.user_id,
+        &metadata,
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Failed to record external email change".to_string()))?
+    {
+        crate::db::create_audit_log(
+            db,
+            "identity_source.email_change_observed",
+            Some(&mapping.user_id),
+            Some(&format!(
+                "user_id={}; source_id={}",
+                mapping.user_id, source.id
+            )),
+        )
+        .await
+        .map_err(|_| {
+            AuthError::DatabaseError("Failed to audit external email change".to_string())
+        })?;
+    }
+    Ok(())
+}
+
 /// Resolve a verified OIDC identity to an active Keylo user, creating a mapping only under source policy.
 async fn resolve_oidc_upstream_user(
     db: &sqlx::PgPool,
@@ -171,15 +221,20 @@ async fn resolve_oidc_upstream_user(
     profile: &OidcUpstreamProfile,
 ) -> Result<crate::models::User, AuthError> {
     let provider = oidc_mapping_provider(source);
-    if let Some(user_id) = crate::db::get_mapped_user_id(db, &provider, &profile.external_subject)
-        .await
-        .map_err(|_| AuthError::DatabaseError("Failed to resolve OIDC user mapping".to_string()))?
+    if let Some(mapping) =
+        crate::db::get_external_user_mapping(db, &provider, &profile.external_subject)
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to resolve OIDC user mapping".to_string())
+            })?
     {
-        return crate::db::get_user_by_id(db, &user_id)
+        let user = crate::db::get_user_by_id(db, &mapping.user_id)
             .await
             .map_err(|_| AuthError::DatabaseError("Failed to load mapped user".to_string()))?
             .filter(|user| user.active)
-            .ok_or(AuthError::Forbidden);
+            .ok_or(AuthError::Forbidden)?;
+        record_oidc_email_change(db, source, profile, &mapping).await?;
+        return Ok(user);
     }
 
     if let Some(user) = crate::db::get_user_by_email(db, &profile.email)

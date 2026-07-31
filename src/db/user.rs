@@ -16,6 +16,12 @@ pub enum ExternalUserMappingUnlinkResult {
     LastLoginMethod,
 }
 
+#[derive(Debug, Clone)]
+pub struct ExternalUserMapping {
+    pub user_id: String,
+    pub metadata: Option<Value>,
+}
+
 fn hash_password(password: &str) -> Result<String> {
     Ok(hash(password, PASSWORD_COST)?)
 }
@@ -262,6 +268,47 @@ pub async fn get_mapped_user_id(
     .await?;
 
     Ok(row.map(|value| value.get("user_id")))
+}
+
+/// Load one external binding with its non-secret metadata for policy decisions.
+pub async fn get_external_user_mapping(
+    pool: &PgPool,
+    provider: &str,
+    external_user_id: &str,
+) -> Result<Option<ExternalUserMapping>> {
+    let row = sqlx::query(
+        "SELECT user_id, metadata FROM external_user_mappings WHERE provider = $1 AND external_user_id = $2",
+    )
+    .bind(provider)
+    .bind(external_user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| ExternalUserMapping {
+        user_id: row.get("user_id"),
+        metadata: row.get("metadata"),
+    }))
+}
+
+/// Store the last observed external email without changing the immutable subject-to-user binding.
+pub async fn update_external_user_mapping_email(
+    pool: &PgPool,
+    provider: &str,
+    external_user_id: &str,
+    user_id: &str,
+    metadata: &Value,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE external_user_mappings SET metadata = $5, updated_at = $6 WHERE provider = $1 AND external_user_id = $2 AND user_id = $3 AND metadata IS DISTINCT FROM $4",
+    )
+    .bind(provider)
+    .bind(external_user_id)
+    .bind(user_id)
+    .bind(metadata)
+    .bind(metadata)
+    .bind(chrono::Local::now().naive_utc())
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 /// 创建或更新外部系统用户映射

@@ -606,6 +606,8 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 
 上游 `(source, sub)` 到 Keylo 用户的绑定是不可改绑的：并发登录若发现该上游主体已经关联到其他用户，回调会返回冲突，绝不会覆盖既有映射。JIT 创建若在绑定阶段发生该冲突，会清理刚创建的无密码用户。
 
+已关联用户的上游邮箱变化以稳定 `sub` 为准继续登录，但不会自动改写 Keylo 的本地邮箱。Keylo 仅保存最新已观测的上游邮箱与验证状态供后续人工处理，并记录不含邮箱明文的审计事件；管理员可按本地用户更新流程完成邮箱变更。
+
 已登录用户可调用 `GET /v1/user/identity-sources/links` 查看自己的已关联 OIDC upstream 身份源（仅返回来源标识、展示名和关联时间），再通过 `DELETE /v1/user/identity-sources/{source_id}/link` 解除关联。解除操作会撤销仅由该身份源签发的 refresh session 并写入审计日志；若该关联是用户唯一的登录方式，接口返回冲突而不执行解除，避免用户把自己锁在账户之外。
 - `claim_mapping`：外部身份字段到 Keylo 标准字段的映射对象。`oidc_upstream` 仅支持 `external_subject`、`email`、`username`、`email_verified` 四个本地字段，值为已签名 ID Token 中的 claim 名；缺省时分别使用 `sub`、`email`、`preferred_username`、`email_verified`。映射到已有账号的邮箱仍需映射后的 `email_verified` 为 `true`，不会因自定义映射降低自动关联的安全要求。
 - `jit_enabled`：是否允许在没有映射和同邮箱账号时创建无密码的 Keylo 用户，默认 `false`。
