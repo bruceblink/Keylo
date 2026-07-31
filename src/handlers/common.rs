@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use redis::AsyncCommands;
 use serde_json::{json, Value};
+use std::time::Instant;
 
 async fn setup_status_value(state: &AppState) -> Value {
     if !state.config.enable_setup_wizard {
@@ -96,10 +97,18 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
     });
 
     if let Some(db) = &state.db {
-        match sqlx::query_scalar::<_, i32>("SELECT 1")
+        let probe_started = Instant::now();
+        let probe_result = sqlx::query_scalar::<_, i32>("SELECT 1")
             .fetch_one(db.as_ref())
-            .await
-        {
+            .await;
+        state.runtime_metrics.database_readiness_observed(
+            probe_started
+                .elapsed()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        );
+        match probe_result {
             Ok(_) => checks["database"] = json!("ok"),
             Err(err) => {
                 return (
@@ -141,21 +150,21 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
 
     if state.config.redis_url.is_some() {
         if let Some(redis_client) = &state.redis_client {
-            match redis_client.get_multiplexed_async_connection().await {
-                Ok(mut conn) => match conn.ping::<String>().await {
-                    Ok(_) => checks["redis"] = json!("ok"),
-                    Err(err) => {
-                        return (
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            Json(json!({
-                                "status": "error",
-                                "service": "keylo",
-                                "checks": checks,
-                                "error": format!("redis not ready: {}", err)
-                            })),
-                        );
-                    }
-                },
+            let probe_started = Instant::now();
+            let probe_result = async {
+                let mut conn = redis_client.get_multiplexed_async_connection().await?;
+                conn.ping::<String>().await
+            }
+            .await;
+            state.runtime_metrics.redis_readiness_observed(
+                probe_started
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+            );
+            match probe_result {
+                Ok(_) => checks["redis"] = json!("ok"),
                 Err(err) => {
                     return (
                         StatusCode::SERVICE_UNAVAILABLE,
@@ -163,7 +172,7 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                             "status": "error",
                             "service": "keylo",
                             "checks": checks,
-                            "error": format!("redis connection failed: {}", err)
+                                "error": format!("redis not ready: {}", err)
                         })),
                     );
                 }
