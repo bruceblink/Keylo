@@ -26,7 +26,7 @@ Run preflight against the HTTPS endpoints that will be used for the actual brows
   -KeycloakIssuer "https://idp.example.test/realms/keylo-matrix"
 ```
 
-The script verifies exact Discovery issuer binding, HTTPS endpoints, Authorization Code support, `client_secret_basic`, and RS256. It stores only public Discovery metadata and the current Keylo commit beneath `artifacts/oidc-matrix/`; no secret, authorization code, access token, refresh token, or ID Token is written.
+The script verifies exact Discovery issuer binding, HTTPS endpoints, Authorization Code support, `client_secret_basic`, and RS256. It stores only public Discovery metadata and the current Keylo commit beneath `artifacts/oidc-matrix/`; no secret, authorization code, access token, refresh token, or ID Token is written. If either endpoint cannot be reached or fails the TLS/Discovery contract, it still writes a `status: "not_executed"` artifact with a generic reason and exits with code `2`; it never converts an unavailable environment into a passing matrix result.
 
 Preflight success means the environment can execute the matrix. It does not mean the browser scenarios passed.
 

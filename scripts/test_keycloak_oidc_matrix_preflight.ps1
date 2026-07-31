@@ -56,25 +56,40 @@ function Assert-DiscoveryContract([string]$Name, [string]$Issuer) {
     return $document
 }
 
-$keyloIssuer = Assert-HttpsOrigin "KeyloPublicIssuer" $KeyloPublicIssuer
-$keycloakIssuer = Assert-HttpsIssuer "KeycloakIssuer" $KeycloakIssuer
-$keyloDiscovery = Assert-DiscoveryContract "Keylo" $keyloIssuer
-$keycloakDiscovery = Assert-DiscoveryContract "Keycloak" $keycloakIssuer
-
 New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
 $commit = (git rev-parse HEAD).Trim()
 $artifact = [ordered]@{
     executed_at_utc = [DateTime]::UtcNow.ToString("o")
     keylo_commit = $commit
-    keylo_issuer = $keyloDiscovery.issuer
-    keycloak_issuer = $keycloakDiscovery.issuer
-    keycloak_authorization_endpoint = $keycloakDiscovery.authorization_endpoint
-    keycloak_token_endpoint = $keycloakDiscovery.token_endpoint
-    keycloak_userinfo_endpoint = $keycloakDiscovery.userinfo_endpoint
-    keycloak_jwks_uri = $keycloakDiscovery.jwks_uri
-    status = "preflight_passed"
-    note = "This record contains public Discovery metadata only; it contains no credentials, codes, or tokens."
+    status = "not_executed"
+    reason = "preflight_not_run"
+    note = "This record contains public endpoint metadata only; it contains no credentials, codes, or tokens."
 }
+
+try {
+    $keyloIssuer = Assert-HttpsOrigin "KeyloPublicIssuer" $KeyloPublicIssuer
+    $keycloakIssuer = Assert-HttpsIssuer "KeycloakIssuer" $KeycloakIssuer
+    $keyloDiscovery = Assert-DiscoveryContract "Keylo" $keyloIssuer
+    $keycloakDiscovery = Assert-DiscoveryContract "Keycloak" $keycloakIssuer
+    $artifact.keylo_issuer = $keyloDiscovery.issuer
+    $artifact.keycloak_issuer = $keycloakDiscovery.issuer
+    $artifact.keycloak_authorization_endpoint = $keycloakDiscovery.authorization_endpoint
+    $artifact.keycloak_token_endpoint = $keycloakDiscovery.token_endpoint
+    $artifact.keycloak_userinfo_endpoint = $keycloakDiscovery.userinfo_endpoint
+    $artifact.keycloak_jwks_uri = $keycloakDiscovery.jwks_uri
+    $artifact.status = "preflight_passed"
+    $artifact.reason = ""
+}
+catch {
+    # Keep an auditable result without serializing remote error bodies or credentials.
+    $artifact.reason = "https_discovery_or_endpoint_validation_failed"
+}
+
 $path = Join-Path $ArtifactDirectory "preflight-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')).json"
 $artifact | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding utf8
-Write-Host "[SUCCESS] Keycloak OIDC matrix preflight passed: $path" -ForegroundColor Green
+if ($artifact.status -eq "preflight_passed") {
+    Write-Host "[SUCCESS] Keycloak OIDC matrix preflight passed: $path" -ForegroundColor Green
+    exit 0
+}
+Write-Host "[NOT_EXECUTED] Keycloak OIDC matrix preflight prerequisites unavailable: $path" -ForegroundColor Yellow
+exit 2
