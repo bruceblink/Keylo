@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use std::collections::{BTreeMap, HashSet};
+use url::Url;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -423,6 +424,46 @@ pub fn oidc_discovery_url(issuer: &str) -> String {
     )
 }
 
+/// Parse an OIDC URL structurally so credentials or malformed authorities cannot become outbound targets.
+fn validate_oidc_https_url(value: &str, label: &str, reject_query: bool) -> Result<(), String> {
+    let url = Url::parse(value).map_err(|_| format!("{label} must be an absolute HTTPS URL"))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || (reject_query && url.query().is_some())
+    {
+        return Err(format!(
+            "{label} must be an HTTPS URL without credentials or fragment"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the redirect URL while allowing only loopback HTTP callbacks for local development.
+fn validate_oidc_redirect_uri(value: &str) -> Result<(), String> {
+    let url = Url::parse(value)
+        .map_err(|_| "oidc_upstream redirect_uri must be an absolute URL".to_string())?;
+    let loopback_http = url.scheme() == "http"
+        && matches!(
+            url.host_str(),
+            Some("localhost") | Some("127.0.0.1") | Some("[::1]") | Some("::1")
+        );
+    if (url.scheme() != "https" && !loopback_http)
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(
+            "oidc_upstream redirect_uri must be HTTPS or a loopback HTTP URL without credentials or fragment"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn default_oidc_scopes() -> Vec<String> {
     vec![
         "openid".to_string(),
@@ -439,23 +480,11 @@ pub fn parse_oidc_upstream_config(config: &Value) -> Result<OidcUpstreamConfig, 
     })?;
     let issuer = parsed.issuer.trim().to_string();
     let redirect_uri = parsed.redirect_uri.trim().to_string();
-    if !issuer.starts_with("https://") || issuer.contains('?') || issuer.contains('#') {
-        return Err(
-            "oidc_upstream issuer must be an HTTPS URL without query or fragment".to_string(),
-        );
-    }
+    validate_oidc_https_url(&issuer, "oidc_upstream issuer", true)?;
     if parsed.client_id.trim().is_empty() || parsed.client_secret.trim().is_empty() {
         return Err("oidc_upstream client_id and client_secret must not be empty".to_string());
     }
-    let local_http = redirect_uri.starts_with("http://localhost")
-        || redirect_uri.starts_with("http://127.0.0.1")
-        || redirect_uri.starts_with("http://[::1]");
-    if (!redirect_uri.starts_with("https://") && !local_http) || redirect_uri.contains('#') {
-        return Err(
-            "oidc_upstream redirect_uri must be HTTPS or a loopback HTTP URL without fragment"
-                .to_string(),
-        );
-    }
+    validate_oidc_redirect_uri(&redirect_uri)?;
     let scopes = parsed
         .scopes
         .iter()
@@ -492,19 +521,10 @@ pub fn parse_oidc_upstream_discovery(
         ("token_endpoint", &parsed.token_endpoint),
         ("jwks_uri", &parsed.jwks_uri),
     ] {
-        if !endpoint.starts_with("https://") || endpoint.contains('#') {
-            return Err(format!(
-                "OIDC Discovery {label} must be an HTTPS URL without fragment"
-            ));
-        }
+        validate_oidc_https_url(endpoint, &format!("OIDC Discovery {label}"), false)?;
     }
     if let Some(endpoint) = &parsed.userinfo_endpoint {
-        if !endpoint.starts_with("https://") || endpoint.contains('#') {
-            return Err(
-                "OIDC Discovery userinfo_endpoint must be an HTTPS URL without fragment"
-                    .to_string(),
-            );
-        }
+        validate_oidc_https_url(endpoint, "OIDC Discovery userinfo_endpoint", false)?;
     }
     if !parsed
         .response_types_supported
@@ -583,6 +603,22 @@ mod tests {
             "scopes": ["profile"]
         });
         assert!(super::parse_oidc_upstream_config(&invalid).is_err());
+
+        let credentialed_issuer = json!({
+            "issuer": "https://idp.example@localhost/realms/acme",
+            "client_id": "keylo",
+            "client_secret": "secret",
+            "redirect_uri": "https://identity.example/callback"
+        });
+        assert!(super::parse_oidc_upstream_config(&credentialed_issuer).is_err());
+
+        let credentialed_callback = json!({
+            "issuer": "https://idp.example/realms/acme",
+            "client_id": "keylo",
+            "client_secret": "secret",
+            "redirect_uri": "https://client:secret@identity.example/callback"
+        });
+        assert!(super::parse_oidc_upstream_config(&credentialed_callback).is_err());
     }
 
     #[test]
@@ -629,6 +665,23 @@ mod tests {
                 .unwrap_err();
 
         assert!(error.contains("client_secret_basic"));
+    }
+
+    #[test]
+    fn oidc_discovery_rejects_credentialed_endpoints() {
+        let discovery = json!({
+            "issuer": "https://idp.example/realms/acme",
+            "authorization_endpoint": "https://idp.example@localhost/auth",
+            "token_endpoint": "https://idp.example/token",
+            "jwks_uri": "https://idp.example/certs",
+            "response_types_supported": ["code"]
+        });
+
+        assert!(super::parse_oidc_upstream_discovery(
+            "https://idp.example/realms/acme",
+            &discovery
+        )
+        .is_err());
     }
 
     #[test]
