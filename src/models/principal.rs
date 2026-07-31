@@ -33,6 +33,11 @@ pub struct AuthorizationAuditLogListQuery {
     pub offset: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CleanupAuthorizationAuditLogsRequest {
+    pub retention_days: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct AuthorizationAuditLog {
     pub id: String,

@@ -467,6 +467,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 |---|---|---|
 | GET | `/v1/admin/principals?principal_type=&active=&limit=&offset=` | Principal 列表 |
 | GET | `/v1/admin/authorization-audit-logs?principal_id=&decision=&permission_name=&resource_id=&limit=&offset=` | 授权决策审计日志；`decision` 可筛选 `allow` 或 `deny` |
+| POST | `/v1/admin/authorization-audit-logs/cleanup` | 清理超过保留期的授权审计日志，体为 `{ "retention_days": 30 }` |
 | GET | `/v1/admin/principals/{principal_id}` | Principal 详情 |
 | GET | `/v1/admin/principals/{principal_id}/roles` | Principal 角色 |
 | POST | `/v1/admin/principals/{principal_id}/roles` | 给 Principal 绑定角色 |

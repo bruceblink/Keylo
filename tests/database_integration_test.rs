@@ -465,4 +465,41 @@ mod database_tests {
         assert_eq!(logs[0].decision, "deny");
         assert_eq!(logs[0].permission_name.as_deref(), Some("inventory:write"));
     }
+
+    #[tokio::test]
+    async fn test_authorization_audit_log_cleanup() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_authorization_audit_log_cleanup: {}", msg);
+                return;
+            }
+        };
+
+        db::create_authorization_audit_log(&pool, None, "deny", None, None, None)
+            .await
+            .expect("Failed to create authorization audit log");
+        sqlx::query(
+            "UPDATE authorization_audit_logs
+             SET created_at = NOW() - INTERVAL '2 days'",
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to age authorization audit log");
+        db::create_authorization_audit_log(&pool, None, "allow", None, None, None)
+            .await
+            .expect("Failed to create recent authorization audit log");
+
+        let deleted = db::cleanup_old_authorization_audit_logs(&pool, 1)
+            .await
+            .expect("Failed to clean authorization audit logs");
+        let remaining = db::list_authorization_audit_logs(&pool, None, None, None, None, 10, 0)
+            .await
+            .expect("Failed to list remaining authorization audit logs");
+
+        assert!(deleted >= 1);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].decision, "allow");
+    }
 }

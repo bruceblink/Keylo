@@ -11,7 +11,8 @@ use crate::{
     errors::AuthError,
     models::{
         AssignRoleRequest, AuthorizationAuditLogListQuery, Claims,
-        PrincipalEffectivePermissionsResponse, PrincipalListQuery,
+        CleanupAuthorizationAuditLogsRequest, PrincipalEffectivePermissionsResponse,
+        PrincipalListQuery,
     },
     state::AppState,
 };
@@ -22,6 +23,10 @@ pub fn principal_admin_routes() -> Router<AppState> {
         .route(
             "/v1/admin/authorization-audit-logs",
             get(list_authorization_audit_logs_handler),
+        )
+        .route(
+            "/v1/admin/authorization-audit-logs/cleanup",
+            post(cleanup_authorization_audit_logs_handler),
         )
         .route(
             "/v1/admin/refresh-sessions",
@@ -122,6 +127,29 @@ async fn list_authorization_audit_logs_handler(
     Ok(Json(json!({
         "success": true,
         "data": logs
+    })))
+}
+
+async fn cleanup_authorization_audit_logs_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<CleanupAuthorizationAuditLogsRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let retention_days = payload
+        .retention_days
+        .unwrap_or(state.config.audit_log_retention_days)
+        .clamp(1, 3650);
+    let deleted = crate::db::cleanup_old_authorization_audit_logs(db, retention_days)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "retention_days": retention_days,
+        "deleted": deleted,
     })))
 }
 

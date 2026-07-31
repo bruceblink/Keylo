@@ -188,6 +188,13 @@ async fn cleanup_audit_logs(pool: &sqlx::PgPool, retention_days: i64) {
         Ok(deleted) => tracing::info!("Audit logs cleanup completed, deleted={}", deleted),
         Err(e) => tracing::warn!("Audit logs cleanup failed: {}", e),
     }
+    match crate::db::cleanup_old_authorization_audit_logs(pool, retention_days).await {
+        Ok(deleted) => tracing::info!(
+            "Authorization audit logs cleanup completed, deleted={}",
+            deleted
+        ),
+        Err(e) => tracing::warn!("Authorization audit logs cleanup failed: {}", e),
+    }
 }
 
 fn base_public_routes(include_oauth: bool) -> Router<AppState> {

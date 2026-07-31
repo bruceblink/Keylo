@@ -403,3 +403,19 @@ pub async fn list_authorization_audit_logs(
 
     Ok(logs)
 }
+
+/// Deletes authorization decisions older than the configured retention window.
+pub async fn cleanup_old_authorization_audit_logs(
+    pool: &PgPool,
+    retention_days: i64,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM authorization_audit_logs
+         WHERE created_at < NOW() - ($1::text || ' days')::interval",
+    )
+    .bind(retention_days)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
