@@ -156,25 +156,38 @@ async fn check_one(
     request: &AuthorizeCheckRequest,
 ) -> Result<AuthorizeCheckResponse, AuthError> {
     let permission_name = resolve_permission_name(db, request).await?;
-    let allowed = match permission_name.as_deref() {
-        Some(permission) => crate::db::principal_has_permission(db, &principal.id, permission)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?,
-        None => false,
+    let (allowed, reason) = match permission_name.as_deref() {
+        Some(permission) => {
+            let allowed = crate::db::principal_has_permission(db, &principal.id, permission)
+                .await
+                .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+            (
+                allowed,
+                if allowed {
+                    "permission_granted"
+                } else {
+                    "permission_not_bound"
+                },
+            )
+        }
+        None => (false, "permission_not_resolved"),
     };
+    let decision = if allowed { "allow" } else { "deny" };
 
     let _ = crate::db::create_authorization_audit_log(
         db,
         Some(&principal.id),
-        if allowed { "allow" } else { "deny" },
+        decision,
         permission_name.as_deref(),
         None,
-        None,
+        Some(&format!("reason={reason}")),
     )
     .await;
 
     Ok(AuthorizeCheckResponse {
         allowed,
+        decision: decision.to_string(),
+        reason: reason.to_string(),
         principal_id: principal.id.clone(),
         matched_permission: permission_name,
     })

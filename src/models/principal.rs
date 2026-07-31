@@ -44,6 +44,8 @@ pub struct AuthorizeBatchCheckRequest {
 #[derive(Debug, Serialize)]
 pub struct AuthorizeCheckResponse {
     pub allowed: bool,
+    pub decision: String,
+    pub reason: String,
     pub principal_id: String,
     pub matched_permission: Option<String>,
 }

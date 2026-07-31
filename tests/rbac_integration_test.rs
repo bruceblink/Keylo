@@ -579,6 +579,8 @@ mod tests {
         check_resp.assert_status_ok();
         let check_body: serde_json::Value = check_resp.json();
         assert_eq!(check_body["data"]["allowed"], true);
+        assert_eq!(check_body["data"]["decision"], "allow");
+        assert_eq!(check_body["data"]["reason"], "permission_granted");
 
         let tree_resp = server
             .get("/v1/principals/me/resource-tree?app=crawler&type=service")
@@ -613,6 +615,8 @@ mod tests {
         denied_check_resp.assert_status_ok();
         let denied_check_body: serde_json::Value = denied_check_resp.json();
         assert_eq!(denied_check_body["data"]["allowed"], false);
+        assert_eq!(denied_check_body["data"]["decision"], "deny");
+        assert_eq!(denied_check_body["data"]["reason"], "permission_not_bound");
 
         let wrong_audience_token_resp = server
             .post("/v1/service/token")

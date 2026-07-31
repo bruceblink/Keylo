@@ -445,13 +445,15 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
   "success": true,
   "data": {
     "allowed": true,
+    "decision": "allow",
+    "reason": "permission_granted",
     "principal_id": "service-crawler",
     "matched_permission": "service:crawler:sync"
   }
 }
 ```
 
-未知 Principal、禁用 Principal、未绑定角色、无匹配权限时默认 `allowed=false`。
+未知 Principal、禁用 Principal、未绑定角色、无匹配权限时默认 `allowed=false`。已解析且未绑定权限时返回 `decision="deny"`、`reason="permission_not_bound"`；请求无法解析出权限时返回 `reason="permission_not_resolved"`；允许时固定返回 `decision="allow"`、`reason="permission_granted"`。这些字段是资源服务可稳定消费的决策摘要，授权审计日志记录相同 reason，不包含 token 或主体凭据。
 
 ### 7.3 Principal 管理
 
