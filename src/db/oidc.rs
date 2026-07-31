@@ -228,7 +228,15 @@ pub async fn resolve_browser_session(
     raw_session: &str,
 ) -> Result<Option<OidcBrowserSession>> {
     let row = sqlx::query_as::<_, (String, i64)>(
-        "UPDATE oidc_browser_sessions SET last_seen_at = NOW() WHERE session_hash = $1 AND revoked_at IS NULL AND expires_at > NOW() RETURNING user_id, extract(epoch from expires_at)::bigint",
+        "UPDATE oidc_browser_sessions AS session
+         SET last_seen_at = NOW()
+         FROM users
+         WHERE session.session_hash = $1
+           AND session.revoked_at IS NULL
+           AND session.expires_at > NOW()
+           AND users.id = session.user_id
+           AND users.active = TRUE
+         RETURNING session.user_id, extract(epoch from session.expires_at)::bigint",
     )
     .bind(browser_session_hash(raw_session))
     .fetch_optional(pool)

@@ -352,6 +352,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_disabled_user_oidc_browser_session_cannot_start_authorization() {
+        let server = setup_test_server().await;
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = match db::init_db_pool(&database_url).await {
+            Ok(pool) => pool,
+            Err(_) => return,
+        };
+        let username = format!("oidc-browser-disabled-{}", uuid::Uuid::new_v4());
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some("OidcBrowserDisabled#123"),
+        )
+        .await
+        .unwrap();
+        let browser_cookie = format!("oidc-browser-session-{}", uuid::Uuid::new_v4());
+        db::create_browser_session(
+            &pool,
+            &browser_cookie,
+            &keylo::models::OidcBrowserSession {
+                user_id: user.id.clone(),
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .unwrap();
+        db::set_user_active(&pool, &user.id, false).await.unwrap();
+
+        let response = server
+            .get("/v1/oidc/authorize?response_type=code&client_id=unused&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcallback&scope=openid&nonce=test-nonce&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256")
+            .add_header("Cookie", format!("keylo_oidc_session={browser_cookie}"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_keylo_configuration_endpoint() {
         let config = Config {
             server_addr: "127.0.0.1".to_string(),
