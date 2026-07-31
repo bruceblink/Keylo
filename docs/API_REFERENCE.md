@@ -616,6 +616,8 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 
 `PUT /v1/admin/identity-sources/{source_id}` 支持局部更新：`display_name`、`description`、`config`、`claim_mapping`、`jit_enabled`、`auto_link_enabled`、`active`。
 
+更新 `config` 时，读取接口返回的 `[REDACTED]` 敏感字段会保留数据库中的原值；只有提交新的非脱敏值才会替换凭据。这样可以安全地读取、编辑非敏感配置后再保存。
+
 将一个已启用的 `oidc_upstream` 身份源更新为 `active: false` 会立即撤销该来源的所有未撤销 refresh session，并记录管理员、来源 ID 与撤销数量；已经签发的短期 access token 仍按其既有过期时间失效。
 
 ---

@@ -93,6 +93,30 @@ fn optional_json_object(
     }
 }
 
+/// Preserve stored credential fields when an update sends the API redaction placeholder back.
+fn preserve_redacted_identity_secrets(existing: &Value, incoming: &mut Value) {
+    let (Some(existing_object), Some(incoming_object)) =
+        (existing.as_object(), incoming.as_object_mut())
+    else {
+        return;
+    };
+    for (key, existing_value) in existing_object {
+        let normalized = key.to_ascii_lowercase();
+        if normalized.contains("secret") || normalized.contains("password") || normalized == "token"
+        {
+            let should_preserve = incoming_object
+                .get(key)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value == "[REDACTED]");
+            if should_preserve {
+                incoming_object.insert(key.clone(), existing_value.clone());
+            }
+        } else if let Some(incoming_child) = incoming_object.get_mut(key) {
+            preserve_redacted_identity_secrets(existing_value, incoming_child);
+        }
+    }
+}
+
 fn validate_identity_source_config(source_type: &str, config: &Value) -> Result<(), AuthError> {
     if source_type == "oidc_upstream" {
         parse_oidc_upstream_config(config).map_err(AuthError::InvalidRequest)?;
@@ -649,7 +673,7 @@ pub async fn update_identity_source(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let config = optional_json_object("config", payload.config)?;
+    let mut config = optional_json_object("config", payload.config)?;
     let claim_mapping = optional_json_object("claim_mapping", payload.claim_mapping)?;
 
     let db = require_db(&state)?;
@@ -665,10 +689,11 @@ pub async fn update_identity_source(
     } else {
         None
     };
-    if let Some(config) = config.as_ref() {
+    if let Some(config) = config.as_mut() {
         let existing = existing
             .as_ref()
             .expect("existing source required for config validation");
+        preserve_redacted_identity_secrets(&existing.config, config);
         validate_identity_source_config(&existing.source_type, config)?;
     }
     if let Some(claim_mapping) = claim_mapping.as_ref() {
@@ -817,6 +842,26 @@ mod tests {
         let err = json_object_or_default("config", Some(json!([]))).unwrap_err();
 
         assert!(matches!(err, AuthError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn redacted_identity_secrets_are_preserved_during_update() {
+        let existing = json!({
+            "client_secret": "original-secret",
+            "nested": {"bind_password": "original-password"},
+            "issuer": "https://idp.example"
+        });
+        let mut incoming = json!({
+            "client_secret": "[REDACTED]",
+            "nested": {"bind_password": "[REDACTED]"},
+            "issuer": "https://new-idp.example"
+        });
+
+        preserve_redacted_identity_secrets(&existing, &mut incoming);
+
+        assert_eq!(incoming["client_secret"], "original-secret");
+        assert_eq!(incoming["nested"]["bind_password"], "original-password");
+        assert_eq!(incoming["issuer"], "https://new-idp.example");
     }
 
     #[test]
