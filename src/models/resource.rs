@@ -13,6 +13,7 @@ pub struct Resource {
     pub description: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub active: bool,
+    pub version: i64,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
@@ -28,6 +29,17 @@ pub struct CreateResourceRequest {
     pub description: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub permission_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateResourceRequest {
+    pub name: Option<String>,
+    pub display_order: Option<i32>,
+    pub description: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub active: Option<bool>,
+    pub expected_version: i64,
+    pub change_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

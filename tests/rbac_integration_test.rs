@@ -605,6 +605,33 @@ mod tests {
         resource_resp.assert_status_ok();
         let resource_body: serde_json::Value = resource_resp.json();
         let resource_id = resource_body["data"]["id"].as_str().unwrap();
+        let resource_version = resource_body["data"]["version"].as_i64().unwrap();
+
+        let resource_update_resp = server
+            .put(&format!("/v1/admin/resources/{}", resource_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "name": "Crawler invoke v2",
+                "expected_version": resource_version,
+                "change_reason": "rename published capability",
+            }))
+            .await;
+        resource_update_resp.assert_status_ok();
+        let resource_update: serde_json::Value = resource_update_resp.json();
+        assert_eq!(resource_update["data"]["version"], resource_version + 1);
+
+        let stale_resource_update_resp = server
+            .put(&format!("/v1/admin/resources/{}", resource_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "name": "Stale crawler capability",
+                "expected_version": resource_version,
+            }))
+            .await;
+        assert_eq!(
+            stale_resource_update_resp.status_code(),
+            axum::http::StatusCode::CONFLICT
+        );
 
         let service_token_resp = server
             .post("/v1/service/token")

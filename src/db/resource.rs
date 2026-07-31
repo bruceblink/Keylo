@@ -17,8 +17,17 @@ pub struct CreateResourceParams<'a> {
     pub permission_ids: &'a [String],
 }
 
+pub struct UpdateResourceParams<'a> {
+    pub name: Option<&'a str>,
+    pub display_order: Option<i32>,
+    pub description: Option<&'a str>,
+    pub metadata: Option<&'a serde_json::Value>,
+    pub active: Option<bool>,
+    pub expected_version: i64,
+}
+
 fn select_resource_sql() -> &'static str {
-    "SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata, active, created_at, updated_at FROM resources"
+    "SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata, active, version, created_at, updated_at FROM resources"
 }
 
 pub async fn create_resource(pool: &PgPool, params: CreateResourceParams<'_>) -> Result<Resource> {
@@ -34,9 +43,10 @@ pub async fn create_resource(pool: &PgPool, params: CreateResourceParams<'_>) ->
             description = EXCLUDED.description,
             metadata = EXCLUDED.metadata,
             active = TRUE,
+            version = resources.version + 1,
             updated_at = NOW()
         RETURNING id, app, resource_type, code, name, parent_id, display_order, description, metadata,
-                  active, created_at, updated_at
+                  active, version, created_at, updated_at
         "#,
     )
     .bind(Uuid::new_v4().to_string())
@@ -58,6 +68,38 @@ pub async fn create_resource(pool: &PgPool, params: CreateResourceParams<'_>) ->
     Ok(resource)
 }
 
+/// Updates mutable resource fields only when the caller's version still matches the stored row.
+pub async fn update_resource(
+    pool: &PgPool,
+    resource_id: &str,
+    params: UpdateResourceParams<'_>,
+) -> Result<Option<Resource>> {
+    Ok(sqlx::query_as::<_, Resource>(
+        r#"
+        UPDATE resources
+        SET name = COALESCE($2, name),
+            display_order = COALESCE($3, display_order),
+            description = COALESCE($4, description),
+            metadata = COALESCE($5, metadata),
+            active = COALESCE($6, active),
+            version = version + 1,
+            updated_at = NOW()
+        WHERE id = $1 AND version = $7
+        RETURNING id, app, resource_type, code, name, parent_id, display_order, description, metadata,
+                  active, version, created_at, updated_at
+        "#,
+    )
+    .bind(resource_id)
+    .bind(params.name)
+    .bind(params.display_order)
+    .bind(params.description)
+    .bind(params.metadata.cloned())
+    .bind(params.active)
+    .bind(params.expected_version)
+    .fetch_optional(pool)
+    .await?)
+}
+
 pub async fn list_resources(
     pool: &PgPool,
     app: Option<&str>,
@@ -67,7 +109,7 @@ pub async fn list_resources(
     Ok(sqlx::query_as::<_, Resource>(
         r#"
         SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata,
-               active, created_at, updated_at
+               active, version, created_at, updated_at
         FROM resources
         WHERE ($1::text IS NULL OR app = $1)
           AND ($2::text IS NULL OR resource_type = $2)
@@ -167,7 +209,7 @@ pub async fn authorized_resources_for_principal(
         sqlx::query(
             r#"
             SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata,
-                   active, created_at, updated_at
+                   active, version, created_at, updated_at
             FROM resources
             WHERE app = $1 AND resource_type = $2 AND active = TRUE
             ORDER BY display_order, code
@@ -200,7 +242,7 @@ pub async fn authorized_resources_for_principal(
                 WHERE parent.active = TRUE
             )
             SELECT id, app, resource_type, code, name, parent_id, display_order, description, metadata,
-                   active, created_at, updated_at
+                   active, version, created_at, updated_at
             FROM visible
             ORDER BY display_order, code
             "#,
@@ -225,6 +267,7 @@ pub async fn authorized_resources_for_principal(
             description: row.get("description"),
             metadata: row.get("metadata"),
             active: row.get("active"),
+            version: row.get("version"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         });

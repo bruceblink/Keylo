@@ -499,6 +499,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 |---|---|---|
 | GET | `/v1/admin/resources?app=&type=&active=` | 资源列表 |
 | POST | `/v1/admin/resources` | 创建或更新资源 |
+| PUT | `/v1/admin/resources/{resource_id}` | 更新资源可变字段；必须提供 `expected_version`，冲突返回 `409` |
 | GET | `/v1/admin/resources/{resource_id}/permissions` | 查询资源绑定的权限 |
 | POST | `/v1/admin/resources/{resource_id}/permissions` | 给资源绑定权限，可选 `change_reason` 写入审计日志 |
 | DELETE | `/v1/admin/resources/{resource_id}/permissions/{permission_id}` | 撤销资源权限绑定，请求体可选 `change_reason` 写入审计日志 |

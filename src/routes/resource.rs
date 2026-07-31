@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use serde_json::json;
@@ -10,7 +10,7 @@ use crate::{
     errors::AuthError,
     models::{
         AssignResourcePermissionRequest, Claims, CreateResourceRequest, ResourceListQuery,
-        RevokeResourcePermissionRequest,
+        RevokeResourcePermissionRequest, UpdateResourceRequest,
     },
     state::AppState,
 };
@@ -19,6 +19,10 @@ pub fn resource_admin_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/admin/resources", get(list_resources_handler))
         .route("/v1/admin/resources", post(create_resource_handler))
+        .route(
+            "/v1/admin/resources/{resource_id}",
+            put(update_resource_handler),
+        )
         .route(
             "/v1/admin/resources/{resource_id}/permissions",
             get(get_resource_permissions_handler),
@@ -123,6 +127,60 @@ async fn get_resource_permissions_handler(
     Ok(Json(json!({
         "success": true,
         "data": permissions
+    })))
+}
+
+async fn update_resource_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(resource_id): Path<String>,
+    Json(payload): Json<UpdateResourceRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    if crate::db::get_resource_by_id(db, &resource_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .is_none()
+    {
+        return Err(AuthError::NotFound);
+    }
+    let resource = crate::db::update_resource(
+        db,
+        &resource_id,
+        crate::db::UpdateResourceParams {
+            name: payload.name.as_deref(),
+            display_order: payload.display_order,
+            description: payload.description.as_deref(),
+            metadata: payload.metadata.as_ref(),
+            active: payload.active,
+            expected_version: payload.expected_version,
+        },
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+    .ok_or_else(|| {
+        AuthError::Conflict("Resource changed since the supplied expected_version".to_string())
+    })?;
+    crate::db::create_audit_log(
+        db,
+        "resource.updated",
+        Some(&claims.sub),
+        Some(&format!(
+            "resource_id={}, version={}{}",
+            resource.id,
+            resource.version,
+            audit_reason_suffix(payload.change_reason.as_deref()),
+        )),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": resource
     })))
 }
 
