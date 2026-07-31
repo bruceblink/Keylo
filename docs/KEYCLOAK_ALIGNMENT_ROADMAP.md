@@ -139,3 +139,23 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 ## 6. 建议的下一项工作
 
 实施阶段 B 的验收项：**标准 OIDC 测试 IdP 兼容矩阵**。覆盖首次登录、重复登录、UserInfo 补充声明、邮箱变化、禁用用户/身份源和 refresh session 撤销，确保联邦链路的安全规则可被真实标准客户端复现。
+
+### 6.1 标准 IdP 矩阵执行契约
+
+本矩阵以当前受支持的 Keycloak 发行版作为标准 OIDC upstream IdP。它是对模型与 HTTP handler 测试的补充，不以本地 mock 结果替代。执行环境必须满足：
+
+1. Keycloak 和 Keylo 都使用可被对方验证的 HTTPS issuer；Keylo 的上游身份源配置不允许生产环境使用 HTTP issuer。
+2. Keycloak client 使用 Authorization Code Flow，启用 Standard Flow，登记 Keylo 的精确 HTTPS callback URL，并采用 `client_secret_basic` 与 RS256 ID Token。
+3. Keycloak realm 配置提供 `openid profile email`，其中 UserInfo 补充场景需要把 email、email_verified 或映射的自定义 profile claim 仅放入 UserInfo。
+4. 运行记录必须包含 Keycloak 镜像 digest/版本、Keylo commit、已脱敏的 realm/client 配置和每个场景的 HTTP 结果；不得记录 client secret、授权码、access token、refresh token 或 ID Token 明文。
+
+| 场景 | 预期结果 | 安全断言 |
+| --- | --- | --- |
+| 首次登录（JIT） | 创建无密码本地用户并建立不可改绑 `(source, sub)` 映射 | 映射与审计中不出现 token 或上游 subject 明文。 |
+| 重复登录 | 复用同一用户和映射 | 不重复创建用户或覆盖映射。 |
+| UserInfo 补充声明 | 仅补齐 ID Token 缺失 profile 字段 | UserInfo `sub` 必须等于已验证 ID Token `sub`，不能覆盖签名声明。 |
+| 上游邮箱变化 | 继续按稳定 `sub` 登录并记录观察事件 | 不自动改写 Keylo 本地邮箱。 |
+| 禁用 Keylo 用户 | 已有 access token 的受保护请求被拒绝 | 所有该用户 refresh session 已撤销。 |
+| 禁用 OIDC 身份源 | 新回调被拒绝 | 该来源 refresh session 已撤销，审计包含来源与撤销数量。 |
+
+镜像源、网络或 TLS 前置条件不可用时，矩阵应报告为“未执行”，不能以单元测试或模拟 IdP 声称该验收已完成。
