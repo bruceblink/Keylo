@@ -164,7 +164,19 @@ async fn create_oidc_user_mapping(
     )
     .await
     {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            crate::db::create_audit_log(
+                db,
+                "identity_source.account.linked",
+                Some(user_id),
+                Some(&format!("user_id={}; source_id={}", user_id, source.id)),
+            )
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to audit OIDC identity link".to_string())
+            })?;
+            Ok(())
+        }
         Err(error) if is_unique_violation(error.as_ref()) => {
             let existing_user_id =
                 crate::db::get_mapped_user_id(db, &provider, &profile.external_subject)
