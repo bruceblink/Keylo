@@ -113,7 +113,8 @@ pub async fn service_introspect(
             if let Some(db) = &state.db {
                 if crate::db::is_token_blacklisted(db, &payload.token)
                     .await
-                    .unwrap_or(false)
+                    .unwrap_or(true)
+                    || !service_token_claims_are_active(db, &claims).await
                 {
                     return Json(IntrospectResponse::inactive());
                 }
@@ -122,6 +123,16 @@ pub async fn service_introspect(
         }
         Err(_) => Json(IntrospectResponse::inactive()),
     }
+}
+
+/// Confirm that a service token still belongs to an enabled service before exposing it as active.
+async fn service_token_claims_are_active(db: &sqlx::PgPool, claims: &ServiceClaims) -> bool {
+    let Some(service_id) = claims.sub.strip_prefix("service:") else {
+        return false;
+    };
+    svc_db::service_client_is_active(db, service_id)
+        .await
+        .unwrap_or(false)
 }
 
 fn require_db(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {

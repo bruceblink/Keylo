@@ -1243,6 +1243,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_disabled_service_token_is_inactive_when_introspected() {
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login.json();
+        let admin_token = admin_body["access_token"].as_str().unwrap();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let caller_id = format!("service-introspector-{}", ts);
+        let target_id = format!("service-target-{}", ts);
+
+        for (service_id, name) in [
+            (&caller_id, "Service introspection caller"),
+            (&target_id, "Service introspection target"),
+        ] {
+            let response = server
+                .post("/v1/admin/services")
+                .add_header("Authorization", format!("Bearer {admin_token}"))
+                .json(&json!({
+                    "service_id": service_id,
+                    "service_secret": "service-secret",
+                    "name": name,
+                    "allowed_scopes": ["read"],
+                    "allowed_audiences": ["admin-backend"],
+                    "introspection_allowed": true
+                }))
+                .await;
+            response.assert_status_ok();
+        }
+
+        let caller_login = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": caller_id,
+                "service_secret": "service-secret",
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        caller_login.assert_status_ok();
+        let caller_body: serde_json::Value = caller_login.json();
+        let caller_token = caller_body["access_token"].as_str().unwrap();
+        let target_login = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": target_id,
+                "service_secret": "service-secret",
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        target_login.assert_status_ok();
+        let target_body: serde_json::Value = target_login.json();
+        let target_token = target_body["access_token"].as_str().unwrap();
+
+        let disable_target = server
+            .put(&format!("/v1/admin/services/{target_id}"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({ "active": false }))
+            .await;
+        disable_target.assert_status_ok();
+
+        let introspection = server
+            .post("/v1/service/introspect")
+            .add_header("Authorization", format!("Bearer {caller_token}"))
+            .json(&json!({ "token": target_token }))
+            .await;
+        introspection.assert_status_ok();
+        let body: serde_json::Value = introspection.json();
+        assert_eq!(body, json!({ "active": false }));
+    }
+
+    #[tokio::test]
     async fn test_admin_can_list_oidc_identity_source_links_without_external_subjects() {
         let server = setup_test_server().await;
 

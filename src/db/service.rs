@@ -242,6 +242,15 @@ pub async fn service_introspection_allowed(pool: &PgPool, service_id: &str) -> R
         .unwrap_or(false))
 }
 
+/// Return whether a service still exists and is enabled for tokens issued in its name.
+pub async fn service_client_is_active(pool: &PgPool, service_id: &str) -> Result<bool> {
+    let row = sqlx::query("SELECT active FROM service_clients WHERE service_id = $1")
+        .bind(service_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|row| row.get::<bool, _>("active")).unwrap_or(false))
+}
+
 /// 轮换服务密钥
 pub async fn rotate_service_secret(
     pool: &PgPool,
