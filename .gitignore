@@ -9,6 +9,7 @@
 /keys/
 .claude/
 /logs/
+/artifacts/
 /secrets/
 /.secrets/
 /web/node_modules/

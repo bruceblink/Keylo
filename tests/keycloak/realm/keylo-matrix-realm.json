@@ -1,0 +1,40 @@
+{
+  "realm": "keylo-matrix",
+  "enabled": true,
+  "sslRequired": "external",
+  "clients": [
+    {
+      "clientId": "keylo-upstream-matrix",
+      "name": "Keylo upstream OIDC matrix",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${KEYCLOAK_MATRIX_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["${KEYLO_MATRIX_REDIRECT_URI}"],
+      "webOrigins": [],
+      "protocolMappers": []
+    }
+  ],
+  "users": [
+    {
+      "username": "matrix-user",
+      "enabled": true,
+      "email": "matrix-user@example.test",
+      "emailVerified": true,
+      "firstName": "Matrix",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KEYCLOAK_MATRIX_USER_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

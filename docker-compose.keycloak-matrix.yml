@@ -1,0 +1,16 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.0
+    container_name: keylo-keycloak-matrix
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_MATRIX_ADMIN_USERNAME:-matrix-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_MATRIX_ADMIN_PASSWORD:?Set KEYCLOAK_MATRIX_ADMIN_PASSWORD before starting the matrix fixture}
+      KEYCLOAK_MATRIX_CLIENT_SECRET: ${KEYCLOAK_MATRIX_CLIENT_SECRET:?Set KEYCLOAK_MATRIX_CLIENT_SECRET before starting the matrix fixture}
+      KEYCLOAK_MATRIX_USER_PASSWORD: ${KEYCLOAK_MATRIX_USER_PASSWORD:?Set KEYCLOAK_MATRIX_USER_PASSWORD before starting the matrix fixture}
+      KEYLO_MATRIX_REDIRECT_URI: ${KEYLO_MATRIX_REDIRECT_URI:?Set KEYLO_MATRIX_REDIRECT_URI to Keylo's exact HTTPS callback URL}
+    ports:
+      - "127.0.0.1:${KEYCLOAK_MATRIX_PORT:-8180}:8080"
+    volumes:
+      - ./tests/keycloak/realm:/opt/keycloak/data/import:ro
+
