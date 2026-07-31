@@ -208,18 +208,53 @@ pub async fn validate_user_credentials(
     Ok(None)
 }
 
-/// 重置用户密码
-pub async fn reset_user_password(pool: &PgPool, user_id: &str, password: &str) -> Result<bool> {
+/// Reset an account password and revoke existing sessions before the new credential is usable.
+pub async fn reset_user_password(
+    pool: &PgPool,
+    user_id: &str,
+    password: &str,
+    actor: Option<&str>,
+) -> Result<bool> {
     let password_hash = hash_password(password)?;
-
-    let result = sqlx::query("UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1")
+    let mut transaction = pool.begin().await?;
+    let updated = sqlx::query("UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1")
         .bind(user_id)
         .bind(password_hash)
         .bind(chrono::Local::now().naive_utc())
-        .execute(pool)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected()
+        > 0;
+    if !updated {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+    let revoked_refresh_sessions = sqlx::query(
+        "UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), revoke_reason = COALESCE(revoke_reason, 'password_reset') WHERE principal_id IN (SELECT id FROM principals WHERE principal_type = 'user' AND ref_id = $1) AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    let revoked_browser_sessions = sqlx::query(
+        "UPDATE oidc_browser_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    sqlx::query("INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string())
+        .bind("user.password_reset")
+        .bind(actor)
+        .bind(format!(
+            "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
+            user_id, revoked_refresh_sessions, revoked_browser_sessions
+        ))
+        .execute(&mut *transaction)
         .await?;
-
-    Ok(result.rows_affected() > 0)
+    transaction.commit().await?;
+    Ok(true)
 }
 
 /// 用户更改密码（需要验证当前密码）

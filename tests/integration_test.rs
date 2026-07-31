@@ -463,6 +463,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_admin_password_reset_revokes_refresh_and_oidc_browser_sessions() {
+        let server = setup_test_server().await;
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = match db::init_db_pool(&database_url).await {
+            Ok(pool) => pool,
+            Err(_) => return,
+        };
+        let username = format!("password-reset-user-{}", uuid::Uuid::new_v4());
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some("OldPassword#123"),
+        )
+        .await
+        .unwrap();
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({"client_id": username, "client_secret": "OldPassword#123"}))
+            .await;
+        login.assert_status_ok();
+        let refresh_token = login.json::<serde_json::Value>()["refresh_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let browser_cookie = format!("oidc-password-reset-{}", uuid::Uuid::new_v4());
+        db::create_browser_session(
+            &pool,
+            &browser_cookie,
+            &keylo::models::OidcBrowserSession {
+                user_id: user.id.clone(),
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .unwrap();
+        let admin = server.post("/v1/admin/token").json(&json!({"client_id": INTEGRATION_ADMIN_CLIENT_ID, "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET})).await;
+        admin.assert_status_ok();
+        let admin_token = admin.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let reset = server
+            .post(&format!("/v1/admin/users/{}/reset-password", user.id))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"password": "NewPassword#123"}))
+            .await;
+        reset.assert_status_ok();
+        assert!(db::resolve_browser_session(&pool, &browser_cookie)
+            .await
+            .unwrap()
+            .is_none());
+        let refresh = server
+            .post("/v1/auth/refresh")
+            .json(&json!({"refresh_token": refresh_token}))
+            .await;
+        assert_eq!(refresh.status_code(), StatusCode::UNAUTHORIZED);
+        let logs = db::get_recent_audit_logs(&pool, 20).await.unwrap();
+        assert!(logs.iter().any(
+            |(event_type, _, detail, _)| event_type == "user.password_reset"
+                && detail
+                    .as_deref()
+                    .is_some_and(|value| value.contains(&user.id)
+                        && value.contains("revoked_refresh_sessions=1")
+                        && value.contains("revoked_oidc_browser_sessions=1"))
+        ));
+    }
+
+    #[tokio::test]
     async fn test_keylo_configuration_endpoint() {
         let config = Config {
             server_addr: "127.0.0.1".to_string(),

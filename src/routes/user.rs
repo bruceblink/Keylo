@@ -428,6 +428,7 @@ async fn delete_user_handler(
 }
 
 async fn reset_user_password_handler(
+    claims: Claims,
     State(state): State<AppState>,
     Path(user_id): Path<String>,
     Json(req): Json<ResetPasswordRequest>,
@@ -438,7 +439,8 @@ async fn reset_user_password_handler(
         return Err(invalid_password_response(msg));
     }
 
-    match crate::db::user::reset_user_password(db, &user_id, &req.password).await {
+    match crate::db::user::reset_user_password(db, &user_id, &req.password, Some(&claims.sub)).await
+    {
         Ok(true) => Ok(Json(json!({
             "success": true,
             "message": "Password reset successfully",

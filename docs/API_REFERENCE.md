@@ -314,6 +314,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 改密成功后，Keylo 会在同一事务中撤销该用户的 refresh session 和 OIDC 浏览器会话，并写入 `user.password_changed` 审计事件；客户端必须使用新密码重新登录，旧 refresh token 与旧 OIDC 浏览器 cookie 均不能继续使用。
 
+管理员重置密码也遵循同一撤销规则，并写入 `user.password_reset` 审计事件。
+
 `POST /v1/user/mfa/totp/reset` 必须先使用同一 access token 调用 `/v1/user/mfa/verify`。成功后会删除 TOTP seed、所有未使用恢复码和该用户的近期 MFA 凭据，并写入 `mfa.totp.reset` 审计事件；用户随后可重新 enrollment。该接口不接受验证码或恢复码明文。
 
 管理端由已启用 TOTP 的用户 access token 发起的写操作同样要求近期 MFA；范围包括 `POST`、`PUT`、`DELETE`。设置 `MFA_REQUIRE_FOR_ADMINS=true` 后，所有人类管理员必须先 enrollment 再执行写操作。管理员客户端 access token 面向受控自动化，不适用交互式 MFA 校验。管理端查询接口不要求重复验证。
