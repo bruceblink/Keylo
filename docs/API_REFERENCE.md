@@ -651,7 +651,7 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 
 管理员解除关联会撤销该用户通过此身份源签发的 refresh session，并记录审计；若该关联是用户唯一的登录方式，接口返回冲突而不执行解除。
 
-将一个已启用的 `oidc_upstream` 身份源更新为 `active: false`，或替换其 `config`（例如 issuer、client 或凭据）时，Keylo 会立即撤销该来源的所有未撤销 refresh session，并记录管理员、来源 ID 与撤销数量。禁用记录为 `identity_source.disabled`，配置替换记录为 `identity_source.reconfigured`；已经签发的短期 access token 仍按其既有过期时间失效。
+将一个已启用的 `oidc_upstream` 身份源更新为 `active: false`，或替换其 `config`（例如 issuer、client 或凭据）时，Keylo 会立即撤销该来源的所有未撤销 refresh session，并删除尚未回调的浏览器授权事务，避免旧 trust configuration 下的 state 被继续使用。审计记录管理员、来源 ID、撤销会话数和失效事务数；禁用记录为 `identity_source.disabled`，配置替换记录为 `identity_source.reconfigured`。已经签发的短期 access token 仍按其既有过期时间失效。
 
 ---
 

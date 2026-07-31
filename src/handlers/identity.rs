@@ -836,13 +836,21 @@ pub async fn update_identity_source(
         )
         .await
         .map_err(|_| AuthError::DatabaseError("Failed to revoke upstream sessions".to_string()))?;
+        let invalidated_authorizations =
+            crate::db::invalidate_oidc_upstream_authorizations(db, &source.id)
+                .await
+                .map_err(|_| {
+                    AuthError::DatabaseError(
+                        "Failed to invalidate upstream authorizations".to_string(),
+                    )
+                })?;
         crate::db::create_audit_log(
             db,
             audit_event,
             Some(&claims.sub),
             Some(&format!(
-                "source_id={}; revoked_sessions={}",
-                source.id, revoked_sessions
+                "source_id={}; revoked_sessions={}; invalidated_authorizations={}",
+                source.id, revoked_sessions, invalidated_authorizations
             )),
         )
         .await

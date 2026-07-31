@@ -1468,6 +1468,16 @@ mod tests {
         )
         .await
         .unwrap();
+        let pending_authorization = keylo::models::new_oidc_upstream_authorization_state();
+        db::create_oidc_upstream_authorization(
+            &pool,
+            source_id,
+            &pending_authorization,
+            "encrypted-test-verifier",
+            chrono::Utc::now().timestamp() + 60,
+        )
+        .await
+        .unwrap();
 
         let reconfigure = server
             .put(&format!("/v1/admin/identity-sources/{source_id}"))
@@ -1492,12 +1502,19 @@ mod tests {
             sessions[0].revoke_reason.as_deref(),
             Some("identity_source_reconfigured")
         );
+        assert!(
+            db::consume_oidc_upstream_authorization(&pool, &pending_authorization.state)
+                .await
+                .unwrap()
+                .is_none(),
+            "source reconfiguration must invalidate pending browser authorization state"
+        );
         let audit_logs = db::get_recent_audit_logs(&pool, 20).await.unwrap();
         assert!(audit_logs.iter().any(|(event_type, _, detail, _)| {
             event_type == "identity_source.reconfigured"
-                && detail
-                    .as_deref()
-                    .is_some_and(|value| value.contains(source_id))
+                && detail.as_deref().is_some_and(|value| {
+                    value.contains(source_id) && value.contains("invalidated_authorizations=1")
+                })
         }));
     }
 

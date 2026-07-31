@@ -62,6 +62,20 @@ pub async fn consume_oidc_upstream_authorization(
     }))
 }
 
+/// Delete unfinished browser transactions when their upstream trust configuration changes.
+pub async fn invalidate_oidc_upstream_authorizations(
+    pool: &PgPool,
+    source_id: &str,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM oidc_upstream_authorizations WHERE source_id = $1 AND consumed_at IS NULL",
+    )
+    .bind(source_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Compare a callback value with its retained hash without retaining plaintext state.
 pub fn opaque_value_matches(value: &str, expected_hash: &str) -> bool {
     opaque_hash(value) == expected_hash
