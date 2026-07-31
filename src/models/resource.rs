@@ -55,6 +55,12 @@ pub struct ResourceChangeHistory {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RevertResourceChangeRequest {
+    pub expected_version: i64,
+    pub change_reason: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ResourceListQuery {
     pub app: Option<String>,
     #[serde(rename = "type")]

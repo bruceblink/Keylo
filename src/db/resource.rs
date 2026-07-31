@@ -152,6 +152,59 @@ pub async fn list_resource_change_history(
     .await?)
 }
 
+/// Loads a recorded resource change whose before_state is the exact target for a revert.
+pub async fn get_resource_change_history(
+    pool: &PgPool,
+    resource_id: &str,
+    version: i64,
+) -> Result<Option<ResourceChangeHistory>> {
+    Ok(sqlx::query_as::<_, ResourceChangeHistory>(
+        r#"
+        SELECT id, resource_id, version, actor, change_reason, before_state, after_state,
+               created_at
+        FROM resource_change_history
+        WHERE resource_id = $1 AND version = $2
+        "#,
+    )
+    .bind(resource_id)
+    .bind(version)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Restores mutable resource fields exactly, including nullable values, when the version matches.
+pub async fn restore_resource(
+    pool: &PgPool,
+    resource_id: &str,
+    target: &Resource,
+    expected_version: i64,
+) -> Result<Option<Resource>> {
+    Ok(sqlx::query_as::<_, Resource>(
+        r#"
+        UPDATE resources
+        SET name = $2,
+            display_order = $3,
+            description = $4,
+            metadata = $5,
+            active = $6,
+            version = version + 1,
+            updated_at = NOW()
+        WHERE id = $1 AND version = $7
+        RETURNING id, app, resource_type, code, name, parent_id, display_order, description,
+                  metadata, active, version, created_at, updated_at
+        "#,
+    )
+    .bind(resource_id)
+    .bind(&target.name)
+    .bind(target.display_order)
+    .bind(&target.description)
+    .bind(&target.metadata)
+    .bind(target.active)
+    .bind(expected_version)
+    .fetch_optional(pool)
+    .await?)
+}
+
 pub async fn list_resources(
     pool: &PgPool,
     app: Option<&str>,

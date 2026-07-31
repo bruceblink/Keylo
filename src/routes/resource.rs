@@ -11,7 +11,7 @@ use crate::{
     errors::AuthError,
     models::{
         AssignResourcePermissionRequest, Claims, CreateResourceRequest, ResourceListQuery,
-        RevokeResourcePermissionRequest, UpdateResourceRequest,
+        RevertResourceChangeRequest, RevokeResourcePermissionRequest, UpdateResourceRequest,
     },
     state::AppState,
 };
@@ -27,6 +27,10 @@ pub fn resource_admin_routes() -> Router<AppState> {
         .route(
             "/v1/admin/resources/{resource_id}/changes",
             get(list_resource_changes_handler),
+        )
+        .route(
+            "/v1/admin/resources/{resource_id}/changes/{version}/revert",
+            post(revert_resource_change_handler),
         )
         .route(
             "/v1/admin/resources/{resource_id}/permissions",
@@ -226,6 +230,69 @@ async fn list_resource_changes_handler(
     Ok(Json(json!({
         "success": true,
         "data": changes
+    })))
+}
+
+async fn revert_resource_change_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((resource_id, history_version)): Path<(String, i64)>,
+    Json(payload): Json<RevertResourceChangeRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let change_reason = payload.change_reason.trim();
+    if change_reason.is_empty() {
+        return Err(AuthError::InvalidRequest(
+            "change_reason is required when reverting a resource change".to_string(),
+        ));
+    }
+
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let before = crate::db::get_resource_by_id(db, &resource_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or(AuthError::NotFound)?;
+    let historical_change =
+        crate::db::get_resource_change_history(db, &resource_id, history_version)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+            .ok_or(AuthError::NotFound)?;
+    let target: crate::models::Resource = serde_json::from_value(historical_change.before_state)
+        .map_err(|e| {
+            AuthError::InternalServerError(format!("Stored resource history is invalid: {e}"))
+        })?;
+    let resource = crate::db::restore_resource(db, &resource_id, &target, payload.expected_version)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or_else(|| {
+            AuthError::Conflict("Resource changed since the supplied expected_version".to_string())
+        })?;
+    crate::db::create_resource_change_history(
+        db,
+        Some(&claims.sub),
+        Some(change_reason),
+        &before,
+        &resource,
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    crate::db::create_audit_log(
+        db,
+        "resource.reverted",
+        Some(&claims.sub),
+        Some(&format!(
+            "resource_id={}, reverted_change_version={}, version={}, reason={}",
+            resource.id, history_version, resource.version, change_reason
+        )),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": resource
     })))
 }
 
