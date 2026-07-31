@@ -33,9 +33,9 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 | 领域 | 已有能力 | 当前缺口 |
 | --- | --- | --- |
 | 主体与授权 | Principal、角色、权限、资源树、单点/批量授权检查 | 数据范围与上下文条件尚未形成受控策略模型。 |
-| Token 与会话 | RS256、JWKS、服务 Token、Refresh Session 原子轮换与重放撤销 | 缺少作为通用接入契约的 OIDC 授权码、PKCE、ID Token 和标准 Discovery。 |
-| 外部身份 | OAuth 登录、身份源注册表 | `oidc_upstream` 与 LDAP 当前仅登记配置，尚未进入可执行登录流程。 |
-| 安全 | 密码策略、限流、审计、密钥轮换 | 缺少 MFA、Passkey、恢复码与敏感操作的二次认证。 |
+| Token 与会话 | RS256、JWKS、服务 Token、OIDC 授权码、PKCE、Refresh Session 原子轮换与重放撤销 | 标准测试 IdP 的端到端兼容矩阵仍需持续覆盖。 |
+| 外部身份 | OAuth 登录、OIDC upstream Discovery/回调/UserInfo、claim 映射、JIT、关联/解除关联 | LDAP、SCIM 等目录生命周期能力尚未进入范围。 |
+| 安全 | 密码策略、限流、审计、密钥轮换、TOTP MFA、恢复码、敏感操作二次认证 | Passkey 与企业目录生命周期由明确需求触发。 |
 | 运维 | health/ready 检查、结构化日志、审计日志 | 缺少指标、分布式追踪、事件投递与 HA 演练基线。 |
 
 ## 3. 分阶段计划
@@ -138,4 +138,4 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 
 ## 6. 建议的下一项工作
 
-实施阶段 A 的第一项：**OIDC 客户端注册模型与 Discovery 契约**。先建立客户端、redirect URI 和 grant 的安全边界，再实现授权码与 PKCE，避免把协议参数散落进现有自定义登录接口。
+实施阶段 B 的验收项：**标准 OIDC 测试 IdP 兼容矩阵**。覆盖首次登录、重复登录、UserInfo 补充声明、邮箱变化、禁用用户/身份源和 refresh session 撤销，确保联邦链路的安全规则可被真实标准客户端复现。
