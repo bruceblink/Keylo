@@ -1215,6 +1215,7 @@ pub async fn auth_refresh(
             )));
         }
         ConsumeRefreshSessionResult::Replayed { session_id } => {
+            state.runtime_metrics.refresh_replay_observed();
             audit_event(
                 &state,
                 "auth.refresh.replay",

@@ -54,6 +54,7 @@ pub struct RuntimeMetrics {
     authentication_successes_total: AtomicU64,
     authentication_failures_total: AtomicU64,
     authorization_denials_total: AtomicU64,
+    refresh_replays_total: AtomicU64,
     in_flight: AtomicU64,
     duration_milliseconds_total: AtomicU64,
 }
@@ -68,6 +69,7 @@ impl RuntimeMetrics {
             authentication_successes_total: AtomicU64::new(0),
             authentication_failures_total: AtomicU64::new(0),
             authorization_denials_total: AtomicU64::new(0),
+            refresh_replays_total: AtomicU64::new(0),
             in_flight: AtomicU64::new(0),
             duration_milliseconds_total: AtomicU64::new(0),
         }
@@ -112,10 +114,15 @@ impl RuntimeMetrics {
         }
     }
 
+    /// Record a confirmed refresh-session replay after its atomic consume operation rejects it.
+    pub fn refresh_replay_observed(&self) {
+        self.refresh_replays_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Render Prometheus text exposition without labels that could leak request or identity values.
     pub fn prometheus_text(&self) -> String {
         format!(
-            "# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_authentication_successes_total counter\nkeylo_authentication_successes_total {}\n# TYPE keylo_authentication_failures_total counter\nkeylo_authentication_failures_total {}\n# TYPE keylo_authorization_denials_total counter\nkeylo_authorization_denials_total {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds_total counter\nkeylo_http_request_duration_milliseconds_total {}\n",
+            "# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_authentication_successes_total counter\nkeylo_authentication_successes_total {}\n# TYPE keylo_authentication_failures_total counter\nkeylo_authentication_failures_total {}\n# TYPE keylo_authorization_denials_total counter\nkeylo_authorization_denials_total {}\n# TYPE keylo_refresh_replays_total counter\nkeylo_refresh_replays_total {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds_total counter\nkeylo_http_request_duration_milliseconds_total {}\n",
             self.requests_total.load(Ordering::Relaxed),
             self.responses_2xx_total.load(Ordering::Relaxed),
             self.responses_4xx_total.load(Ordering::Relaxed),
@@ -123,6 +130,7 @@ impl RuntimeMetrics {
             self.authentication_successes_total.load(Ordering::Relaxed),
             self.authentication_failures_total.load(Ordering::Relaxed),
             self.authorization_denials_total.load(Ordering::Relaxed),
+            self.refresh_replays_total.load(Ordering::Relaxed),
             self.in_flight.load(Ordering::Relaxed),
             self.duration_milliseconds_total.load(Ordering::Relaxed),
         )
@@ -495,12 +503,14 @@ mod tests {
         metrics.request_started();
         metrics.request_finished(403, 5);
         metrics.security_outcome("/v1/authorize/check", 403);
+        metrics.refresh_replay_observed();
 
         let text = metrics.prometheus_text();
 
         assert!(text.contains("keylo_authentication_successes_total 1"));
         assert!(text.contains("keylo_authentication_failures_total 1"));
         assert!(text.contains("keylo_authorization_denials_total 1"));
+        assert!(text.contains("keylo_refresh_replays_total 1"));
         assert!(text.contains("keylo_http_requests_in_flight 0"));
     }
 }

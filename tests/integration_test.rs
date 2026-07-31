@@ -1623,6 +1623,11 @@ mod tests {
             .await;
         assert_eq!(replay_resp.status_code(), StatusCode::UNAUTHORIZED);
 
+        let metrics_resp = server.get("/metrics").await;
+        metrics_resp.assert_status_ok();
+        let metrics = metrics_resp.text();
+        assert!(metrics.contains("keylo_refresh_replays_total 1"));
+
         let revoked_session_resp = server
             .post("/v1/auth/refresh")
             .json(&json!({ "refresh_token": rotated_refresh_token }))
