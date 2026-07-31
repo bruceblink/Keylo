@@ -42,6 +42,18 @@ pub struct UpdateResourceRequest {
     pub change_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct ResourceChangeHistory {
+    pub id: String,
+    pub resource_id: String,
+    pub version: i64,
+    pub actor: Option<String>,
+    pub change_reason: Option<String>,
+    pub before_state: serde_json::Value,
+    pub after_state: serde_json::Value,
+    pub created_at: chrono::NaiveDateTime,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ResourceListQuery {
     pub app: Option<String>,

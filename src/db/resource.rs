@@ -3,7 +3,7 @@ use sqlx::{PgPool, Row};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::models::{Permission, Resource, ResourceTreeNode};
+use crate::models::{Permission, Resource, ResourceChangeHistory, ResourceTreeNode};
 
 pub struct CreateResourceParams<'a> {
     pub app: &'a str,
@@ -97,6 +97,58 @@ pub async fn update_resource(
     .bind(params.active)
     .bind(params.expected_version)
     .fetch_optional(pool)
+    .await?)
+}
+
+/// Stores immutable resource snapshots so UI/API capability changes can be inspected safely.
+pub async fn create_resource_change_history(
+    pool: &PgPool,
+    actor: Option<&str>,
+    change_reason: Option<&str>,
+    before: &Resource,
+    after: &Resource,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO resource_change_history
+            (id, resource_id, version, actor, change_reason, before_state, after_state)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(&after.id)
+    .bind(after.version)
+    .bind(actor)
+    .bind(change_reason)
+    .bind(serde_json::to_value(before)?)
+    .bind(serde_json::to_value(after)?)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Lists resource snapshots from newest to oldest for bounded administrative inspection.
+pub async fn list_resource_change_history(
+    pool: &PgPool,
+    resource_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ResourceChangeHistory>> {
+    Ok(sqlx::query_as::<_, ResourceChangeHistory>(
+        r#"
+        SELECT id, resource_id, version, actor, change_reason, before_state, after_state,
+               created_at
+        FROM resource_change_history
+        WHERE resource_id = $1
+        ORDER BY version DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(resource_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
     .await?)
 }
 

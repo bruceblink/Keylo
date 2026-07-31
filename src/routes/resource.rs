@@ -5,6 +5,7 @@ use axum::{
     Router,
 };
 use serde_json::json;
+use std::collections::HashMap;
 
 use crate::{
     errors::AuthError,
@@ -22,6 +23,10 @@ pub fn resource_admin_routes() -> Router<AppState> {
         .route(
             "/v1/admin/resources/{resource_id}",
             put(update_resource_handler),
+        )
+        .route(
+            "/v1/admin/resources/{resource_id}/changes",
+            get(list_resource_changes_handler),
         )
         .route(
             "/v1/admin/resources/{resource_id}/permissions",
@@ -140,13 +145,10 @@ async fn update_resource_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    if crate::db::get_resource_by_id(db, &resource_id)
+    let before = crate::db::get_resource_by_id(db, &resource_id)
         .await
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?
-        .is_none()
-    {
-        return Err(AuthError::NotFound);
-    }
+        .ok_or(AuthError::NotFound)?;
     let resource = crate::db::update_resource(
         db,
         &resource_id,
@@ -164,6 +166,20 @@ async fn update_resource_handler(
     .ok_or_else(|| {
         AuthError::Conflict("Resource changed since the supplied expected_version".to_string())
     })?;
+    let change_reason = payload
+        .change_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty());
+    crate::db::create_resource_change_history(
+        db,
+        Some(&claims.sub),
+        change_reason,
+        &before,
+        &resource,
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
     crate::db::create_audit_log(
         db,
         "resource.updated",
@@ -172,7 +188,7 @@ async fn update_resource_handler(
             "resource_id={}, version={}{}",
             resource.id,
             resource.version,
-            audit_reason_suffix(payload.change_reason.as_deref()),
+            audit_reason_suffix(change_reason),
         )),
     )
     .await
@@ -181,6 +197,35 @@ async fn update_resource_handler(
     Ok(Json(json!({
         "success": true,
         "data": resource
+    })))
+}
+
+async fn list_resource_changes_handler(
+    State(state): State<AppState>,
+    Path(resource_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let changes = crate::db::list_resource_change_history(db, &resource_id, limit, offset)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": changes
     })))
 }
 

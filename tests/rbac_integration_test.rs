@@ -692,6 +692,25 @@ mod tests {
         let resource_update: serde_json::Value = resource_update_resp.json();
         assert_eq!(resource_update["data"]["version"], resource_version + 1);
 
+        let resource_changes_resp = server
+            .get(&format!("/v1/admin/resources/{}/changes", resource_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        resource_changes_resp.assert_status_ok();
+        let resource_changes: serde_json::Value = resource_changes_resp.json();
+        let resource_change = resource_changes["data"]
+            .as_array()
+            .unwrap()
+            .first()
+            .unwrap();
+        assert_eq!(resource_change["version"], resource_version + 1);
+        assert_eq!(
+            resource_change["change_reason"],
+            "rename published capability"
+        );
+        assert_eq!(resource_change["before_state"]["name"], "Crawler invoke");
+        assert_eq!(resource_change["after_state"]["name"], "Crawler invoke v2");
+
         let stale_resource_update_resp = server
             .put(&format!("/v1/admin/resources/{}", resource_id))
             .add_header("Authorization", format!("Bearer {}", token))
