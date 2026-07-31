@@ -91,6 +91,12 @@ pub struct PermissionChangeHistory {
     pub created_at: chrono::NaiveDateTime,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RevertPermissionChangeRequest {
+    pub expected_version: i64,
+    pub change_reason: String,
+}
+
 /// 用户角色关系
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct UserRole {

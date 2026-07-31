@@ -46,6 +46,10 @@ pub fn rbac_routes() -> Router<AppState> {
             "/permissions/{permission_id}/changes",
             get(list_permission_changes_handler),
         )
+        .route(
+            "/permissions/{permission_id}/changes/{version}/revert",
+            post(revert_permission_change_handler),
+        )
         // 用户角色管理路由
         .route("/users/{user_id}/roles", get(get_user_roles_handler))
         .route("/users/{user_id}/roles", post(assign_role_to_user_handler))
@@ -759,6 +763,111 @@ async fn list_permission_changes_handler(
     Ok(Json(json!({
         "success": true,
         "data": changes
+    })))
+}
+
+async fn revert_permission_change_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((permission_id, history_version)): Path<(String, i64)>,
+    Json(payload): Json<RevertPermissionChangeRequest>,
+) -> ApiResponse {
+    let change_reason = payload.change_reason.trim();
+    if change_reason.is_empty() {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "change_reason_required",
+            "change_reason is required when reverting a permission change",
+        ));
+    }
+
+    let db = require_db(&state)?;
+    let before = get_permission_by_id(db, &permission_id)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "permission_lookup_failed",
+                &format!("Failed to look up permission: {}", e),
+            )
+        })?
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::NOT_FOUND,
+                "permission_not_found",
+                "Permission not found",
+            )
+        })?;
+    let historical_change = get_permission_change_history(db, &permission_id, history_version)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "permission_history_failed",
+                &format!("Failed to load permission change: {}", e),
+            )
+        })?
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::NOT_FOUND,
+                "permission_change_not_found",
+                "Permission change not found",
+            )
+        })?;
+    let target: Permission =
+        serde_json::from_value(historical_change.before_state).map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "permission_history_invalid",
+                &format!("Stored permission history is invalid: {}", e),
+            )
+        })?;
+
+    let permission = restore_permission(db, &permission_id, &target, payload.expected_version)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "permission_restore_failed",
+                &format!("Failed to restore permission: {}", e),
+            )
+        })?
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::CONFLICT,
+                "permission_version_conflict",
+                "Permission changed since the supplied expected_version",
+            )
+        })?;
+    create_permission_change_history(
+        db,
+        Some(&claims.sub),
+        Some(change_reason),
+        &before,
+        &permission,
+    )
+    .await
+    .map_err(|e| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "permission_history_failed",
+            &format!("Failed to record permission revert: {}", e),
+        )
+    })?;
+    audit_event(
+        &state,
+        "rbac.permission.reverted",
+        Some(&claims.sub),
+        format!(
+            "permission_id={}, reverted_change_version={}, version={}, reason={}",
+            permission.id, history_version, permission.version, change_reason
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": permission
     })))
 }
 

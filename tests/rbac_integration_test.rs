@@ -261,6 +261,23 @@ mod tests {
             "Updated permission description"
         );
 
+        let revert_response = server
+            .post(&format!(
+                "/api/rbac/permissions/{}/changes/{}/revert",
+                permission_id,
+                version + 1
+            ))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "expected_version": version + 1,
+                "change_reason": "restore approved permission description",
+            }))
+            .await;
+        revert_response.assert_status_ok();
+        let reverted: serde_json::Value = revert_response.json();
+        assert_eq!(reverted["data"]["version"], version + 2);
+        assert_eq!(reverted["data"]["description"], "Manage users permission");
+
         let stale_update_response = server
             .put(&format!("/api/rbac/permissions/{}", permission_id))
             .add_header("Authorization", format!("Bearer {}", token))

@@ -493,6 +493,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 更新权限同样可提供 `expected_version`，版本不一致返回 `409 permission_version_conflict`。
 `change_reason` 可选，提供时会进入权限结构化变更历史；通过 `GET /api/rbac/permissions/{permission_id}/changes?limit=&offset=` 查询版本、操作者、原因和前后快照。
+`POST /api/rbac/permissions/{permission_id}/changes/{version}/revert` 会恢复该历史变更的 `before_state`，请求必须包含当前 `expected_version` 与非空 `change_reason`；回滚会产生新的版本和历史记录。
 
 ### 7.4 Resource 管理
 

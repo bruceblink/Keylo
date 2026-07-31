@@ -473,6 +473,52 @@ pub async fn list_permission_change_history(
     .await?)
 }
 
+/// Loads one recorded permission change whose before_state is the exact target for a revert.
+pub async fn get_permission_change_history(
+    pool: &PgPool,
+    permission_id: &str,
+    version: i64,
+) -> Result<Option<PermissionChangeHistory>> {
+    Ok(sqlx::query_as::<_, PermissionChangeHistory>(
+        r#"
+        SELECT id, permission_id, version, actor, change_reason, before_state, after_state,
+               created_at
+        FROM permission_change_history
+        WHERE permission_id = $1 AND version = $2
+        "#,
+    )
+    .bind(permission_id)
+    .bind(version)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Restores every mutable permission field from a snapshot when the caller still has the current version.
+pub async fn restore_permission(
+    pool: &PgPool,
+    permission_id: &str,
+    target: &Permission,
+    expected_version: i64,
+) -> Result<Option<Permission>> {
+    Ok(sqlx::query_as::<_, Permission>(
+        r#"
+        UPDATE permissions
+        SET name = $2,
+            description = $3,
+            version = version + 1,
+            updated_at = NOW()
+        WHERE id = $1 AND version = $4
+        RETURNING id, name, description, version, created_at, updated_at
+        "#,
+    )
+    .bind(permission_id)
+    .bind(&target.name)
+    .bind(&target.description)
+    .bind(expected_version)
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// 删除权限
 pub async fn delete_permission(pool: &PgPool, permission_id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM permissions WHERE id = $1")
