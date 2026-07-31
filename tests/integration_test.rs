@@ -1155,6 +1155,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_admin_can_list_oidc_identity_source_links_without_external_subjects() {
+        let server = setup_test_server().await;
+
+        let admin_login_resp = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login_resp.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login_resp.json();
+        let admin_access_token = admin_body["access_token"].as_str().unwrap();
+        let source_name = format!(
+            "corporate-idp-links-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+
+        let create_resp = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .json(&json!({
+                "name": source_name,
+                "source_type": "oidc_upstream",
+                "display_name": "Corporate IdP",
+                "config": {
+                    "issuer": "https://idp.example.test",
+                    "client_id": "keylo-test-client",
+                    "redirect_uri": "https://keylo.example.test/v1/upstream/oidc/callback"
+                },
+                "claim_mapping": {"external_subject": "sub", "email": "email"}
+            }))
+            .await;
+        create_resp.assert_status_ok();
+        let source: serde_json::Value = create_resp.json();
+        let source_id = source["id"].as_str().unwrap();
+
+        let links_resp = server
+            .get(&format!("/v1/admin/identity-sources/{}/links", source_id))
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .await;
+        links_resp.assert_status_ok();
+        let body: serde_json::Value = links_resp.json();
+        assert_eq!(body["source_id"], source_id);
+        assert_eq!(body["links"], json!([]));
+        assert!(body.get("external_subject").is_none());
+    }
+
+    #[tokio::test]
     async fn test_identity_source_admin_api_rejects_invalid_source_type() {
         let server = setup_test_server().await;
 

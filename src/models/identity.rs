@@ -32,6 +32,15 @@ pub struct LinkedOidcIdentitySource {
     pub linked_at: chrono::NaiveDateTime,
 }
 
+/// A safe administrator view of local users linked to one upstream OIDC source.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct OidcIdentitySourceLink {
+    pub user_id: String,
+    pub username: String,
+    pub email: String,
+    pub linked_at: chrono::NaiveDateTime,
+}
+
 impl IdentitySource {
     /// Return metadata safe for API responses by redacting credential-bearing config values.
     pub fn redacted_for_response(mut self) -> Self {

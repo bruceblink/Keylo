@@ -385,6 +385,25 @@ pub async fn get_identity_source(
     Ok(Json(source.redacted_for_response()))
 }
 
+/// List safely redacted local users associated with one upstream OIDC identity source.
+pub async fn list_oidc_identity_source_links(
+    State(state): State<AppState>,
+    Path(source_id): Path<String>,
+) -> Result<Json<Value>, AuthError> {
+    let db = require_db(&state)?;
+    let source = identity_db::get_identity_source(db, &source_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .filter(|source| source.source_type == "oidc_upstream")
+        .ok_or(AuthError::NotFound)?;
+    let links = identity_db::list_oidc_identity_source_links(db, &source.id)
+        .await
+        .map_err(|_| {
+            AuthError::DatabaseError("Failed to list identity source links".to_string())
+        })?;
+    Ok(Json(json!({"source_id": source.id, "links": links})))
+}
+
 /// Fetch and validate public OIDC Discovery metadata for an active upstream source.
 pub async fn discover_oidc_upstream(
     State(state): State<AppState>,

@@ -3,7 +3,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::{IdentitySource, LinkedOidcIdentitySource};
+use crate::models::{IdentitySource, LinkedOidcIdentitySource, OidcIdentitySourceLink};
 
 pub struct CreateIdentitySourceParams<'a> {
     pub name: &'a str,
@@ -121,6 +121,28 @@ pub async fn list_linked_oidc_identity_sources(
         "#,
     )
     .bind(user_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// List local users linked to one upstream source without returning external subject values.
+pub async fn list_oidc_identity_source_links(
+    pool: &PgPool,
+    source_id: &str,
+) -> Result<Vec<OidcIdentitySourceLink>> {
+    Ok(sqlx::query_as::<_, OidcIdentitySourceLink>(
+        r#"
+        SELECT user_record.id AS user_id,
+               user_record.username,
+               user_record.email,
+               mapping.created_at AS linked_at
+        FROM external_user_mappings AS mapping
+        INNER JOIN users AS user_record ON user_record.id = mapping.user_id
+        WHERE mapping.provider = CONCAT('oidc_upstream:', $1)
+        ORDER BY mapping.created_at DESC, user_record.id
+        "#,
+    )
+    .bind(source_id)
     .fetch_all(pool)
     .await?)
 }
