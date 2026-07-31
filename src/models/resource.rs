@@ -48,6 +48,12 @@ pub struct ResourceTreeQuery {
 #[derive(Debug, Deserialize)]
 pub struct AssignResourcePermissionRequest {
     pub permission_id: String,
+    pub change_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevokeResourcePermissionRequest {
+    pub change_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

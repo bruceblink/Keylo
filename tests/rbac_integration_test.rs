@@ -672,6 +672,46 @@ mod tests {
             .iter()
             .any(|node| node["resource"]["code"] == resource_code));
 
+        let revoke_resource_permission_resp = server
+            .delete(&format!(
+                "/v1/admin/resources/{}/permissions/{}",
+                resource_id, permission_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "change_reason": "retire crawler capability" }))
+            .await;
+        revoke_resource_permission_resp.assert_status_ok();
+
+        let revoked_resource_check_resp = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {}", service_token))
+            .json(&json!({
+                "app": "crawler",
+                "resource_type": "service",
+                "resource_code": resource_code,
+            }))
+            .await;
+        revoked_resource_check_resp.assert_status_ok();
+        let revoked_resource_check: serde_json::Value = revoked_resource_check_resp.json();
+        assert_eq!(revoked_resource_check["data"]["allowed"], false);
+        assert_eq!(
+            revoked_resource_check["data"]["reason"],
+            "permission_not_resolved"
+        );
+
+        let audit_logs_resp = server
+            .get("/v1/admin/audit-logs?limit=200")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        audit_logs_resp.assert_status_ok();
+        let audit_logs: serde_json::Value = audit_logs_resp.json();
+        assert!(audit_logs["data"].as_array().unwrap().iter().any(|audit| {
+            audit["event_type"] == "resource.permission_revoked"
+                && audit["detail"]
+                    .as_str()
+                    .is_some_and(|detail| detail.contains("reason=retire crawler capability"))
+        }));
+
         let denied_token_resp = server
             .post("/v1/service/token")
             .json(&json!({

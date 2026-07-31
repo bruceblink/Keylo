@@ -124,6 +124,23 @@ pub async fn assign_permission_to_resource(
     Ok(())
 }
 
+/// Removes one explicit resource-permission binding and reports whether it existed.
+pub async fn revoke_permission_from_resource(
+    pool: &PgPool,
+    resource_id: &str,
+    permission_id: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "DELETE FROM resource_permissions WHERE resource_id = $1 AND permission_id = $2",
+    )
+    .bind(resource_id)
+    .bind(permission_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 pub async fn get_resource_permissions(pool: &PgPool, resource_id: &str) -> Result<Vec<Permission>> {
     Ok(sqlx::query_as::<_, Permission>(
         r#"

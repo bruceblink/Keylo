@@ -1,14 +1,17 @@
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use serde_json::json;
 
 use crate::{
     errors::AuthError,
-    models::{AssignResourcePermissionRequest, Claims, CreateResourceRequest, ResourceListQuery},
+    models::{
+        AssignResourcePermissionRequest, Claims, CreateResourceRequest, ResourceListQuery,
+        RevokeResourcePermissionRequest,
+    },
     state::AppState,
 };
 
@@ -23,6 +26,10 @@ pub fn resource_admin_routes() -> Router<AppState> {
         .route(
             "/v1/admin/resources/{resource_id}/permissions",
             post(assign_resource_permission_handler),
+        )
+        .route(
+            "/v1/admin/resources/{resource_id}/permissions/{permission_id}",
+            delete(revoke_resource_permission_handler),
         )
 }
 
@@ -137,8 +144,10 @@ async fn assign_resource_permission_handler(
         "resource.permission_assigned",
         Some(&claims.sub),
         Some(&format!(
-            "resource_id={}, permission_id={}",
-            resource_id, payload.permission_id
+            "resource_id={}, permission_id={}{}",
+            resource_id,
+            payload.permission_id,
+            audit_reason_suffix(payload.change_reason.as_deref()),
         )),
     )
     .await
@@ -147,5 +156,50 @@ async fn assign_resource_permission_handler(
     Ok(Json(json!({
         "success": true,
         "message": "Permission assigned to resource successfully"
+    })))
+}
+
+/// Formats an optional operator reason for audit data without storing blank values.
+fn audit_reason_suffix(change_reason: Option<&str>) -> String {
+    change_reason
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(|reason| format!(", reason={reason}"))
+        .unwrap_or_default()
+}
+
+async fn revoke_resource_permission_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((resource_id, permission_id)): Path<(String, String)>,
+    Json(payload): Json<RevokeResourcePermissionRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let revoked = crate::db::revoke_permission_from_resource(db, &resource_id, &permission_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    if !revoked {
+        return Err(AuthError::NotFound);
+    }
+    crate::db::create_audit_log(
+        db,
+        "resource.permission_revoked",
+        Some(&claims.sub),
+        Some(&format!(
+            "resource_id={}, permission_id={}{}",
+            resource_id,
+            permission_id,
+            audit_reason_suffix(payload.change_reason.as_deref()),
+        )),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Permission revoked from resource successfully"
     })))
 }

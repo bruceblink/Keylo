@@ -500,7 +500,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | GET | `/v1/admin/resources?app=&type=&active=` | 资源列表 |
 | POST | `/v1/admin/resources` | 创建或更新资源 |
 | GET | `/v1/admin/resources/{resource_id}/permissions` | 查询资源绑定的权限 |
-| POST | `/v1/admin/resources/{resource_id}/permissions` | 给资源绑定权限 |
+| POST | `/v1/admin/resources/{resource_id}/permissions` | 给资源绑定权限，可选 `change_reason` 写入审计日志 |
+| DELETE | `/v1/admin/resources/{resource_id}/permissions/{permission_id}` | 撤销资源权限绑定，请求体可选 `change_reason` 写入审计日志 |
 
 创建资源请求体：
 
