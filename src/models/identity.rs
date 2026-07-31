@@ -128,6 +128,7 @@ pub struct OidcUpstreamIdTokenClaims {
     pub sub: String,
     #[serde(default)]
     pub aud: Value,
+    pub azp: Option<String>,
     pub exp: i64,
     pub nonce: Option<String>,
     pub email: Option<String>,
@@ -372,7 +373,19 @@ pub fn validate_oidc_upstream_id_token_claims(
             .aud
             .as_array()
             .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(client_id)));
-    if !audience_matches || claims.exp <= now {
+    let has_multiple_audiences = claims
+        .aud
+        .as_array()
+        .is_some_and(|audiences| audiences.len() > 1);
+    let authorized_party_matches = claims
+        .azp
+        .as_deref()
+        .is_none_or(|authorized_party| authorized_party == client_id);
+    if !audience_matches
+        || !authorized_party_matches
+        || (has_multiple_audiences && claims.azp.as_deref() != Some(client_id))
+        || claims.exp <= now
+    {
         return Err("Upstream ID Token audience or expiry is invalid".to_string());
     }
     let nonce = claims
@@ -631,6 +644,7 @@ mod tests {
             iss: "https://idp.example".to_string(),
             sub: "user-1".to_string(),
             aud: json!(["keylo-client"]),
+            azp: None,
             exp: 2_000,
             nonce: Some(nonce.to_string()),
             email: None,
@@ -656,6 +670,48 @@ mod tests {
             1_000,
         )
         .is_err());
+
+        let multi_audience_claims = super::OidcUpstreamIdTokenClaims {
+            iss: "https://idp.example".to_string(),
+            sub: "user-1".to_string(),
+            aud: json!(["keylo-client", "other-client"]),
+            azp: None,
+            exp: 2_000,
+            nonce: Some(nonce.to_string()),
+            email: None,
+            email_verified: None,
+            preferred_username: None,
+            additional_claims: serde_json::Map::new(),
+        };
+        assert!(super::validate_oidc_upstream_id_token_claims(
+            &multi_audience_claims,
+            "https://idp.example",
+            "keylo-client",
+            &nonce_hash,
+            1_000,
+        )
+        .is_err());
+
+        let authorized_multi_audience_claims = super::OidcUpstreamIdTokenClaims {
+            iss: "https://idp.example".to_string(),
+            sub: "user-1".to_string(),
+            aud: json!(["keylo-client", "other-client"]),
+            azp: Some("keylo-client".to_string()),
+            exp: 2_000,
+            nonce: Some(nonce.to_string()),
+            email: None,
+            email_verified: None,
+            preferred_username: None,
+            additional_claims: serde_json::Map::new(),
+        };
+        assert!(super::validate_oidc_upstream_id_token_claims(
+            &authorized_multi_audience_claims,
+            "https://idp.example",
+            "keylo-client",
+            &nonce_hash,
+            1_000,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -664,6 +720,7 @@ mod tests {
             iss: "https://idp.example".to_string(),
             sub: "external-1".to_string(),
             aud: json!("keylo"),
+            azp: None,
             exp: 2_000,
             nonce: None,
             email: Some(" Alice@Example.COM ".to_string()),
@@ -683,6 +740,7 @@ mod tests {
             iss: "https://idp.example".to_string(),
             sub: "ignored-subject".to_string(),
             aud: json!("keylo"),
+            azp: None,
             exp: 2_000,
             nonce: None,
             email: None,
@@ -725,6 +783,7 @@ mod tests {
             iss: "https://idp.example".to_string(),
             sub: "external-1".to_string(),
             aud: json!("keylo"),
+            azp: None,
             exp: 2_000,
             nonce: None,
             email: None,
@@ -753,6 +812,7 @@ mod tests {
             iss: "https://idp.example".to_string(),
             sub: "external-1".to_string(),
             aud: json!("keylo"),
+            azp: None,
             exp: 2_000,
             nonce: None,
             email: None,
