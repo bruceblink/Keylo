@@ -107,6 +107,7 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX),
+            probe_result.is_ok(),
         );
         match probe_result {
             Ok(_) => checks["database"] = json!("ok"),
@@ -162,6 +163,7 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                     .as_millis()
                     .try_into()
                     .unwrap_or(u64::MAX),
+                probe_result.is_ok(),
             );
             match probe_result {
                 Ok(_) => checks["redis"] = json!("ok"),

@@ -36,7 +36,7 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 | Token 与会话 | RS256、JWKS、服务 Token、OIDC 授权码、PKCE、Refresh Session 原子轮换与重放撤销 | 标准测试 IdP 的端到端兼容矩阵仍需持续覆盖。 |
 | 外部身份 | OAuth 登录、OIDC upstream Discovery/回调/UserInfo、claim 映射、JIT、关联/解除关联 | LDAP、SCIM 等目录生命周期能力尚未进入范围。 |
 | 安全 | 密码策略、限流、审计、密钥轮换、TOTP MFA、恢复码、敏感操作二次认证 | Passkey 与企业目录生命周期由明确需求触发。 |
-| 运维 | health/ready 检查、结构化日志、审计日志、`/metrics` Prometheus HTTP/认证结果/refresh replay/限流拒绝与数据库/Redis 就绪探针延迟指标 | 缺少业务数据库/Redis 操作延迟、分布式追踪、事件投递与 HA 演练基线。 |
+| 运维 | health/ready 检查、结构化日志、审计日志、`/metrics` Prometheus HTTP/认证结果/refresh replay/限流拒绝与数据库/Redis 就绪探针延迟及成功/失败指标 | 缺少业务数据库/Redis 操作延迟、分布式追踪、事件投递与 HA 演练基线。 |
 
 ## 3. 分阶段计划
 
