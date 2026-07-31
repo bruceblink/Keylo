@@ -584,16 +584,23 @@ pub async fn complete_oidc_upstream_login(
     State(state): State<AppState>,
     Query(query): Query<OidcUpstreamCallbackQuery>,
 ) -> Result<Json<Value>, AuthError> {
-    if query.error.is_some() {
-        return Err(AuthError::InvalidRequest(
-            "Upstream OIDC authorization was denied".to_string(),
-        ));
-    }
     let db = require_db(&state)?;
     let state_value = query
         .state
         .as_deref()
         .ok_or_else(|| AuthError::InvalidRequest("Missing OIDC callback state".to_string()))?;
+    if query.error.is_some() {
+        // An IdP error ends this browser transaction too, so its state cannot be reused with a later code.
+        crate::db::consume_oidc_upstream_authorization(db, state_value)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+            .ok_or_else(|| {
+                AuthError::InvalidRequest("Invalid or expired OIDC callback state".to_string())
+            })?;
+        return Err(AuthError::InvalidRequest(
+            "Upstream OIDC authorization was denied".to_string(),
+        ));
+    }
     let code = query
         .code
         .as_deref()

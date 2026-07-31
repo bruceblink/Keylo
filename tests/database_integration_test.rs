@@ -185,6 +185,58 @@ mod database_tests {
     }
 
     #[tokio::test]
+    async fn test_upstream_oidc_callback_state_is_one_time_use() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_upstream_oidc_callback_state_is_one_time_use: {msg}");
+                return;
+            }
+        };
+        let source_name = format!("upstream-state-idp-{}", uuid::Uuid::new_v4());
+        let source = db::identity::create_identity_source(
+            &pool,
+            db::identity::CreateIdentitySourceParams {
+                name: &source_name,
+                source_type: "oidc_upstream",
+                display_name: "Upstream State Test IdP",
+                description: None,
+                config: &serde_json::json!({}),
+                claim_mapping: &serde_json::json!({}),
+                jit_enabled: true,
+                auto_link_enabled: true,
+                active: true,
+            },
+        )
+        .await
+        .expect("Failed to create upstream OIDC source");
+        let transaction = keylo::models::new_oidc_upstream_authorization_state();
+
+        db::create_oidc_upstream_authorization(
+            &pool,
+            &source.id,
+            &transaction,
+            "encrypted-test-verifier",
+            chrono::Utc::now().timestamp() + 60,
+        )
+        .await
+        .expect("Failed to store upstream OIDC transaction");
+
+        let first = db::consume_oidc_upstream_authorization(&pool, &transaction.state)
+            .await
+            .expect("Failed to consume upstream OIDC transaction");
+        assert!(first.is_some(), "The fresh upstream state must be accepted");
+        let replay = db::consume_oidc_upstream_authorization(&pool, &transaction.state)
+            .await
+            .expect("Failed to check replayed upstream OIDC transaction");
+        assert!(
+            replay.is_none(),
+            "A consumed upstream state must not be reusable"
+        );
+    }
+
+    #[tokio::test]
     async fn test_refresh_token_operations() {
         let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {

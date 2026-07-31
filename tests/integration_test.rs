@@ -2,6 +2,7 @@ use axum::body::Bytes;
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use keylo::config::{build_database_url, database_password_from_env_result, Config};
+use keylo::db;
 use keylo::startup;
 use serde_json::json;
 
@@ -1272,6 +1273,73 @@ mod tests {
             .add_header("Authorization", format!("Bearer {}", admin_access_token))
             .await;
         assert_eq!(unlink_resp.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_upstream_oidc_denial_consumes_callback_state() {
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login.assert_status_ok();
+        let admin_body: serde_json::Value = admin_login.json();
+        let admin_token = admin_body["access_token"].as_str().unwrap();
+        let source_name = format!(
+            "upstream-denial-{}",
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let create_source = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "name": source_name,
+                "source_type": "oidc_upstream",
+                "display_name": "Upstream denial test",
+                "config": {
+                    "issuer": "https://idp.example.test",
+                    "client_id": "keylo-test-client",
+                    "client_secret": "test-upstream-secret",
+                    "redirect_uri": "https://keylo.example.test/v1/upstream/oidc/callback"
+                }
+            }))
+            .await;
+        create_source.assert_status_ok();
+        let source: serde_json::Value = create_source.json();
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = match db::init_db_pool(&database_url).await {
+            Ok(pool) => pool,
+            Err(_) => return,
+        };
+        let transaction = keylo::models::new_oidc_upstream_authorization_state();
+        db::create_oidc_upstream_authorization(
+            &pool,
+            source["id"].as_str().unwrap(),
+            &transaction,
+            "encrypted-test-verifier",
+            chrono::Utc::now().timestamp() + 60,
+        )
+        .await
+        .unwrap();
+
+        let denial = server
+            .get(&format!(
+                "/v1/upstream/oidc/callback?state={}&error=access_denied",
+                transaction.state
+            ))
+            .await;
+        assert_eq!(denial.status_code(), StatusCode::BAD_REQUEST);
+        let replay = db::consume_oidc_upstream_authorization(&pool, &transaction.state)
+            .await
+            .unwrap();
+        assert!(replay.is_none(), "A denied callback state must be consumed");
     }
 
     #[tokio::test]
