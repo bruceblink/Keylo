@@ -161,6 +161,23 @@ mod tests {
             change["after_state"]["description"],
             "Auditable role update"
         );
+
+        let revert_resp = server
+            .post(&format!(
+                "/api/rbac/roles/{}/changes/{}/revert",
+                role_id,
+                version + 1
+            ))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "expected_version": version + 1,
+                "change_reason": "restore original role definition",
+            }))
+            .await;
+        revert_resp.assert_status_ok();
+        let reverted: serde_json::Value = revert_resp.json();
+        assert_eq!(reverted["data"]["version"], version + 2);
+        assert_eq!(reverted["data"]["description"], serde_json::Value::Null);
     }
 
     #[tokio::test]

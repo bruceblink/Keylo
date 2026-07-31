@@ -249,6 +249,57 @@ pub async fn list_role_change_history(
     .await?)
 }
 
+/// Loads one recorded role change whose before_state is the exact target for a revert operation.
+pub async fn get_role_change_history(
+    pool: &PgPool,
+    role_id: &str,
+    version: i64,
+) -> Result<Option<RoleChangeHistory>> {
+    Ok(sqlx::query_as::<_, RoleChangeHistory>(
+        r#"
+        SELECT id, role_id, version, actor, change_reason, before_state, after_state, created_at
+        FROM role_change_history
+        WHERE role_id = $1 AND version = $2
+        "#,
+    )
+    .bind(role_id)
+    .bind(version)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Restores every mutable role field from a historical snapshot when the current version still matches.
+pub async fn restore_role(
+    pool: &PgPool,
+    role_id: &str,
+    target: &Role,
+    expected_version: i64,
+) -> Result<Option<Role>> {
+    ensure_role_assignable_to_update_is_compatible(pool, role_id, &target.assignable_to).await?;
+
+    Ok(sqlx::query_as::<_, Role>(
+        r#"
+        UPDATE roles
+        SET name = $2,
+            description = $3,
+            assignable_to = $4,
+            system = $5,
+            version = version + 1,
+            updated_at = NOW()
+        WHERE id = $1 AND version = $6
+        RETURNING id, name, description, assignable_to, system, version, created_at, updated_at
+        "#,
+    )
+    .bind(role_id)
+    .bind(&target.name)
+    .bind(&target.description)
+    .bind(&target.assignable_to)
+    .bind(target.system)
+    .bind(expected_version)
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// 删除角色
 pub async fn delete_role(pool: &PgPool, role_id: &str) -> Result<bool> {
     let result = sqlx::query("DELETE FROM roles WHERE id = $1")

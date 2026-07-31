@@ -46,6 +46,12 @@ pub struct RoleChangeHistory {
     pub created_at: chrono::NaiveDateTime,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RevertRoleChangeRequest {
+    pub expected_version: i64,
+    pub change_reason: String,
+}
+
 /// 权限模型
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Permission {

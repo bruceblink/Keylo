@@ -26,6 +26,10 @@ pub fn rbac_routes() -> Router<AppState> {
         .route("/roles/{role_id}", put(update_role_handler))
         .route("/roles/{role_id}", delete(delete_role_handler))
         .route("/roles/{role_id}/changes", get(list_role_changes_handler))
+        .route(
+            "/roles/{role_id}/changes/{version}/revert",
+            post(revert_role_change_handler),
+        )
         // 权限管理路由
         .route("/permissions", get(get_permissions))
         .route("/permissions", post(create_permission_handler))
@@ -387,6 +391,92 @@ async fn list_role_changes_handler(
     Ok(Json(json!({
         "success": true,
         "data": changes
+    })))
+}
+
+async fn revert_role_change_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((role_id, history_version)): Path<(String, i64)>,
+    Json(payload): Json<RevertRoleChangeRequest>,
+) -> ApiResponse {
+    let change_reason = payload.change_reason.trim();
+    if change_reason.is_empty() {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "change_reason_required",
+            "change_reason is required when reverting a role change",
+        ));
+    }
+
+    let db = require_db(&state)?;
+    let before = get_role_by_id(db, &role_id)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "role_lookup_failed",
+                &format!("Failed to look up role: {}", e),
+            )
+        })?
+        .ok_or_else(|| error_response(StatusCode::NOT_FOUND, "role_not_found", "Role not found"))?;
+    let historical_change = get_role_change_history(db, &role_id, history_version)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "role_history_failed",
+                &format!("Failed to load role change: {}", e),
+            )
+        })?
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::NOT_FOUND,
+                "role_change_not_found",
+                "Role change not found",
+            )
+        })?;
+    let target: Role = serde_json::from_value(historical_change.before_state).map_err(|e| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "role_history_invalid",
+            &format!("Stored role history is invalid: {}", e),
+        )
+    })?;
+
+    let role = restore_role(db, &role_id, &target, payload.expected_version)
+        .await
+        .map_err(|e| role_update_error_response(&e))?
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::CONFLICT,
+                "role_version_conflict",
+                "Role changed since the supplied expected_version",
+            )
+        })?;
+    create_role_change_history(db, Some(&claims.sub), Some(change_reason), &before, &role)
+        .await
+        .map_err(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "role_history_failed",
+                &format!("Failed to record role revert: {}", e),
+            )
+        })?;
+    audit_event(
+        &state,
+        "rbac.role.reverted",
+        Some(&claims.sub),
+        format!(
+            "role_id={}, reverted_change_version={}, version={}, reason={}",
+            role.id, history_version, role.version, change_reason
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": role
     })))
 }
 
