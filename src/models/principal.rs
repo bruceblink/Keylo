@@ -23,6 +23,27 @@ pub struct PrincipalListQuery {
     pub offset: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AuthorizationAuditLogListQuery {
+    pub principal_id: Option<String>,
+    pub decision: Option<String>,
+    pub permission_name: Option<String>,
+    pub resource_id: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct AuthorizationAuditLog {
+    pub id: String,
+    pub principal_id: Option<String>,
+    pub decision: String,
+    pub permission_name: Option<String>,
+    pub resource_id: Option<String>,
+    pub detail: Option<String>,
+    pub created_at: chrono::NaiveDateTime,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PrincipalEffectivePermissionsResponse {
     pub principal: Principal,

@@ -2,7 +2,7 @@ use anyhow::Result;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::models::{Permission, Principal, Role};
+use crate::models::{AuthorizationAuditLog, Permission, Principal, Role};
 
 fn principal_id(principal_type: &str, ref_id: &str) -> String {
     format!("{}-{}", principal_type, ref_id)
@@ -368,4 +368,38 @@ pub async fn create_authorization_audit_log(
     .await?;
 
     Ok(())
+}
+
+/// Lists authorization decisions for administrators, with optional exact-match investigation filters.
+pub async fn list_authorization_audit_logs(
+    pool: &PgPool,
+    principal_id: Option<&str>,
+    decision: Option<&str>,
+    permission_name: Option<&str>,
+    resource_id: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AuthorizationAuditLog>> {
+    let logs = sqlx::query_as::<_, AuthorizationAuditLog>(
+        r#"
+        SELECT id, principal_id, decision, permission_name, resource_id, detail, created_at
+        FROM authorization_audit_logs
+        WHERE ($1::TEXT IS NULL OR principal_id = $1)
+          AND ($2::TEXT IS NULL OR decision = $2)
+          AND ($3::TEXT IS NULL OR permission_name = $3)
+          AND ($4::TEXT IS NULL OR resource_id = $4)
+        ORDER BY created_at DESC, id DESC
+        LIMIT $5 OFFSET $6
+        "#,
+    )
+    .bind(principal_id)
+    .bind(decision)
+    .bind(permission_name)
+    .bind(resource_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(logs)
 }

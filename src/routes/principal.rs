@@ -10,7 +10,8 @@ use serde_json::json;
 use crate::{
     errors::AuthError,
     models::{
-        AssignRoleRequest, Claims, PrincipalEffectivePermissionsResponse, PrincipalListQuery,
+        AssignRoleRequest, AuthorizationAuditLogListQuery, Claims,
+        PrincipalEffectivePermissionsResponse, PrincipalListQuery,
     },
     state::AppState,
 };
@@ -18,6 +19,10 @@ use crate::{
 pub fn principal_admin_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/admin/principals", get(list_principals_handler))
+        .route(
+            "/v1/admin/authorization-audit-logs",
+            get(list_authorization_audit_logs_handler),
+        )
         .route(
             "/v1/admin/refresh-sessions",
             get(list_refresh_sessions_handler),
@@ -91,6 +96,32 @@ async fn list_principals_handler(
     Ok(Json(json!({
         "success": true,
         "data": principals
+    })))
+}
+
+async fn list_authorization_audit_logs_handler(
+    State(state): State<AppState>,
+    Query(query): Query<AuthorizationAuditLogListQuery>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = state
+        .db
+        .as_deref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let logs = crate::db::list_authorization_audit_logs(
+        db,
+        query.principal_id.as_deref(),
+        query.decision.as_deref(),
+        query.permission_name.as_deref(),
+        query.resource_id.as_deref(),
+        query.limit.unwrap_or(50).clamp(1, 200),
+        query.offset.unwrap_or(0).max(0),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": logs
     })))
 }
 

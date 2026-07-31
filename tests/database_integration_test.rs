@@ -424,4 +424,45 @@ mod database_tests {
         assert_eq!(logs[0].0, "auth.token.success");
         assert_eq!(logs[0].1.as_deref(), Some("cli"));
     }
+
+    #[tokio::test]
+    async fn test_authorization_audit_log_filters() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_authorization_audit_log_filters: {}", msg);
+                return;
+            }
+        };
+
+        db::create_authorization_audit_log(
+            &pool,
+            None,
+            "allow",
+            Some("inventory:read"),
+            None,
+            Some("reason=permission_granted"),
+        )
+        .await
+        .expect("Failed to create allowed authorization audit log");
+        db::create_authorization_audit_log(
+            &pool,
+            None,
+            "deny",
+            Some("inventory:write"),
+            None,
+            Some("reason=permission_not_bound"),
+        )
+        .await
+        .expect("Failed to create denied authorization audit log");
+
+        let logs = db::list_authorization_audit_logs(&pool, None, Some("deny"), None, None, 10, 0)
+            .await
+            .expect("Failed to filter authorization audit logs");
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].decision, "deny");
+        assert_eq!(logs[0].permission_name.as_deref(), Some("inventory:write"));
+    }
 }
