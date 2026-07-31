@@ -51,6 +51,9 @@ pub struct RuntimeMetrics {
     responses_2xx_total: AtomicU64,
     responses_4xx_total: AtomicU64,
     responses_5xx_total: AtomicU64,
+    authentication_successes_total: AtomicU64,
+    authentication_failures_total: AtomicU64,
+    authorization_denials_total: AtomicU64,
     in_flight: AtomicU64,
     duration_milliseconds_total: AtomicU64,
 }
@@ -62,6 +65,9 @@ impl RuntimeMetrics {
             responses_2xx_total: AtomicU64::new(0),
             responses_4xx_total: AtomicU64::new(0),
             responses_5xx_total: AtomicU64::new(0),
+            authentication_successes_total: AtomicU64::new(0),
+            authentication_failures_total: AtomicU64::new(0),
+            authorization_denials_total: AtomicU64::new(0),
             in_flight: AtomicU64::new(0),
             duration_milliseconds_total: AtomicU64::new(0),
         }
@@ -86,14 +92,37 @@ impl RuntimeMetrics {
         self.in_flight.fetch_sub(1, Ordering::Relaxed);
     }
 
+    /// Count only well-known authentication endpoints and generic authorization denials.
+    pub fn security_outcome(&self, path: &str, status: u16) {
+        if matches!(
+            path,
+            "/v1/auth/token" | "/v1/admin/token" | "/v1/oidc/login" | "/v1/upstream/oidc/callback"
+        ) {
+            if (200..300).contains(&status) {
+                self.authentication_successes_total
+                    .fetch_add(1, Ordering::Relaxed);
+            } else if (400..600).contains(&status) {
+                self.authentication_failures_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if status == 403 {
+            self.authorization_denials_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// Render Prometheus text exposition without labels that could leak request or identity values.
     pub fn prometheus_text(&self) -> String {
         format!(
-            "# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds_total counter\nkeylo_http_request_duration_milliseconds_total {}\n",
+            "# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_authentication_successes_total counter\nkeylo_authentication_successes_total {}\n# TYPE keylo_authentication_failures_total counter\nkeylo_authentication_failures_total {}\n# TYPE keylo_authorization_denials_total counter\nkeylo_authorization_denials_total {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds_total counter\nkeylo_http_request_duration_milliseconds_total {}\n",
             self.requests_total.load(Ordering::Relaxed),
             self.responses_2xx_total.load(Ordering::Relaxed),
             self.responses_4xx_total.load(Ordering::Relaxed),
             self.responses_5xx_total.load(Ordering::Relaxed),
+            self.authentication_successes_total.load(Ordering::Relaxed),
+            self.authentication_failures_total.load(Ordering::Relaxed),
+            self.authorization_denials_total.load(Ordering::Relaxed),
             self.in_flight.load(Ordering::Relaxed),
             self.duration_milliseconds_total.load(Ordering::Relaxed),
         )
@@ -447,5 +476,31 @@ impl AppState {
         };
 
         allowed_a && allowed_b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeMetrics;
+
+    #[test]
+    fn prometheus_metrics_count_authentication_and_authorization_outcomes() {
+        let metrics = RuntimeMetrics::new();
+        metrics.request_started();
+        metrics.request_finished(200, 3);
+        metrics.security_outcome("/v1/auth/token", 200);
+        metrics.request_started();
+        metrics.request_finished(401, 4);
+        metrics.security_outcome("/v1/auth/token", 401);
+        metrics.request_started();
+        metrics.request_finished(403, 5);
+        metrics.security_outcome("/v1/authorize/check", 403);
+
+        let text = metrics.prometheus_text();
+
+        assert!(text.contains("keylo_authentication_successes_total 1"));
+        assert!(text.contains("keylo_authentication_failures_total 1"));
+        assert!(text.contains("keylo_authorization_denials_total 1"));
+        assert!(text.contains("keylo_http_requests_in_flight 0"));
     }
 }

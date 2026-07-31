@@ -410,7 +410,7 @@ Keylo 提供标准探针端点，便于容器编排和网关探活：
 
 * `GET /healthz`：进程存活检查（liveness）
 * `GET /readyz`：依赖就绪检查（readiness），会返回数据库/Redis 的检查状态；默认缺少数据库时返回 `503`
-* `GET /metrics`：Prometheus 文本指标，包含固定基数的 HTTP 请求数、状态码类别、在途请求数与累计耗时；不包含 URI、用户或 token 标签。
+* `GET /metrics`：Prometheus 文本指标，包含固定基数的 HTTP 请求数、状态码类别、在途请求数、累计耗时、认证成功/失败和授权拒绝趋势；不包含 URI、用户或 token 标签。
 
 示例：
 

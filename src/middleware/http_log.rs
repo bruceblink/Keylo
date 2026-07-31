@@ -97,6 +97,9 @@ pub async fn request_response_logging_middleware(
     state
         .runtime_metrics
         .request_finished(status.as_u16(), duration_ms as u64);
+    state
+        .runtime_metrics
+        .security_outcome(uri.path(), status.as_u16());
 
     tracing::info!(
         client_ip = %client_ip,
