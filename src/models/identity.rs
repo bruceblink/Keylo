@@ -109,6 +109,7 @@ pub struct OidcUpstreamDiscovery {
     pub userinfo_endpoint: Option<String>,
     pub response_types_supported: Vec<String>,
     pub grant_types_supported: Option<Vec<String>>,
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
 /// Opaque state retained only for one upstream authorization-code round trip.
@@ -509,6 +510,16 @@ pub fn parse_oidc_upstream_discovery(
     {
         return Err("OIDC Discovery must support authorization_code".to_string());
     }
+    if parsed
+        .token_endpoint_auth_methods_supported
+        .as_ref()
+        .is_some_and(|methods| !methods.iter().any(|method| method == "client_secret_basic"))
+    {
+        return Err(
+            "OIDC Discovery must support token_endpoint_auth_method client_secret_basic"
+                .to_string(),
+        );
+    }
     Ok(parsed)
 }
 
@@ -579,6 +590,24 @@ mod tests {
             super::parse_oidc_upstream_discovery("https://idp.example/realms/acme", &invalid)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn oidc_discovery_rejects_an_incompatible_token_client_authentication_method() {
+        let discovery = json!({
+            "issuer": "https://idp.example/realms/acme",
+            "authorization_endpoint": "https://idp.example/realms/acme/protocol/openid-connect/auth",
+            "token_endpoint": "https://idp.example/realms/acme/protocol/openid-connect/token",
+            "jwks_uri": "https://idp.example/realms/acme/protocol/openid-connect/certs",
+            "response_types_supported": ["code"],
+            "token_endpoint_auth_methods_supported": ["private_key_jwt"]
+        });
+
+        let error =
+            super::parse_oidc_upstream_discovery("https://idp.example/realms/acme", &discovery)
+                .unwrap_err();
+
+        assert!(error.contains("client_secret_basic"));
     }
 
     #[test]
