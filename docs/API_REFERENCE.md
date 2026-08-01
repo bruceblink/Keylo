@@ -66,7 +66,7 @@
 
 `/.well-known/openid-configuration` 是标准 OIDC Discovery 地址，当前公布 Authorization Code + PKCE（S256）、RS256 JWKS 与 `openid`、`profile`、`email` scope。OIDC issuer 由 `OIDC_PUBLIC_ISSUER` 决定；默认使用 HTTPS，不能使用 Keylo 的内部监听地址。完全隔离的内网可设置 `ALLOW_INSECURE_INTERNAL_HTTP=true` 使用 HTTP origin，但必须确保 IdP、Keylo 和浏览器客户端均在受控网络内，且任何 issuer、Discovery、授权端点和回调均不暴露到不受信任网络。
 
-OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1/oidc/consent`、`POST /v1/oidc/logout`、`POST /v1/oidc/token`、`GET /v1/oidc/userinfo`。授权码有效期为 5 分钟，且只能原子消费一次。`/v1/oidc/login` 使用 `application/x-www-form-urlencoded` 提交用户名、密码及原授权请求参数，成功后创建 `HttpOnly; Secure; SameSite=Lax` 浏览器会话。登录后或已有会话访问 `/v1/oidc/authorize` 会显示客户端和 scope，必须通过同站点的 `/v1/oidc/consent` 明确确认才会重定向至已登记的 redirect URI 并签发 code；拒绝不会签发 code。`POST /v1/oidc/logout` 撤销该浏览器 OIDC session 并清除 cookie，不影响 API refresh session。UserInfo 只接受 OIDC access token；始终返回 `sub`，仅在被授予 `profile` 或 `email` scope 时返回对应 profile/email claims。
+OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1/oidc/consent`、`POST /v1/oidc/logout`、`POST /v1/oidc/token`、`GET /v1/oidc/userinfo`。授权码有效期为 5 分钟，且只能原子消费一次。`/v1/oidc/login` 使用 `application/x-www-form-urlencoded` 提交用户名、密码及原授权请求参数，成功后创建 `HttpOnly; Secure; SameSite=Lax` 浏览器会话。仅当 OIDC Provider 配置为 `ALLOW_INSECURE_INTERNAL_HTTP=true` 且 issuer 实际为 HTTP 时，Cookie 才去除 `Secure`，并受内网 HTTP 边界限制。登录后或已有会话访问 `/v1/oidc/authorize` 会显示客户端和 scope，必须通过同站点的 `/v1/oidc/consent` 明确确认才会重定向至已登记的 redirect URI 并签发 code；拒绝不会签发 code。`POST /v1/oidc/logout` 撤销该浏览器 OIDC session 并清除 cookie，不影响 API refresh session。UserInfo 只接受 OIDC access token；始终返回 `sub`，仅在被授予 `profile` 或 `email` scope 时返回对应 profile/email claims。
 
 授权成功重定向会包含 `code`、请求中的 `state` 以及 `iss`。`iss` 始终等于 Discovery 的 issuer，relying party 应在处理回调时校验它，防止多身份提供方场景中的授权响应混淆。
 

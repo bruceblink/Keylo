@@ -753,6 +753,11 @@ impl Config {
             .unwrap_or_else(|| self.server_url())
     }
 
+    /// Keep browser session cookies secure unless an explicitly opted-in internal HTTP issuer is active.
+    pub fn oidc_session_cookie_secure(&self) -> bool {
+        !(self.allow_insecure_internal_http && self.oidc_issuer().starts_with("http://"))
+    }
+
     /// Decode the dedicated AES-256 key used by MFA persistence.
     pub fn mfa_secret_key_bytes(&self) -> Result<Vec<u8>, String> {
         let key = self
@@ -1373,6 +1378,16 @@ mod tests {
 
         config.oidc_public_issuer = Some("https://identity.example.com".to_string());
         assert!(config.validate_for_setup_initialization().is_ok());
+    }
+
+    #[test]
+    fn oidc_session_cookie_is_insecure_only_for_explicit_internal_http() {
+        let mut config = valid_config();
+        assert!(config.oidc_session_cookie_secure());
+        config.oidc_public_issuer = Some("http://identity.internal".to_string());
+        assert!(config.oidc_session_cookie_secure());
+        config.allow_insecure_internal_http = true;
+        assert!(!config.oidc_session_cookie_secure());
     }
 
     #[test]

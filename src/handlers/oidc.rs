@@ -450,7 +450,11 @@ pub async fn login(
     .await
     .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
     let mut response = consent_for_session(&state, &request.authorization, user.id).await?;
-    let cookie = format!("keylo_oidc_session={raw_session}; Path=/v1/oidc; Max-Age=28800; HttpOnly; Secure; SameSite=Lax");
+    let cookie = oidc_session_cookie(
+        &raw_session,
+        28_800,
+        state.config.oidc_session_cookie_secure(),
+    );
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie).map_err(|_| {
@@ -524,11 +528,22 @@ pub async fn logout(
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_static(
-            "keylo_oidc_session=; Path=/v1/oidc; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
-        ),
+        HeaderValue::from_str(&oidc_session_cookie(
+            "",
+            0,
+            state.config.oidc_session_cookie_secure(),
+        ))
+        .map_err(|_| AuthError::DatabaseError("Failed to clear OIDC session cookie".to_string()))?,
     );
     Ok(response)
+}
+
+/// Build the short-lived browser session cookie while preserving Secure by default.
+fn oidc_session_cookie(value: &str, max_age_seconds: i64, secure: bool) -> String {
+    let secure_attribute = if secure { "; Secure" } else { "" };
+    format!(
+        "keylo_oidc_session={value}; Path=/v1/oidc; Max-Age={max_age_seconds}; HttpOnly{secure_attribute}; SameSite=Lax"
+    )
 }
 
 /// Exchange one authorization code exactly once after validating its client, redirect URI, and PKCE verifier.
@@ -646,6 +661,12 @@ mod tests {
             client_secret: client_secret.map(str::to_string),
             code_verifier: "a".repeat(43),
         }
+    }
+
+    #[test]
+    fn browser_session_cookie_keeps_secure_attribute_by_default() {
+        assert!(oidc_session_cookie("session", 60, true).contains("; Secure;"));
+        assert!(!oidc_session_cookie("session", 60, false).contains("; Secure;"));
     }
 
     #[test]
