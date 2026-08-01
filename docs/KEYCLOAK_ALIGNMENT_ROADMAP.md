@@ -1,5 +1,7 @@
 # Keylo 面向 Keycloak 的能力演进路线图
 
+> 主线开发计划以本文档为准。`KEYLO_2_0_DEVELOPMENT_PLAN.md` 保留统一 Principal、RBAC、资源树和会话模型的设计细节，但不再单独决定阶段优先级；两份文档不一致时，以本文档的阶段、边界和验收条件为准。
+
 ## 1. 目的与边界
 
 本计划以 Keycloak 作为成熟身份平台的能力参照，用于决定 Keylo 的后续投入；它**不**以功能数量追平 Keycloak 为目标。Keylo 的目标是成为可被通用客户端和外部系统接入的身份认证与授权中心，Keystone 只是首个使用方和集成验证对象。
@@ -37,6 +39,17 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 | 外部身份 | OAuth 登录、OIDC upstream Discovery/回调/UserInfo、claim 映射、JIT、关联/解除关联；上游 subject 仅以 SHA-256 映射键持久化 | LDAP、SCIM 等目录生命周期能力尚未进入范围。 |
 | 安全 | 密码策略、限流、审计、密钥轮换、TOTP MFA、恢复码、敏感操作二次认证 | Passkey 与企业目录生命周期由明确需求触发。 |
 | 运维 | health/ready 检查、结构化日志、审计日志、`/metrics` Prometheus HTTP/认证结果/refresh replay/限流拒绝与数据库/Redis 就绪探针延迟及成功/失败指标 | 缺少业务数据库/Redis 操作延迟、分布式追踪、事件投递与 HA 演练基线。 |
+
+### 2.1 当前进度对齐（2026-08-01）
+
+| 路线图阶段 | 当前状态 | 对齐结论 |
+| --- | --- | --- |
+| 阶段 A：标准 OIDC 接入 | 核心实现基本完成 | Discovery、Authorization Code、PKCE、state/nonce、ID Token、UserInfo、浏览器会话和退出已具备；真实标准客户端兼容矩阵仍需补齐。 |
+| 阶段 B：账户安全与身份联邦 | 实现基本完成，验收未闭环 | TOTP、恢复码、MFA 审计、OIDC upstream、JIT、关联/解除关联和会话撤销已具备；下一主线是标准 Keycloak IdP 端到端矩阵。 |
+| 阶段 C：授权治理与组织隔离 | 基础授权已具备，阶段目标未启动 | Principal/RBAC/资源树/授权检查不等于组织隔离；组织、数据范围、上下文条件和决策版本暂不进入主线。 |
+| 阶段 D：企业生命周期与运行治理 | 尚未启动 | SCIM、Outbox/Webhook、OpenTelemetry、延迟指标和 HA 演练等待阶段 C 或明确客户需求。 |
+
+当前主线准入条件：在阶段 B 的 Keycloak 标准测试 IdP 兼容矩阵完成并留存脱敏执行记录前，不推进阶段 C/D 的大范围能力扩张。
 
 ## 3. 分阶段计划
 

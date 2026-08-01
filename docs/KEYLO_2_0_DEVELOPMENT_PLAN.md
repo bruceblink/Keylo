@@ -1,5 +1,7 @@
 # Keylo 2.0 统一主体 RBAC 开发计划
 
+> **主线计划已对齐 `KEYCLOAK_ALIGNMENT_ROADMAP.md`。** 本文档负责统一 Principal、RBAC、资源树、授权检查和 Refresh Session 的设计细节；实际开发阶段、优先级、范围边界和验收门槛以 Keycloak 对齐路线图为准。当前主线处于阶段 B 的验收收尾，下一项工作是基于标准 Keycloak 测试 IdP 的 OIDC 兼容矩阵，不提前进入组织隔离、SCIM 或事件平台建设。
+
 ## 1. 背景与目标
 
 Keylo 1.x 已具备统一认证中心的基础能力：RS256 JWT、JWKS、用户登录、管理客户端、服务客户端、OAuth、Refresh Token、Token 黑名单、RBAC、审计日志和密文配置。下一阶段的目标不是继续把这些能力横向堆叠，而是把 Keylo 演进为统一身份、统一认证、统一授权中心。
@@ -431,6 +433,8 @@ Keylo 侧落地：
 - Keystone 后端逐步改为消费 Keylo 授权结果。
 
 ## 9. 分阶段实施路线
+
+> 本节是 2.0 能力分解，不是独立于 `KEYCLOAK_ALIGNMENT_ROADMAP.md` 的第二条开发主线。执行时按路线图阶段 A-D 选择工作：阶段 A 的 OIDC 能力和阶段 B 的账户安全/身份联邦优先完成真实 Keycloak 兼容验收；阶段 C、D 只有在路线图准入条件满足或出现明确客户需求后才启动。
 
 ### 阶段 0：文档和契约冻结
 
