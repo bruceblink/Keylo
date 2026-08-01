@@ -18,6 +18,8 @@
 /examples/node-express-oidc/node_modules/
 /examples/go-net-http-oidc/.env
 /examples/rust-axum-oidc/target/
+/examples/spring-boot-oidc/.gradle/
+/examples/spring-boot-oidc/build/
 /web/vite.config.js
 /web/vite.config.d.ts
 __pycache__/

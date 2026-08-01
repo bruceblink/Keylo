@@ -2,6 +2,8 @@
 
 适用场景：Spring Boot 后台、BFF、管理系统或内部 API 服务消费 Keylo 签发的用户 access token。
 
+需要由 Spring Boot 应用自身完成浏览器 OIDC 登录时，使用可运行的 [Spring Boot OIDC RP 示例](../../examples/spring-boot-oidc/README.md)。它使用 Spring Security 标准 Discovery、Authorization Code + PKCE、`state`、`nonce` 与 ID Token 校验，并在 code 兑换前显式校验 Keylo callback 的 `iss`；本页 Resource Server 配置继续只负责 access token 验签。
+
 ## 1. 配置
 
 ```yaml

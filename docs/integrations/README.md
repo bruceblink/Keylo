@@ -18,6 +18,7 @@ Keylo 2.0 中，用户、服务和客户端都会映射为 Principal。服务 to
 - [Node Express OIDC RP 示例](../../examples/node-express-oidc/README.md)
 - [Go net/http OIDC RP 示例](../../examples/go-net-http-oidc/README.md)
 - [Rust Axum OIDC RP 示例](../../examples/rust-axum-oidc/README.md)
+- [Spring Boot OIDC RP 示例](../../examples/spring-boot-oidc/README.md)
 - [Spring Security](spring-security.md)
 - [Node Express](node-express.md)
 - [Go net/http](go-net-http.md)

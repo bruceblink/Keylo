@@ -1,0 +1,19 @@
+server:
+  address: 127.0.0.1
+  forward-headers-strategy: framework
+
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          keylo:
+            client-id: ${OIDC_CLIENT_ID}
+            client-secret: ${OIDC_CLIENT_SECRET}
+            client-authentication-method: ${OIDC_CLIENT_AUTH_METHOD:client_secret_basic}
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid, profile, email
+        provider:
+          keylo:
+            issuer-uri: ${KEYLO_ISSUER}
