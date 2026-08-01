@@ -175,6 +175,7 @@ async fn create_role_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateRoleRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     let assignable_to = req.assignable_to.as_deref().unwrap_or("all");
     if !valid_role_assignable_to(assignable_to) {
         return Err(invalid_assignable_to_response());
@@ -269,6 +270,7 @@ async fn update_role_handler(
     Path(role_id): Path<String>,
     Json(req): Json<UpdateRoleRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     if let Some(assignable_to) = req.assignable_to.as_deref() {
         if !valid_role_assignable_to(assignable_to) {
             return Err(invalid_assignable_to_response());
@@ -404,6 +406,7 @@ async fn revert_role_change_handler(
     Path((role_id, history_version)): Path<(String, i64)>,
     Json(payload): Json<RevertRoleChangeRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     let change_reason = payload.change_reason.trim();
     if change_reason.is_empty() {
         return Err(error_response(
@@ -490,6 +493,7 @@ async fn delete_role_handler(
     State(state): State<AppState>,
     Path(role_id): Path<String>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     match delete_role(require_db(&state)?, &role_id).await {
         Ok(true) => {
             audit_event(
@@ -554,6 +558,7 @@ async fn create_permission_handler(
     State(state): State<AppState>,
     Json(req): Json<CreatePermissionRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     match create_permission(require_db(&state)?, &req.name, req.description.as_deref()).await {
         Ok(permission) => {
             audit_event(
@@ -627,6 +632,7 @@ async fn update_permission_handler(
     Path(permission_id): Path<String>,
     Json(req): Json<UpdatePermissionRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     let db = require_db(&state)?;
     let before = get_permission_by_id(db, &permission_id)
         .await
@@ -772,6 +778,7 @@ async fn revert_permission_change_handler(
     Path((permission_id, history_version)): Path<(String, i64)>,
     Json(payload): Json<RevertPermissionChangeRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     let change_reason = payload.change_reason.trim();
     if change_reason.is_empty() {
         return Err(error_response(
@@ -877,6 +884,7 @@ async fn delete_permission_handler(
     State(state): State<AppState>,
     Path(permission_id): Path<String>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     match delete_permission(require_db(&state)?, &permission_id).await {
         Ok(true) => {
             audit_event(
