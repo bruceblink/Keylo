@@ -273,6 +273,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_oidc_consent_denial_redirects_to_validated_client_with_state() {
+        let server = setup_test_server().await;
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = match db::init_db_pool(&database_url).await {
+            Ok(pool) => pool,
+            Err(_) => return,
+        };
+        let client_id = format!(
+            "oidc-denial-{}",
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        db::create_oidc_client(
+            &pool,
+            &keylo::models::CreateOidcClientRequest {
+                client_id: client_id.clone(),
+                client_secret: None,
+                name: "OIDC denial test".to_string(),
+                description: None,
+                client_type: "public".to_string(),
+                redirect_uris: vec!["https://client.example.test/callback".to_string()],
+                grant_types: None,
+                scopes: None,
+            },
+        )
+        .await
+        .unwrap();
+        let username = format!("oidc-denial-user-{}", uuid::Uuid::new_v4());
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some("OidcConsentDenial#123"),
+        )
+        .await
+        .unwrap();
+        let browser_cookie = format!("oidc-denial-session-{}", uuid::Uuid::new_v4());
+        db::create_browser_session(
+            &pool,
+            &browser_cookie,
+            &keylo::models::OidcBrowserSession {
+                user_id: user.id,
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = server
+            .post("/v1/oidc/consent")
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .add_header("Cookie", format!("keylo_oidc_session={browser_cookie}"))
+            .bytes(Bytes::from(format!(
+                "response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcallback&scope=openid&state=client-state&nonce=test-nonce&code_challenge={}&code_challenge_method=S256&decision=deny",
+                "a".repeat(43)
+            )))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::SEE_OTHER);
+        let location_header = response.header("location");
+        let location = location_header.to_str().unwrap();
+        assert!(location.starts_with("https://client.example.test/callback?error=access_denied"));
+        assert!(location.contains("state=client-state"));
+        assert!(location.contains("iss=keylo"));
+    }
+
+    #[tokio::test]
     async fn test_oidc_client_security_updates_invalidate_pending_authorization_codes() {
         let server = setup_test_server().await;
         let admin_login = server

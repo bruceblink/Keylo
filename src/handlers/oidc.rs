@@ -322,6 +322,23 @@ fn redirect_with_code(request: &OidcAuthorizeRequest, code: &str, issuer: &str) 
     Redirect::to(&location)
 }
 
+/// Return a validated authorization denial to the relying party without exposing Keylo-only error handling to the browser flow.
+fn redirect_with_access_denied(request: &OidcAuthorizeRequest, issuer: &str) -> Redirect {
+    let separator = if request.redirect_uri.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    let mut location = format!("{}{}error=access_denied", request.redirect_uri, separator);
+    if let Some(state) = &request.state {
+        location.push_str("&state=");
+        location.push_str(&urlencoding::encode(state));
+    }
+    location.push_str("&iss=");
+    location.push_str(&urlencoding::encode(issuer));
+    Redirect::to(&location)
+}
+
 fn html_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -503,6 +520,7 @@ pub async fn consent(
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .ok_or(AuthError::Unauthorized)?;
+    validated_authorization_client(&state, &request.authorization).await?;
     let event_type = match request.decision.as_str() {
         "approve" => "oidc.authorization.approved",
         "deny" => "oidc.authorization.denied",
@@ -534,11 +552,11 @@ pub async fn consent(
         );
     }
     if request.decision == "deny" {
-        return Ok((
-            StatusCode::FORBIDDEN,
-            Json(json!({"error":"access_denied"})),
+        return Ok(redirect_with_access_denied(
+            &request.authorization,
+            &state.config.oidc_issuer(),
         )
-            .into_response());
+        .into_response());
     }
     unreachable!("validated OIDC consent decision")
 }
@@ -768,6 +786,28 @@ mod tests {
         let location = response.headers()[header::LOCATION].to_str().unwrap();
 
         assert!(location.contains("code=code%20value"));
+        assert!(location.contains("state=request%20state"));
+        assert!(location.contains("iss=https%3A%2F%2Fidentity.example"));
+    }
+
+    #[test]
+    fn authorization_denial_redirect_preserves_state_and_issuer() {
+        let request = OidcAuthorizeRequest {
+            response_type: "code".to_string(),
+            client_id: "client".to_string(),
+            redirect_uri: "https://client.example/callback?from=keylo".to_string(),
+            scope: "openid".to_string(),
+            state: Some("request state".to_string()),
+            nonce: Some("nonce".to_string()),
+            code_challenge: "a".repeat(43),
+            code_challenge_method: "S256".to_string(),
+        };
+
+        let response =
+            redirect_with_access_denied(&request, "https://identity.example").into_response();
+        let location = response.headers()[header::LOCATION].to_str().unwrap();
+
+        assert!(location.contains("error=access_denied"));
         assert!(location.contains("state=request%20state"));
         assert!(location.contains("iss=https%3A%2F%2Fidentity.example"));
     }
