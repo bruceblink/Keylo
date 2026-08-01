@@ -2,6 +2,8 @@
 
 适用场景：Go API 服务或网关使用 Keylo JWKS 本地验签。
 
+需要由 Go 服务自身完成浏览器 OIDC 登录时，使用可运行的 [Go net/http OIDC RP 示例](../../examples/go-net-http-oidc/README.md)。它使用 `coreos/go-oidc` 和 `oauth2` 的标准 Discovery、Authorization Code + PKCE、`state`、`nonce`、回调 `iss` 和 ID Token 校验；本页中间件仍只负责资源服务侧 access token 验签。
+
 ## 1. 依赖
 
 ```bash
