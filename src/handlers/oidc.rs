@@ -387,6 +387,7 @@ fn login_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
             (
                 header::CONTENT_SECURITY_POLICY,
                 "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
@@ -403,6 +404,7 @@ fn consent_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
             (
                 header::CONTENT_SECURITY_POLICY,
                 "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
@@ -844,6 +846,10 @@ mod tests {
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),
             "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
         );
         assert_eq!(
             response
