@@ -51,6 +51,11 @@ wwIDAQAB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openidconnect::{
+        core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
+        reqwest as oidc_reqwest, AuthorizationCode, ClientId, CsrfToken, IssuerUrl, Nonce,
+        OAuth2TokenResponse, PkceCodeChallenge, RedirectUrl, Scope,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::time::sleep;
@@ -103,6 +108,210 @@ mod tests {
                 TestServer::new(app)
             }
         }
+    }
+
+    /// Run Keylo on a real loopback port so an unmodified standard OIDC client can use Discovery.
+    async fn setup_oidc_compatibility_server() -> Option<(String, tokio::task::JoinHandle<()>)> {
+        let database_url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.ok()?;
+        let address = listener.local_addr().ok()?;
+        let issuer = format!("http://{address}");
+        let mut config = test_config();
+        config.server_addr = "127.0.0.1".to_string();
+        config.server_port = address.port();
+        config.oidc_public_issuer = Some(issuer.clone());
+        config.allow_insecure_internal_http = true;
+        let app = startup::init_app_router_with_db_and_admin(
+            config,
+            &database_url,
+            INTEGRATION_ADMIN_CLIENT_ID,
+            INTEGRATION_ADMIN_CLIENT_SECRET,
+        )
+        .await
+        .ok()?;
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("compatibility server must run");
+        });
+        Some((issuer, task))
+    }
+
+    #[tokio::test]
+    async fn test_standard_openidconnect_client_completes_keylo_code_pkce_flow() {
+        let Some((issuer, server_task)) = setup_oidc_compatibility_server().await else {
+            return;
+        };
+        let result = async {
+            let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+            let pool = db::init_db_pool(&database_url).await.unwrap();
+            let client_id = format!(
+                "oidc-standard-client-{}",
+                TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+            );
+            let redirect_uri = format!("{issuer}/rp/callback");
+            db::create_oidc_client(
+                &pool,
+                &keylo::models::CreateOidcClientRequest {
+                    client_id: client_id.clone(),
+                    client_secret: None,
+                    name: "Standard openidconnect client".to_string(),
+                    description: None,
+                    client_type: "public".to_string(),
+                    redirect_uris: vec![redirect_uri.clone()],
+                    grant_types: None,
+                    scopes: None,
+                },
+            )
+            .await
+            .unwrap();
+            let username = format!("oidc-standard-user-{}", uuid::Uuid::new_v4());
+            let password = "StandardOidcClient#123";
+            let user = db::create_user(
+                &pool,
+                &username,
+                &format!("{username}@example.test"),
+                Some(password),
+            )
+            .await
+            .unwrap();
+
+            let oidc_http_client = oidc_reqwest::ClientBuilder::new()
+                .redirect(oidc_reqwest::redirect::Policy::none())
+                .build()
+                .unwrap();
+            let provider_metadata = CoreProviderMetadata::discover_async(
+                IssuerUrl::new(issuer.clone()).unwrap(),
+                &oidc_http_client,
+            )
+            .await
+            .unwrap();
+            let client = CoreClient::from_provider_metadata(
+                provider_metadata,
+                ClientId::new(client_id.clone()),
+                None,
+            )
+            .set_redirect_uri(RedirectUrl::new(redirect_uri.clone()).unwrap());
+            let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+            let (authorization_url, csrf_state, nonce) = client
+                .authorize_url(
+                    CoreAuthenticationFlow::AuthorizationCode,
+                    CsrfToken::new_random,
+                    Nonce::new_random,
+                )
+                .add_scope(Scope::new("profile".to_string()))
+                .set_pkce_challenge(pkce_challenge.clone())
+                .url();
+
+            let browser = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap();
+            let login_page = browser
+                .get(authorization_url.as_str())
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(login_page.status(), reqwest::StatusCode::OK);
+            let login = browser
+                .post(format!("{issuer}/v1/oidc/login"))
+                .form(&[
+                    ("response_type", "code"),
+                    ("client_id", client_id.as_str()),
+                    ("redirect_uri", redirect_uri.as_str()),
+                    ("scope", "openid profile"),
+                    ("state", csrf_state.secret()),
+                    ("nonce", nonce.secret()),
+                    ("code_challenge", pkce_challenge.as_str()),
+                    ("code_challenge_method", "S256"),
+                    ("username", username.as_str()),
+                    ("password", password),
+                ])
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(login.status(), reqwest::StatusCode::OK);
+            let browser_cookie = login
+                .headers()
+                .get(reqwest::header::SET_COOKIE)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_string();
+            let consent = browser
+                .post(format!("{issuer}/v1/oidc/consent"))
+                .header(reqwest::header::COOKIE, browser_cookie)
+                .form(&[
+                    ("response_type", "code"),
+                    ("client_id", client_id.as_str()),
+                    ("redirect_uri", redirect_uri.as_str()),
+                    ("scope", "openid profile"),
+                    ("state", csrf_state.secret()),
+                    ("nonce", nonce.secret()),
+                    ("code_challenge", pkce_challenge.as_str()),
+                    ("code_challenge_method", "S256"),
+                    ("decision", "approve"),
+                ])
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(consent.status(), reqwest::StatusCode::SEE_OTHER);
+            let callback_url = url::Url::parse(
+                consent
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                callback_url
+                    .query_pairs()
+                    .find(|(key, _)| key == "iss")
+                    .unwrap()
+                    .1,
+                issuer
+            );
+
+            let code = callback_url
+                .query_pairs()
+                .find(|(key, _)| key == "code")
+                .unwrap()
+                .1
+                .into_owned();
+            let token_response = client
+                .exchange_code(AuthorizationCode::new(code))
+                .unwrap()
+                .set_pkce_verifier(pkce_verifier)
+                .request_async(&oidc_http_client)
+                .await
+                .unwrap();
+            let claims = token_response
+                .extra_fields()
+                .id_token()
+                .unwrap()
+                .claims(&client.id_token_verifier(), &nonce)
+                .unwrap();
+            assert_eq!(claims.subject().as_str(), user.id);
+
+            let userinfo: serde_json::Value = browser
+                .get(format!("{issuer}/v1/oidc/userinfo"))
+                .bearer_auth(token_response.access_token().secret())
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(userinfo["sub"], user.id);
+        }
+        .await;
+        server_task.abort();
+        result
     }
 
     #[tokio::test]

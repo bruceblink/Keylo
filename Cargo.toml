@@ -52,3 +52,4 @@ tower = { version = "0.5", features = ["util"] }
 axum-test = "19.0.0"
 http-body-util = "0.1.0"
 hyper-util = { version = "0.1", features = ["client", "http1", "client-legacy"] }
+openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
