@@ -16,9 +16,9 @@ use crate::{
         validate_authorization_request, validate_grant_types, validate_oidc_client_registration,
         validate_oidc_scopes, validate_redirect_uris, verify_pkce_s256, Claims,
         CreateOidcClientRequest, OidcAccessTokenClaims, OidcAuthorizationCode,
-        OidcAuthorizeRequest, OidcBrowserSession, OidcConsentRequest, OidcIdTokenClaims,
-        OidcLoginRequest, OidcTokenRequest, OidcTokenResponse, RotateClientSecretRequest,
-        UpdateOidcClientRequest,
+        OidcAuthorizeRequest, OidcBrowserSession, OidcClient, OidcConsentRequest,
+        OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest, OidcTokenResponse,
+        RotateClientSecretRequest, UpdateOidcClientRequest,
     },
     state::AppState,
 };
@@ -331,7 +331,8 @@ fn html_escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn consent_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
+/// Preserve the validated OAuth parameters across Keylo's same-site browser forms.
+fn authorization_hidden_fields(request: &OidcAuthorizeRequest) -> String {
     let optional = |name: &str, value: Option<&String>| {
         value
             .map(|value| {
@@ -342,7 +343,27 @@ fn consent_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
             })
             .unwrap_or_default()
     };
-    let body = format!("<!doctype html><html><body><main><h1>Authorize {}</h1><p>Requested scopes: {}</p><form method=\"post\" action=\"/v1/oidc/consent\"><input type=\"hidden\" name=\"response_type\" value=\"{}\"><input type=\"hidden\" name=\"client_id\" value=\"{}\"><input type=\"hidden\" name=\"redirect_uri\" value=\"{}\"><input type=\"hidden\" name=\"scope\" value=\"{}\"><input type=\"hidden\" name=\"code_challenge\" value=\"{}\"><input type=\"hidden\" name=\"code_challenge_method\" value=\"{}\">{}{}<button name=\"decision\" value=\"approve\" type=\"submit\">Approve</button><button name=\"decision\" value=\"deny\" type=\"submit\">Deny</button></form></main></body></html>", html_escape(client_name), html_escape(&request.scope), html_escape(&request.response_type), html_escape(&request.client_id), html_escape(&request.redirect_uri), html_escape(&request.scope), html_escape(&request.code_challenge), html_escape(&request.code_challenge_method), optional("state", request.state.as_ref()), optional("nonce", request.nonce.as_ref()));
+    format!(
+        "<input type=\"hidden\" name=\"response_type\" value=\"{}\"><input type=\"hidden\" name=\"client_id\" value=\"{}\"><input type=\"hidden\" name=\"redirect_uri\" value=\"{}\"><input type=\"hidden\" name=\"scope\" value=\"{}\"><input type=\"hidden\" name=\"code_challenge\" value=\"{}\"><input type=\"hidden\" name=\"code_challenge_method\" value=\"{}\">{}{}",
+        html_escape(&request.response_type),
+        html_escape(&request.client_id),
+        html_escape(&request.redirect_uri),
+        html_escape(&request.scope),
+        html_escape(&request.code_challenge),
+        html_escape(&request.code_challenge_method),
+        optional("state", request.state.as_ref()),
+        optional("nonce", request.nonce.as_ref())
+    )
+}
+
+/// Render the browser login step so standard OIDC clients can start an authorization flow without a Keylo-specific API response.
+fn login_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
+    let body = format!(
+        "<!doctype html><html><body><main><h1>Sign in to authorize {}</h1><p>Requested scopes: {}</p><form method=\"post\" action=\"/v1/oidc/login\">{}<label>Username <input name=\"username\" autocomplete=\"username\" required></label><label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\" required></label><button type=\"submit\">Sign in</button></form></main></body></html>",
+        html_escape(client_name),
+        html_escape(&request.scope),
+        authorization_hidden_fields(request)
+    );
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -351,18 +372,27 @@ fn consent_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
         .into_response()
 }
 
-async fn consent_for_session(
+fn consent_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
+    let body = format!("<!doctype html><html><body><main><h1>Authorize {}</h1><p>Requested scopes: {}</p><form method=\"post\" action=\"/v1/oidc/consent\">{}<button name=\"decision\" value=\"approve\" type=\"submit\">Approve</button><button name=\"decision\" value=\"deny\" type=\"submit\">Deny</button></form></main></body></html>", html_escape(client_name), html_escape(&request.scope), authorization_hidden_fields(request));
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+/// Load an active relying party and reject malformed authorization data before credentials or a browser session are accepted.
+async fn validated_authorization_client(
     state: &AppState,
     request: &OidcAuthorizeRequest,
-    user_id: String,
-) -> Result<Response, AuthError> {
+) -> Result<OidcClient, AuthError> {
     let client = crate::db::get_oidc_client(database(state)?, &request.client_id)
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .ok_or(AuthError::NotFound)?;
     validate_authorization_request(&client, request).map_err(AuthError::InvalidRequest)?;
-    let _ = user_id;
-    Ok(consent_page(request, &client.name))
+    Ok(client)
 }
 
 async fn authorize_for_user(
@@ -406,18 +436,15 @@ pub async fn authorize(
     headers: HeaderMap,
     Query(request): Query<OidcAuthorizeRequest>,
 ) -> Result<Response, AuthError> {
+    let client = validated_authorization_client(&state, &request).await?;
     let Some(cookie) = browser_cookie(&headers) else {
-        return Ok((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"login_required","login_endpoint":"/v1/oidc/login"})),
-        )
-            .into_response());
+        return Ok(login_page(&request, &client.name));
     };
-    let session = crate::db::resolve_browser_session(database(&state)?, cookie)
+    let _session = crate::db::resolve_browser_session(database(&state)?, cookie)
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .ok_or(AuthError::Unauthorized)?;
-    consent_for_session(&state, &request, session.user_id).await
+    Ok(consent_page(&request, &client.name))
 }
 
 /// Authenticate a local user for an OIDC browser flow, then issue a short-lived code and HttpOnly session cookie.
@@ -426,6 +453,7 @@ pub async fn login(
     Form(request): Form<OidcLoginRequest>,
 ) -> Result<Response, AuthError> {
     let db = database(&state)?;
+    let client = validated_authorization_client(&state, &request.authorization).await?;
     let user = crate::db::user::get_user_by_username(db, &request.username)
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
@@ -449,7 +477,7 @@ pub async fn login(
     )
     .await
     .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
-    let mut response = consent_for_session(&state, &request.authorization, user.id).await?;
+    let mut response = consent_page(&request.authorization, &client.name);
     let cookie = oidc_session_cookie(
         &raw_session,
         28_800,
@@ -742,5 +770,32 @@ mod tests {
         assert!(location.contains("code=code%20value"));
         assert!(location.contains("state=request%20state"));
         assert!(location.contains("iss=https%3A%2F%2Fidentity.example"));
+    }
+
+    #[test]
+    fn login_page_preserves_authorization_parameters_and_escapes_client_metadata() {
+        let request = OidcAuthorizeRequest {
+            response_type: "code".to_string(),
+            client_id: "portal-web".to_string(),
+            redirect_uri: "https://client.example/callback".to_string(),
+            scope: "openid profile".to_string(),
+            state: Some("state-value".to_string()),
+            nonce: Some("nonce-value".to_string()),
+            code_challenge: "a".repeat(43),
+            code_challenge_method: "S256".to_string(),
+        };
+
+        let response = login_page(&request, "Portal <Admin>");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+        let fields = authorization_hidden_fields(&request);
+        assert!(fields.contains("name=\"client_id\" value=\"portal-web\""));
+        assert!(fields.contains("name=\"state\" value=\"state-value\""));
+        assert!(fields.contains("name=\"nonce\" value=\"nonce-value\""));
+        assert!(fields.contains("name=\"code_challenge_method\" value=\"S256\""));
+        assert_eq!(html_escape("Portal <Admin>"), "Portal &lt;Admin&gt;");
     }
 }

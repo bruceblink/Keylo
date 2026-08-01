@@ -19,4 +19,4 @@ Keylo 2.0 中，用户、服务和客户端都会映射为 Principal。服务 to
 - [Go net/http](go-net-http.md)
 - [Rust Axum](rust-axum.md)
 
-Keylo 当前不承诺完整 OIDC Provider 兼容性。请把 `/.well-known/keylo-configuration` 视为 Keylo 自己的轻量发现契约，而不是 OIDC discovery 文档。
+Keylo 不追求复制所有 OIDC 扩展，但承诺已公布的 Authorization Code + PKCE、Discovery、JWKS、ID Token 和 UserInfo 契约可由标准客户端使用。浏览器登录从标准 `/.well-known/openid-configuration` 的 authorization endpoint 开始；`/.well-known/keylo-configuration` 仍是面向资源服务的轻量发现契约，不替代 OIDC Discovery。

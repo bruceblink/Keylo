@@ -72,6 +72,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 `/v1/oidc/token` 支持标准 `client_secret_basic`：confidential client 可将按表单规则编码后的 `client_id:client_secret` 以 Base64 放入 `Authorization: Basic`，并在表单中省略 `client_id` 与 `client_secret`；同时保留 `client_secret_post` 兼容既有表单客户端。一次请求只能使用其中一种客户端认证方式。public client 继续在表单中提交 `client_id`，不提交 secret。
 
+未建立 Keylo 浏览器会话的有效 `/v1/oidc/authorize` 请求会返回同站点 HTML 登录页，并保留原始授权参数；标准 OIDC relying party 只需把浏览器导航到 authorization endpoint，无需解析 Keylo 专用 `login_required` JSON。登录后显示同意页，用户确认后才重定向并签发 code。
+
 `/v1/oidc/token` 失败时使用 OAuth 2.0 错误响应：`invalid_request` 表示 grant 参数不支持，`invalid_client` 表示客户端认证失败（同时返回 `WWW-Authenticate`），`invalid_grant` 表示授权码、redirect URI 或 PKCE verifier 不匹配、失效或已被消费。内部错误统一返回 `server_error`，不泄露数据库或签名细节。
 
 ### 2.2 OIDC 客户端注册

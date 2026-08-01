@@ -223,6 +223,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_oidc_authorize_without_session_renders_standard_browser_login_form() {
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let client_id = format!(
+            "oidc-browser-login-{}",
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let create = server
+            .post("/v1/admin/oidc/clients")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "client_id": client_id,
+                "name": "OIDC browser login test",
+                "client_type": "public",
+                "redirect_uris": ["https://client.example.test/callback"]
+            }))
+            .await;
+        create.assert_status_ok();
+
+        let response = server
+            .get(&format!(
+                "/v1/oidc/authorize?response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcallback&scope=openid%20profile&state=client-state&nonce=test-nonce&code_challenge={}&code_challenge_method=S256",
+                "a".repeat(43)
+            ))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let page = response.text();
+        assert!(page.contains("<form method=\"post\" action=\"/v1/oidc/login\">"));
+        assert!(page.contains("name=\"username\""));
+        assert!(page.contains("name=\"password\""));
+        assert!(page.contains(&format!("name=\"client_id\" value=\"{client_id}\"")));
+        assert!(page.contains("name=\"state\" value=\"client-state\""));
+        assert!(page.contains("name=\"nonce\" value=\"test-nonce\""));
+    }
+
+    #[tokio::test]
     async fn test_oidc_client_security_updates_invalidate_pending_authorization_codes() {
         let server = setup_test_server().await;
         let admin_login = server
