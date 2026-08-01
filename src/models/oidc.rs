@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
+use url::Url;
 
 /// A registered relying party that will later use Keylo's OIDC authorization endpoints.
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -297,9 +298,19 @@ pub fn validate_redirect_uris(redirect_uris: &[String]) -> Result<(), String> {
         return Err("at least one redirect_uri is required".to_string());
     }
     for uri in redirect_uris {
-        let is_loopback = uri.starts_with("http://127.0.0.1") || uri.starts_with("http://[::1]");
-        if (!uri.starts_with("https://") && !is_loopback) || uri.contains('#') {
-            return Err(format!("redirect_uri must use https (or a loopback IP) and cannot contain a fragment: {uri}"));
+        let parsed =
+            Url::parse(uri).map_err(|_| format!("redirect_uri must be an absolute URL: {uri}"))?;
+        let loopback_http = parsed.scheme() == "http"
+            && matches!(parsed.host_str(), Some("127.0.0.1") | Some("::1"));
+        let safe_https = parsed.scheme() == "https" && parsed.host_str().is_some();
+        if (!safe_https && !loopback_http)
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(format!(
+                "redirect_uri must use HTTPS (or an exact loopback IP over HTTP) without credentials or a fragment: {uri}"
+            ));
         }
     }
     Ok(())
@@ -353,6 +364,18 @@ mod tests {
         .is_err());
         assert!(validate_oidc_client_registration(&public_client(
             "https://portal.example.com/callback#token"
+        ))
+        .is_err());
+        assert!(validate_oidc_client_registration(&public_client(
+            "http://127.0.0.1.evil.example/callback"
+        ))
+        .is_err());
+        assert!(validate_oidc_client_registration(&public_client(
+            "http://[::1].evil.example/callback"
+        ))
+        .is_err());
+        assert!(validate_oidc_client_registration(&public_client(
+            "https://attacker@portal.example.com/callback"
         ))
         .is_err());
     }
