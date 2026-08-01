@@ -239,13 +239,15 @@ pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value>
         "userinfo_endpoint": format!("{base_url}/v1/oidc/userinfo"),
         "jwks_uri": format!("{base_url}/.well-known/jwks.json"),
         "response_types_supported": ["code"],
+        "response_modes_supported": ["query"],
         "grant_types_supported": ["authorization_code"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": ["S256"],
-        "scopes_supported": ["openid", "profile", "email"]
+        "scopes_supported": ["openid", "profile", "email"],
+        "claims_supported": ["sub", "name", "email", "email_verified"]
     }))
 }
 
