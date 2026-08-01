@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::Json,
     routing::{delete, get, post},
     Router,
@@ -15,6 +16,7 @@ use crate::{
         PrincipalListQuery,
     },
     state::AppState,
+    utils::{require_db, ApiResponse},
 };
 
 pub fn principal_admin_routes() -> Router<AppState> {
@@ -251,14 +253,17 @@ async fn assign_principal_role_handler(
     State(state): State<AppState>,
     Path(principal_id): Path<String>,
     Json(payload): Json<AssignRoleRequest>,
-) -> Result<Json<serde_json::Value>, AuthError> {
-    let db = state
-        .db
-        .as_deref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
+    let db = require_db(&state)?;
     crate::db::assign_role_to_principal(db, &principal_id, &payload.role_id)
         .await
-        .map_err(|e| AuthError::InvalidRequest(e.to_string()))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "success": false, "error": e.to_string() })),
+            )
+        })?;
     crate::db::create_audit_log(
         db,
         "principal.role_assigned",
@@ -269,7 +274,12 @@ async fn assign_principal_role_handler(
         )),
     )
     .await
-    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "success": false, "error": format!("Failed to audit principal role assignment: {e}") })),
+        )
+    })?;
 
     Ok(Json(json!({
         "success": true,
@@ -281,16 +291,22 @@ async fn revoke_principal_role_handler(
     claims: Claims,
     State(state): State<AppState>,
     Path((principal_id, role_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, AuthError> {
-    let db = state
-        .db
-        .as_deref()
-        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
+    let db = require_db(&state)?;
     let revoked = crate::db::revoke_role_from_principal(db, &principal_id, &role_id)
         .await
-        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "success": false, "error": format!("Failed to revoke principal role: {e}") })),
+            )
+        })?;
     if !revoked {
-        return Err(AuthError::NotFound);
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "success": false, "error": "Principal role binding not found" })),
+        ));
     }
     crate::db::create_audit_log(
         db,
@@ -302,7 +318,12 @@ async fn revoke_principal_role_handler(
         )),
     )
     .await
-    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "success": false, "error": format!("Failed to audit principal role revocation: {e}") })),
+        )
+    })?;
 
     Ok(Json(json!({
         "success": true,
