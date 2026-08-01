@@ -15,6 +15,7 @@
 /web/node_modules/
 /web/dist/
 /web/*.tsbuildinfo
+/examples/node-express-oidc/node_modules/
 /web/vite.config.js
 /web/vite.config.d.ts
 __pycache__/

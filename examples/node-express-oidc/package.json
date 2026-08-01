@@ -1,0 +1,17 @@
+{
+  "name": "keylo-node-express-oidc-example",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "express-session": "^1.18.1",
+    "openid-client": "^6.8.1"
+  }
+}

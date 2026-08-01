@@ -2,6 +2,8 @@
 
 适用场景：Node.js BFF、API 网关或 Express 资源服务使用 Keylo JWKS 本地验签。
 
+需要让 Express 本身作为浏览器 OIDC relying party（RP）完成用户登录时，使用可运行的 [Node Express OIDC RP 示例](../../examples/node-express-oidc/README.md)。它使用标准 `openid-client` Discovery、Authorization Code + PKCE、`state`、`nonce` 与 ID Token 校验；本页的中间件仍只负责资源服务侧 access token 验签。
+
 ## 1. 依赖
 
 ```bash
