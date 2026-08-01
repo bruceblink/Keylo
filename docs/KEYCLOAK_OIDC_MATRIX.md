@@ -1,6 +1,6 @@
 # Keycloak OIDC 上游兼容矩阵
 
-本文档是路线图中 OIDC 上游身份联邦的可执行验收基线。矩阵必须使用真实 Keycloak 服务；单元测试、模拟身份源或仅 HTTP 的本地装置都不能替代真实兼容性证据。
+本文档是路线图中 OIDC 上游身份联邦的可选 Keycloak 互操作回归工具。Keycloak 用于验证代表性标准 IdP 的兼容性，但 Keylo 的主验收仍是标准 OIDC 协议契约、测试向量和 HTTP 集成测试；镜像、网络或部署条件不可用时，不应阻塞轻量化主线。
 
 ## 测试装置
 
@@ -44,6 +44,17 @@ docker compose -f docker-compose.keycloak-matrix.yml up -d
 该开关默认关闭，artifact 会记录 `transport_mode: internal_http_allowed` 和内网隔离边界。启用前必须确认 Keylo、Keycloak、反向代理和浏览器客户端均在受控网络内；不得将 issuer、Discovery、授权端点或回调暴露到公网、共享办公网或不受控 Wi-Fi。HTTP 不提供传输加密，攻击者一旦能监听或篡改链路，就可能获取登录凭据、授权码或 Token。内网 HTTP 的通过结果只适用于该边界，不能作为 HTTPS、第三方或互联网接入场景的兼容性证据。
 
 ## 场景记录
+
+在启动浏览器场景前，使用已验证的 Keycloak 镜像 digest 创建一份初始记录：
+
+```powershell
+.\scripts\new_keycloak_oidc_matrix_artifact.ps1 `
+  -KeycloakVersion "26.7.0" `
+  -KeycloakImageDigest "sha256:<64 位小写十六进制>" `
+  -TransportMode internal_http
+```
+
+初始化工具固定写入六个 `not_executed` 场景和当前 Keylo commit，并以退出码 `2` 表示尚未验收。执行者只能根据实际 HTTP 结果更新对应场景；不得把网络、TLS、浏览器或镜像失败改写成 `passed`。
 
 完成一次矩阵执行后，先校验 JSON 记录，再将其附加到发布或审计记录：
 

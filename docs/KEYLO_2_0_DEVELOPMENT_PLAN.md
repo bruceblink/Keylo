@@ -1,6 +1,6 @@
 # Keylo 2.0 统一主体 RBAC 开发计划
 
-> **主线计划已对齐 `KEYCLOAK_ALIGNMENT_ROADMAP.md`。** 本文档负责统一 Principal、RBAC、资源树、授权检查和 Refresh Session 的设计细节；实际开发阶段、优先级、范围边界和验收门槛以 Keycloak 对齐路线图为准。当前主线处于阶段 B 的验收收尾，下一项工作是基于标准 Keycloak 测试 IdP 的 OIDC 兼容矩阵，不提前进入组织隔离、SCIM 或事件平台建设。
+> **主线计划已对齐 `KEYCLOAK_ALIGNMENT_ROADMAP.md`。** 本文档负责统一 Principal、RBAC、资源树、授权检查和 Refresh Session 的设计细节；实际开发阶段、优先级、范围边界和验收门槛以 Keycloak 对齐路线图为准。Keycloak 是能力参照与可选互操作回归环境，不是功能追平目标或硬性外部验收依赖。当前主线以标准 OIDC 协议契约、测试向量和 HTTP 集成为准，不提前进入组织隔离、SCIM 或事件平台建设。
 
 ## 1. 背景与目标
 
@@ -30,6 +30,8 @@ Keylo 2.0 定位为轻量统一认证与授权中心：
 - 授权：统一 Principal、统一 RBAC、资源树、权限检查、数据范围策略。
 - 集成：JWT/JWKS 本地验签、Token introspection、服务间授权、管理 API。
 - 治理：审计日志、Token 黑名单、Refresh Token 轮换、secret 加密、密钥轮换。
+
+能力演进遵循“取其精华，去其糟粕”：优先采用标准协议、安全会话与密钥治理、审计和可观测性；不为表面对齐 Keycloak 引入复杂 Realm 复制、脚本策略语言或没有明确接入方的重型组件。候选能力只有在存在明确需求、能复用 Principal/RBAC 模型且维护成本可控时才进入主线。
 
 Keystone 的定位应收敛为：
 
@@ -434,7 +436,7 @@ Keylo 侧落地：
 
 ## 9. 分阶段实施路线
 
-> 本节是 2.0 能力分解，不是独立于 `KEYCLOAK_ALIGNMENT_ROADMAP.md` 的第二条开发主线。执行时按路线图阶段 A-D 选择工作：阶段 A 的 OIDC 能力和阶段 B 的账户安全/身份联邦优先完成真实 Keycloak 兼容验收；阶段 C、D 只有在路线图准入条件满足或出现明确客户需求后才启动。
+> 本节是 2.0 能力分解，不是独立于 `KEYCLOAK_ALIGNMENT_ROADMAP.md` 的第二条开发主线。执行时按路线图阶段 A-D 选择工作：阶段 A 的 OIDC 能力和阶段 B 的账户安全/身份联邦优先完成标准协议契约、测试向量和 HTTP 集成验收；Keycloak 兼容矩阵仅作可选回归。阶段 C、D 只有在路线图准入条件满足或出现明确客户需求后才启动。
 
 ### 阶段 0：文档和契约冻结
 
