@@ -64,7 +64,7 @@
 
 `/.well-known/keylo-configuration` 用于第三方服务发现 Keylo 的核心接入端点。它不是完整 OIDC discovery 文档，而是 Keylo 面向轻量统一鉴权场景提供的稳定集成契约。
 
-`/.well-known/openid-configuration` 是标准 OIDC Discovery 地址，当前公布 Authorization Code + PKCE（S256）、RS256 JWKS 与 `openid`、`profile`、`email` scope。OIDC issuer 由 `OIDC_PUBLIC_ISSUER` 决定；生产部署必须将其配置为公开 HTTPS origin，不能使用 Keylo 的内部监听地址。
+`/.well-known/openid-configuration` 是标准 OIDC Discovery 地址，当前公布 Authorization Code + PKCE（S256）、RS256 JWKS 与 `openid`、`profile`、`email` scope。OIDC issuer 由 `OIDC_PUBLIC_ISSUER` 决定；默认使用 HTTPS，不能使用 Keylo 的内部监听地址。完全隔离的内网可设置 `ALLOW_INSECURE_INTERNAL_HTTP=true` 使用 HTTP origin，但必须确保 IdP、Keylo 和浏览器客户端均在受控网络内，且任何 issuer、Discovery、授权端点和回调均不暴露到不受信任网络。
 
 OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1/oidc/consent`、`POST /v1/oidc/logout`、`POST /v1/oidc/token`、`GET /v1/oidc/userinfo`。授权码有效期为 5 分钟，且只能原子消费一次。`/v1/oidc/login` 使用 `application/x-www-form-urlencoded` 提交用户名、密码及原授权请求参数，成功后创建 `HttpOnly; Secure; SameSite=Lax` 浏览器会话。登录后或已有会话访问 `/v1/oidc/authorize` 会显示客户端和 scope，必须通过同站点的 `/v1/oidc/consent` 明确确认才会重定向至已登记的 redirect URI 并签发 code；拒绝不会签发 code。`POST /v1/oidc/logout` 撤销该浏览器 OIDC session 并清除 cookie，不影响 API refresh session。UserInfo 只接受 OIDC access token；始终返回 `sub`，仅在被授予 `profile` 或 `email` scope 时返回对应 profile/email claims。
 
@@ -641,7 +641,7 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - `display_name`：面向管理界面或集成文档展示的名称。
 - `config`：身份源配置对象。Keylo 当前只校验它是 JSON object，具体 schema 由后续接入实现定义；响应会将 key 名含 `secret`、`password` 或等于 `token` 的配置值脱敏，提交后的敏感值不能通过读取接口回显。
 
-`oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调；scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience、`azp` 和 expiry。多受众 ID Token 必须把 `azp` 设为 Keylo 的 client ID；单受众 token 若带 `azp`，它也必须匹配。Keylo 目前以 `client_secret_basic` 完成 confidential client 的 token 认证；若 Discovery 显式声明的 `token_endpoint_auth_methods_supported` 不包含它，注册和登录都会拒绝，避免进入必然失败的兼容性路径。若 Discovery 提供 `userinfo_endpoint`，Keylo 会用 token response 的 access token 获取资料，并要求 UserInfo 的 `sub` 与已验证 ID Token 完全一致；UserInfo 只补齐 ID Token 缺失的 profile fields，不能覆盖已验证声明。
+`oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调。完全隔离的内网可在该身份源的 `config` 中显式设置 `allow_insecure_internal_http: true`，允许 issuer、Discovery endpoint 和 callback 使用 HTTP；此设置只能用于受控网络，不得跨越公网、共享办公网或不受控 Wi-Fi，且不得暴露到不受信任网络。scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience、`azp` 和 expiry。多受众 ID Token 必须把 `azp` 设为 Keylo 的 client ID；单受众 token 若带 `azp`，它也必须匹配。Keylo 目前以 `client_secret_basic` 完成 confidential client 的 token 认证；若 Discovery 显式声明的 `token_endpoint_auth_methods_supported` 不包含它，注册和登录都会拒绝，避免进入必然失败的兼容性路径。若 Discovery 提供 `userinfo_endpoint`，Keylo 会用 token response 的 access token 获取资料，并要求 UserInfo 的 `sub` 与已验证 ID Token 完全一致；UserInfo 只补齐 ID Token 缺失的 profile fields，不能覆盖已验证声明。
 
 Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `id_token_signing_alg_values_supported` 不包含 RS256，注册和登录都会拒绝，避免将授权码交给无法被当前验证器安全处理的上游身份源。
 

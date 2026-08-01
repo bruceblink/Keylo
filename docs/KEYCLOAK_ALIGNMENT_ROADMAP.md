@@ -157,8 +157,8 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 
 本矩阵以当前受支持的 Keycloak 发行版作为标准 OIDC upstream IdP。它是对模型与 HTTP handler 测试的补充，不以本地 mock 结果替代。执行环境必须满足：
 
-1. Keycloak 和 Keylo 都使用可被对方验证的 HTTPS issuer；Keylo 的上游身份源配置不允许生产环境使用 HTTP issuer。
-2. Keycloak client 使用 Authorization Code Flow，启用 Standard Flow，登记 Keylo 的精确 HTTPS callback URL，并采用 `client_secret_basic` 与 RS256 ID Token。
+1. 默认情况下，Keycloak 和 Keylo 都使用可被对方验证的 HTTPS issuer。完全隔离的内网部署可显式启用 HTTP，但必须记录该选择和网络边界：IdP、Keylo、反向代理及浏览器客户端均位于受控网络，入口防火墙不得向不受信任网络暴露 issuer、Discovery、授权端点或回调，HTTP 流量不得跨越公网、共享办公网或不受控 Wi-Fi。HTTP 内网记录只能证明该内网边界下的兼容性，不能代替 HTTPS/互联网接入验收。
+2. Keycloak client 使用 Authorization Code Flow，启用 Standard Flow，登记 Keylo 的精确 callback URL，并采用 `client_secret_basic` 与 RS256 ID Token。默认 callback 使用 HTTPS；内网 HTTP callback 必须与上述显式边界一致。
 3. Keycloak realm 配置提供 `openid profile email`，其中 UserInfo 补充场景需要把 email、email_verified 或映射的自定义 profile claim 仅放入 UserInfo。
 4. 运行记录必须包含 Keycloak 镜像 digest/版本、Keylo commit、已脱敏的 realm/client 配置和每个场景的 HTTP 结果；不得记录 client secret、授权码、access token、refresh token 或 ID Token 明文。
 

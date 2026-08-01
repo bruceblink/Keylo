@@ -96,6 +96,9 @@ pub struct OidcUpstreamConfig {
     pub client_id: String,
     pub client_secret: String,
     pub redirect_uri: String,
+    /// Permit HTTP only for an explicitly isolated internal identity-provider path.
+    #[serde(default)]
+    pub allow_insecure_internal_http: bool,
     #[serde(default = "default_oidc_scopes")]
     pub scopes: Vec<String>,
 }
@@ -425,9 +428,14 @@ pub fn oidc_discovery_url(issuer: &str) -> String {
 }
 
 /// Parse an OIDC URL structurally so credentials or malformed authorities cannot become outbound targets.
-fn validate_oidc_https_url(value: &str, label: &str, reject_query: bool) -> Result<(), String> {
-    let url = Url::parse(value).map_err(|_| format!("{label} must be an absolute HTTPS URL"))?;
-    if url.scheme() != "https"
+fn validate_oidc_transport_url(
+    value: &str,
+    label: &str,
+    reject_query: bool,
+    allow_insecure_internal_http: bool,
+) -> Result<(), String> {
+    let url = Url::parse(value).map_err(|_| format!("{label} must be an absolute URL"))?;
+    if !(url.scheme() == "https" || (allow_insecure_internal_http && url.scheme() == "http"))
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -435,14 +443,17 @@ fn validate_oidc_https_url(value: &str, label: &str, reject_query: bool) -> Resu
         || (reject_query && url.query().is_some())
     {
         return Err(format!(
-            "{label} must be an HTTPS URL without credentials or fragment"
+            "{label} must be an HTTPS URL, or HTTP with allow_insecure_internal_http, without credentials or fragment"
         ));
     }
     Ok(())
 }
 
-/// Validate the redirect URL while allowing only loopback HTTP callbacks for local development.
-fn validate_oidc_redirect_uri(value: &str) -> Result<(), String> {
+/// Validate the redirect URL while allowing HTTP only for loopback or an explicit internal deployment.
+fn validate_oidc_redirect_uri(
+    value: &str,
+    allow_insecure_internal_http: bool,
+) -> Result<(), String> {
     let url = Url::parse(value)
         .map_err(|_| "oidc_upstream redirect_uri must be an absolute URL".to_string())?;
     let loopback_http = url.scheme() == "http"
@@ -450,14 +461,16 @@ fn validate_oidc_redirect_uri(value: &str) -> Result<(), String> {
             url.host_str(),
             Some("localhost") | Some("127.0.0.1") | Some("[::1]") | Some("::1")
         );
-    if (url.scheme() != "https" && !loopback_http)
+    if (url.scheme() != "https"
+        && !loopback_http
+        && !(allow_insecure_internal_http && url.scheme() == "http"))
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
     {
         return Err(
-            "oidc_upstream redirect_uri must be HTTPS or a loopback HTTP URL without credentials or fragment"
+            "oidc_upstream redirect_uri must be HTTPS, loopback HTTP, or explicit internal HTTP without credentials or fragment"
                 .to_string(),
         );
     }
@@ -480,11 +493,16 @@ pub fn parse_oidc_upstream_config(config: &Value) -> Result<OidcUpstreamConfig, 
     })?;
     let issuer = parsed.issuer.trim().to_string();
     let redirect_uri = parsed.redirect_uri.trim().to_string();
-    validate_oidc_https_url(&issuer, "oidc_upstream issuer", true)?;
+    validate_oidc_transport_url(
+        &issuer,
+        "oidc_upstream issuer",
+        true,
+        parsed.allow_insecure_internal_http,
+    )?;
     if parsed.client_id.trim().is_empty() || parsed.client_secret.trim().is_empty() {
         return Err("oidc_upstream client_id and client_secret must not be empty".to_string());
     }
-    validate_oidc_redirect_uri(&redirect_uri)?;
+    validate_oidc_redirect_uri(&redirect_uri, parsed.allow_insecure_internal_http)?;
     let scopes = parsed
         .scopes
         .iter()
@@ -516,15 +534,26 @@ pub fn parse_oidc_upstream_discovery(
     if parsed.issuer != registered_issuer {
         return Err("OIDC Discovery issuer does not match the registered issuer".to_string());
     }
+    let allow_insecure_internal_http = registered_issuer.starts_with("http://");
     for (label, endpoint) in [
         ("authorization_endpoint", &parsed.authorization_endpoint),
         ("token_endpoint", &parsed.token_endpoint),
         ("jwks_uri", &parsed.jwks_uri),
     ] {
-        validate_oidc_https_url(endpoint, &format!("OIDC Discovery {label}"), false)?;
+        validate_oidc_transport_url(
+            endpoint,
+            &format!("OIDC Discovery {label}"),
+            false,
+            allow_insecure_internal_http,
+        )?;
     }
     if let Some(endpoint) = &parsed.userinfo_endpoint {
-        validate_oidc_https_url(endpoint, "OIDC Discovery userinfo_endpoint", false)?;
+        validate_oidc_transport_url(
+            endpoint,
+            "OIDC Discovery userinfo_endpoint",
+            false,
+            allow_insecure_internal_http,
+        )?;
     }
     if !parsed
         .response_types_supported
@@ -603,6 +632,15 @@ mod tests {
             "scopes": ["profile"]
         });
         assert!(super::parse_oidc_upstream_config(&invalid).is_err());
+
+        let internal_http = json!({
+            "issuer": "http://idp.internal/realms/acme",
+            "client_id": "keylo",
+            "client_secret": "secret",
+            "redirect_uri": "http://identity.internal/v1/upstream/oidc/callback",
+            "allow_insecure_internal_http": true
+        });
+        assert!(super::parse_oidc_upstream_config(&internal_http).is_ok());
 
         let credentialed_issuer = json!({
             "issuer": "https://idp.example@localhost/realms/acme",

@@ -6,30 +6,33 @@ param(
     [Parameter(Mandatory)]
     [string]$KeycloakIssuer,
 
+    [switch]$AllowInsecureInternalHttp,
+
     [string]$ArtifactDirectory = "artifacts/oidc-matrix"
 )
 
 $ErrorActionPreference = "Stop"
 
-function Assert-HttpsIssuer([string]$Name, [string]$Value) {
-    # Reject endpoint forms that cannot be a stable, externally verifiable OIDC issuer.
+function Assert-Issuer([string]$Name, [string]$Value, [bool]$AllowInternalHttp) {
+    # HTTP is accepted only after an explicit internal-deployment opt-in.
     $uri = [Uri]$Value
-    if ($uri.Scheme -ne "https" -or !$uri.IsAbsoluteUri -or $uri.Query -or $uri.Fragment) {
-        throw "$Name must be an absolute HTTPS issuer without query or fragment"
+    $allowedScheme = $uri.Scheme -eq "https" -or ($AllowInternalHttp -and $uri.Scheme -eq "http")
+    if (!$allowedScheme -or !$uri.IsAbsoluteUri -or $uri.Query -or $uri.Fragment -or $uri.UserInfo) {
+        throw "$Name must be an absolute HTTPS issuer, or explicit internal HTTP issuer, without credentials, query, or fragment"
     }
     return $uri.AbsoluteUri.TrimEnd('/')
 }
 
-function Assert-HttpsOrigin([string]$Name, [string]$Value) {
+function Assert-Origin([string]$Name, [string]$Value, [bool]$AllowInternalHttp) {
     # Keylo's public issuer is intentionally an origin, unlike Keycloak realm issuers which have a path.
-    $issuer = Assert-HttpsIssuer $Name $Value
+    $issuer = Assert-Issuer $Name $Value $AllowInternalHttp
     if (([Uri]$issuer).AbsolutePath -ne "/") {
-        throw "$Name must be an HTTPS origin without a path"
+        throw "$Name must be an origin without a path"
     }
     return $issuer
 }
 
-function Assert-DiscoveryContract([string]$Name, [string]$Issuer) {
+function Assert-DiscoveryContract([string]$Name, [string]$Issuer, [bool]$AllowInternalHttp) {
     # Fetch only public Discovery metadata and verify the capabilities Keylo's upstream flow requires.
     $document = Invoke-RestMethod -Uri "$Issuer/.well-known/openid-configuration" -Method Get
     if ($document.issuer -ne $Issuer) {
@@ -37,8 +40,13 @@ function Assert-DiscoveryContract([string]$Name, [string]$Issuer) {
     }
     foreach ($field in @("authorization_endpoint", "token_endpoint", "jwks_uri", "userinfo_endpoint")) {
         $value = [string]$document.$field
-        if ([string]::IsNullOrWhiteSpace($value) -or ([Uri]$value).Scheme -ne "https") {
-            throw "$Name Discovery $field must be an HTTPS URL"
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            throw "$Name Discovery $field must be present"
+        }
+        $uri = [Uri]$value
+        $allowedScheme = $uri.Scheme -eq "https" -or ($AllowInternalHttp -and $uri.Scheme -eq "http")
+        if (!$uri.IsAbsoluteUri -or !$allowedScheme -or $uri.UserInfo) {
+            throw "$Name Discovery $field must be an HTTPS URL, or explicit internal HTTP URL"
         }
     }
     if ($document.response_types_supported -notcontains "code") {
@@ -63,14 +71,16 @@ $artifact = [ordered]@{
     keylo_commit = $commit
     status = "not_executed"
     reason = "preflight_not_run"
+    transport_mode = $(if ($AllowInsecureInternalHttp) { "internal_http_allowed" } else { "https_required" })
+    security_boundary = $(if ($AllowInsecureInternalHttp) { "internal_http_requires_network_isolation" } else { "https" })
     note = "This record contains public endpoint metadata only; it contains no credentials, codes, or tokens."
 }
 
 try {
-    $keyloIssuer = Assert-HttpsOrigin "KeyloPublicIssuer" $KeyloPublicIssuer
-    $keycloakIssuer = Assert-HttpsIssuer "KeycloakIssuer" $KeycloakIssuer
-    $keyloDiscovery = Assert-DiscoveryContract "Keylo" $keyloIssuer
-    $keycloakDiscovery = Assert-DiscoveryContract "Keycloak" $keycloakIssuer
+    $keyloIssuer = Assert-Origin "KeyloPublicIssuer" $KeyloPublicIssuer $AllowInsecureInternalHttp
+    $keycloakIssuer = Assert-Issuer "KeycloakIssuer" $KeycloakIssuer $AllowInsecureInternalHttp
+    $keyloDiscovery = Assert-DiscoveryContract "Keylo" $keyloIssuer $AllowInsecureInternalHttp
+    $keycloakDiscovery = Assert-DiscoveryContract "Keycloak" $keycloakIssuer $AllowInsecureInternalHttp
     $artifact.keylo_issuer = $keyloDiscovery.issuer
     $artifact.keycloak_issuer = $keycloakDiscovery.issuer
     $artifact.keycloak_authorization_endpoint = $keycloakDiscovery.authorization_endpoint
@@ -82,7 +92,7 @@ try {
 }
 catch {
     # Keep an auditable result without serializing remote error bodies or credentials.
-    $artifact.reason = "https_discovery_or_endpoint_validation_failed"
+    $artifact.reason = "discovery_or_endpoint_validation_failed"
 }
 
 $path = Join-Path $ArtifactDirectory "preflight-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')).json"

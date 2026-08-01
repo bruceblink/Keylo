@@ -482,6 +482,7 @@ wwIDAQAB
             server_addr: "127.0.0.1".to_string(),
             server_port: 2345,
             oidc_public_issuer: None,
+            allow_insecure_internal_http: false,
             mfa_secret_key: None,
             mfa_require_for_admins: false,
             environment: "development".to_string(),

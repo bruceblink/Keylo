@@ -52,10 +52,14 @@ if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
 }
 
 $artifact = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-foreach ($field in @("executed_at_utc", "keylo_commit", "keycloak_version", "status", "scenarios")) {
+foreach ($field in @("executed_at_utc", "keylo_commit", "keycloak_version", "keycloak_image_digest", "status", "scenarios")) {
     Assert-Property $artifact $field
 }
 Assert-NoSensitiveFields $artifact
+
+if ([string]$artifact.keycloak_image_digest -notmatch '^sha256:[a-f0-9]{64}$') {
+    throw "keycloak_image_digest must be a sha256 image digest"
+}
 
 if ([string]$artifact.status -notin @("passed", "failed", "not_executed")) {
     throw "Artifact status must be passed, failed, or not_executed"

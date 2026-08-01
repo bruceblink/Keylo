@@ -6,7 +6,7 @@
 
 `docker-compose.keycloak-matrix.yml` 会将 `tests/keycloak/realm/keylo-matrix-realm.json` 导入 Keycloak 26.7.0。该 Realm 定义了一个使用授权码流程的机密客户端 `keylo-upstream-matrix`，以及一个已验证邮箱的测试用户。客户端额外提供 `matrix_userinfo_marker`：它只出现在 UserInfo 响应，不出现在 ID Token 或 access token，用于验证 Keylo 只在 `sub` 一致时补充声明。执行该场景时，将身份源 `claim_mapping.username` 配置为 `matrix_userinfo_marker`。密码、客户端密钥和 Keylo 回调地址均通过环境变量注入，不会提交到仓库。
 
-该装置使用 `start-dev` 和 HTTP 仅用于本地启动 Realm。它本身不是正式验收环境；矩阵执行必须让 Keylo 和 Keycloak 都使用对方能够验证的 HTTPS issuer。
+该装置使用 `start-dev` 和 HTTP 仅用于本地启动 Realm。默认矩阵执行要求 Keylo 和 Keycloak 使用 HTTPS issuer；完全隔离的内网可显式选择 HTTP，详见下方“内网 HTTP 边界”。
 
 ```powershell
 $env:KEYCLOAK_MATRIX_ADMIN_PASSWORD = "..."
@@ -18,7 +18,7 @@ docker compose -f docker-compose.keycloak-matrix.yml up -d
 
 ## 前置检查
 
-使用实际浏览器流程将访问的 HTTPS endpoint 执行前置检查：
+默认使用实际浏览器流程将访问的 HTTPS endpoint 执行前置检查：
 
 ```powershell
 .\scripts\test_keycloak_oidc_matrix_preflight.ps1 `
@@ -26,9 +26,22 @@ docker compose -f docker-compose.keycloak-matrix.yml up -d
   -KeycloakIssuer "https://idp.example.test/realms/keylo-matrix"
 ```
 
-脚本会检查 Discovery issuer 的精确绑定、HTTPS endpoint、授权码支持、`client_secret_basic` 和 RS256。它只会在 `artifacts/oidc-matrix/` 下保存公开 Discovery 元数据和当前 Keylo commit，不会写入密钥、授权码、access token、refresh token 或 ID Token。如果任一 endpoint 无法访问，或不满足 TLS/Discovery 契约，脚本仍会生成 `status: "not_executed"` 的 artifact，并以退出码 `2` 结束；环境不可用不会被转换为矩阵通过。
+脚本会检查 Discovery issuer 的精确绑定、endpoint 传输模式、授权码支持、`client_secret_basic` 和 RS256。它只会在 `artifacts/oidc-matrix/` 下保存公开 Discovery 元数据和当前 Keylo commit，不会写入密钥、授权码、access token、refresh token 或 ID Token。如果任一 endpoint 无法访问，或不满足传输/Discovery 契约，脚本仍会生成 `status: "not_executed"` 的 artifact，并以退出码 `2` 结束；环境不可用不会被转换为矩阵通过。
 
 前置检查通过只表示环境具备执行矩阵的条件，不代表浏览器场景已经通过。
+
+## 内网 HTTP 边界
+
+对完全隔离的内网部署，可显式传入 `-AllowInsecureInternalHttp`：
+
+```powershell
+.\scripts\test_keycloak_oidc_matrix_preflight.ps1 `
+  -KeyloPublicIssuer "http://identity.internal" `
+  -KeycloakIssuer "http://keycloak.internal/realms/keylo-matrix" `
+  -AllowInsecureInternalHttp
+```
+
+该开关默认关闭，artifact 会记录 `transport_mode: internal_http_allowed` 和内网隔离边界。启用前必须确认 Keylo、Keycloak、反向代理和浏览器客户端均在受控网络内；不得将 issuer、Discovery、授权端点或回调暴露到公网、共享办公网或不受控 Wi-Fi。HTTP 不提供传输加密，攻击者一旦能监听或篡改链路，就可能获取登录凭据、授权码或 Token。内网 HTTP 的通过结果只适用于该边界，不能作为 HTTPS、第三方或互联网接入场景的兼容性证据。
 
 ## 场景记录
 
@@ -39,7 +52,7 @@ docker compose -f docker-compose.keycloak-matrix.yml up -d
   -Path .\artifacts\oidc-matrix\keycloak-run.json
 ```
 
-artifact 必须包含 `executed_at_utc`、`keylo_commit`、`keycloak_version`、顶层 `status`，以及下面六个且仅六个场景名称。每个场景的状态只能是 `passed`、`failed` 或 `not_executed`。校验器会拒绝名称表示凭据、授权码、Token 或私钥的字段。结构有效但未完成的记录返回退出码 `2`；只有六个场景全部通过时才返回退出码 `0`。
+artifact 必须包含 `executed_at_utc`、`keylo_commit`、`keycloak_version`、`keycloak_image_digest`、顶层 `status`，以及下面六个且仅六个场景名称。`keycloak_image_digest` 必须是 `sha256:<64 位小写十六进制>`，用于将结果绑定到实际运行的 Keycloak 镜像。每个场景的状态只能是 `passed`、`failed` 或 `not_executed`。校验器会拒绝名称表示凭据、授权码、Token 或私钥的字段。结构有效但未完成的记录返回退出码 `2`；只有六个场景全部通过时才返回退出码 `0`。
 
 每个场景只记录 HTTP 状态和结果摘要，不记录敏感值：
 

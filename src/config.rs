@@ -548,6 +548,8 @@ pub struct Config {
     pub server_port: u16,
     /// Public issuer used by OIDC Discovery and OIDC tokens; separate from the bind address.
     pub oidc_public_issuer: Option<String>,
+    /// Permit HTTP only for an explicitly isolated internal OIDC deployment.
+    pub allow_insecure_internal_http: bool,
     /// AES-256 key for encrypting user MFA seeds at rest.
     pub mfa_secret_key: Option<String>,
     /// Require all human administrators to enroll and verify MFA before management writes.
@@ -639,6 +641,7 @@ impl Config {
         let oidc_public_issuer = env::var("OIDC_PUBLIC_ISSUER")
             .ok()
             .filter(|value| !value.trim().is_empty());
+        let allow_insecure_internal_http = parse_bool_env("ALLOW_INSECURE_INTERNAL_HTTP", false);
         let mfa_secret_key = env::var("MFA_SECRET_KEY")
             .ok()
             .filter(|value| !value.trim().is_empty());
@@ -704,6 +707,7 @@ impl Config {
             server_addr,
             server_port,
             oidc_public_issuer,
+            allow_insecure_internal_http,
             mfa_secret_key,
             mfa_require_for_admins,
             environment,
@@ -927,9 +931,10 @@ impl Config {
         require_positive(errors, "SERVER_PORT", self.server_port as i64);
         if self.is_production() {
             match self.oidc_public_issuer.as_deref() {
-                Some(issuer) if valid_oidc_public_issuer(issuer) => {}
+                Some(issuer)
+                    if valid_oidc_public_issuer(issuer, self.allow_insecure_internal_http) => {}
                 _ => errors.push(
-                    "OIDC_PUBLIC_ISSUER must be an absolute HTTPS origin without a path, query, fragment, or trailing slash in production"
+                    "OIDC_PUBLIC_ISSUER must be an absolute HTTPS origin, or an explicit internal HTTP origin with ALLOW_INSECURE_INTERNAL_HTTP=true, without a path, query, fragment, or trailing slash in production"
                         .to_string(),
                 ),
             }
@@ -1039,11 +1044,12 @@ fn valid_cors_origin(origin: &str) -> bool {
             .is_none_or(|path_and_query| path_and_query.as_str() == "/")
 }
 
-fn valid_oidc_public_issuer(issuer: &str) -> bool {
+fn valid_oidc_public_issuer(issuer: &str, allow_insecure_internal_http: bool) -> bool {
     let Ok(uri) = issuer.parse::<http::Uri>() else {
         return false;
     };
-    uri.scheme_str() == Some("https")
+    (uri.scheme_str() == Some("https")
+        || (allow_insecure_internal_http && uri.scheme_str() == Some("http")))
         && uri.host().is_some()
         && uri
             .path_and_query()
@@ -1101,6 +1107,7 @@ mod tests {
             server_addr: "127.0.0.1".to_string(),
             server_port: 2345,
             oidc_public_issuer: Some("https://identity.example.com".to_string()),
+            allow_insecure_internal_http: false,
             mfa_secret_key: Some("01234567890123456789012345678901".to_string()),
             mfa_require_for_admins: false,
             environment: "development".to_string(),
@@ -1349,7 +1356,7 @@ mod tests {
     }
 
     #[test]
-    fn production_startup_requires_a_stable_https_oidc_issuer() {
+    fn production_startup_allows_http_oidc_issuer_only_with_internal_opt_in() {
         let mut config = valid_config();
         config.environment = "production".to_string();
         config.oidc_public_issuer = None;
@@ -1360,6 +1367,9 @@ mod tests {
 
         config.oidc_public_issuer = Some("http://identity.example.com".to_string());
         assert!(config.validate_for_setup_initialization().is_err());
+
+        config.allow_insecure_internal_http = true;
+        assert!(config.validate_for_setup_initialization().is_ok());
 
         config.oidc_public_issuer = Some("https://identity.example.com".to_string());
         assert!(config.validate_for_setup_initialization().is_ok());

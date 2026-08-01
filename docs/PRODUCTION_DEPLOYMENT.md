@@ -25,9 +25,10 @@ CORS_ALLOWED_ORIGINS=https://admin.example.com
 OIDC_PUBLIC_ISSUER=https://identity.example.com
 MFA_SECRET_KEY=<base64-encoded-32-byte-key>
 MFA_REQUIRE_FOR_ADMINS=true
+ALLOW_INSECURE_INTERNAL_HTTP=false
 ```
 
-`OIDC_PUBLIC_ISSUER` 是浏览器、移动端和第三方 relying party 使用的稳定 OIDC issuer，同时决定 Discovery、ID Token 和 OIDC access token 的 `iss`。它不能是容器绑定地址，生产环境必须是没有路径、查询、fragment 或末尾 `/` 的公开 HTTPS origin；修改该值会使依赖旧 issuer 的客户端失效。
+`OIDC_PUBLIC_ISSUER` 是浏览器、移动端和第三方 relying party 使用的稳定 OIDC issuer，同时决定 Discovery、ID Token 和 OIDC access token 的 `iss`。它不能是容器绑定地址，且必须没有路径、查询、fragment 或末尾 `/`；修改该值会使依赖旧 issuer 的客户端失效。默认要求 HTTPS。仅在完全隔离的内网中，可将 `ALLOW_INSECURE_INTERNAL_HTTP=true` 并使用 HTTP issuer：Keylo、Keycloak、反向代理和浏览器客户端必须都处于受控网络，入口防火墙不得将该 issuer、Discovery、授权端点或回调暴露到不受信任网络，且 HTTP 流量不得跨越公网、共享办公网或不受控 Wi-Fi。此开关降低令牌、授权码和登录凭据的传输保护，不能作为互联网部署、零信任边界或第三方接入方案。
 
 `MFA_SECRET_KEY` 是加密数据库中 TOTP seed 的独立 AES-256 主密钥。生产环境必须配置 32 字节原始值或其 base64 表示，并将它与数据库备份分开保存；轮换该密钥必须在后续 MFA 数据重加密流程中完成。
 
