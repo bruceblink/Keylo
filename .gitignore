@@ -20,6 +20,7 @@
 /examples/rust-axum-oidc/target/
 /examples/spring-boot-oidc/.gradle/
 /examples/spring-boot-oidc/build/
+/examples/spring-boot-oidc/bin/
 /web/vite.config.js
 /web/vite.config.d.ts
 __pycache__/
