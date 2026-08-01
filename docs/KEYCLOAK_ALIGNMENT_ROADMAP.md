@@ -54,12 +54,12 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 
 | 路线图阶段 | 当前状态 | 对齐结论 |
 | --- | --- | --- |
-| 阶段 A：标准 OIDC 接入 | 核心实现基本完成 | Discovery、Authorization Code、PKCE、state/nonce、ID Token、UserInfo、浏览器会话和退出已具备；真实标准客户端兼容矩阵仍需补齐。 |
-| 阶段 B：账户安全与身份联邦 | 实现基本完成 | TOTP、恢复码、MFA 审计、OIDC upstream、JIT、关联/解除关联和会话撤销已具备；主验收以标准 OIDC 协议契约、测试向量和 HTTP 集成为准，Keycloak 矩阵作为可选互操作回归。 |
+| 阶段 A：标准 OIDC 接入 | 标准客户端基线已完成 | Discovery、Authorization Code、PKCE、state/nonce、ID Token、UserInfo、浏览器会话和退出已具备；Node、Go、Rust、Spring RP 样例已提供，并用标准 `openidconnect` 客户端完成真实 HTTP Code + PKCE、ID Token 与 UserInfo `sub` 验证。 |
+| 阶段 B：账户安全与身份联邦 | 协议兼容基线已完成 | TOTP、恢复码、MFA 审计、OIDC upstream、JIT、关联/解除关联和会话撤销已具备；协议契约和 HTTP 集成测试已通过，Keycloak 矩阵继续作为可选互操作回归。 |
 | 阶段 C：授权治理与组织隔离 | 基础授权已具备，阶段目标未启动 | Principal/RBAC/资源树/授权检查不等于组织隔离；组织、数据范围、上下文条件和决策版本暂不进入主线。 |
 | 阶段 D：企业生命周期与运行治理 | 尚未启动 | SCIM、Outbox/Webhook、OpenTelemetry、延迟指标和 HA 演练等待阶段 C 或明确客户需求。 |
 
-当前主线准入条件：阶段 B 的标准 OIDC 协议契约、测试向量和 HTTP 集成测试必须持续通过。Keycloak 标准测试 IdP 矩阵用于可选互操作回归，不因镜像、网络或部署条件不可用而阻塞轻量化主线。
+当前主线准入条件：阶段 A/B 的标准 OIDC 协议契约、测试向量、四语言客户端样例和真实 HTTP 集成测试必须持续通过。Keycloak 标准测试 IdP 矩阵用于可选互操作回归，不因镜像、网络或部署条件不可用而阻塞轻量化主线。
 
 ## 3. 分阶段计划
 
@@ -161,7 +161,7 @@ Keylo 面向通用身份中心定位，因此 OIDC Provider 是主线 P0：陌�
 
 ## 6. 建议的下一项工作
 
-实施阶段 B 的验收项：**标准 OIDC 协议兼容基线**。覆盖 Discovery、Authorization Code、PKCE、`state`、`nonce`、ID Token/JWKS 校验、UserInfo `sub` 绑定，以及首次登录、重复登录、邮箱变化、禁用用户/身份源和 refresh session 撤销。协议行为由测试向量和 HTTP 集成测试验证；Keycloak 仅作为可选的代表性互操作回归环境。
+阶段 A/B 的标准 OIDC 协议兼容基线已完成并纳入持续回归：覆盖 Discovery、Authorization Code、PKCE、`state`、`nonce`、ID Token/JWKS 校验、UserInfo `sub` 绑定、四语言 RP 样例，以及首次登录、拒绝授权和授权码一次性消费。协议行为由测试向量和真实 HTTP 集成测试验证；Keycloak 仅作为可选的代表性互操作回归环境。下一项工作只有在出现多组织 SaaS 或独立客户隔离需求后，才进入阶段 C 的组织边界设计。
 
 ### 6.1 可选 Keycloak 互操作矩阵执行契约
 
