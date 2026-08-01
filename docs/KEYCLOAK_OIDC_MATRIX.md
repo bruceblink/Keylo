@@ -4,7 +4,7 @@
 
 ## 测试装置
 
-`docker-compose.keycloak-matrix.yml` 会将 `tests/keycloak/realm/keylo-matrix-realm.json` 导入 Keycloak 26.7.0。该 Realm 定义了一个使用授权码流程的机密客户端 `keylo-upstream-matrix`，以及一个已验证邮箱的测试用户。密码、客户端密钥和 Keylo 回调地址均通过环境变量注入，不会提交到仓库。
+`docker-compose.keycloak-matrix.yml` 会将 `tests/keycloak/realm/keylo-matrix-realm.json` 导入 Keycloak 26.7.0。该 Realm 定义了一个使用授权码流程的机密客户端 `keylo-upstream-matrix`，以及一个已验证邮箱的测试用户。客户端额外提供 `matrix_userinfo_marker`：它只出现在 UserInfo 响应，不出现在 ID Token 或 access token，用于验证 Keylo 只在 `sub` 一致时补充声明。执行该场景时，将身份源 `claim_mapping.username` 配置为 `matrix_userinfo_marker`。密码、客户端密钥和 Keylo 回调地址均通过环境变量注入，不会提交到仓库。
 
 该装置使用 `start-dev` 和 HTTP 仅用于本地启动 Realm。它本身不是正式验收环境；矩阵执行必须让 Keylo 和 Keycloak 都使用对方能够验证的 HTTPS issuer。
 
@@ -47,7 +47,7 @@ artifact 必须包含 `executed_at_utc`、`keylo_commit`、`keycloak_version`、
 | --- | --- |
 | 首次登录 `first_login` | JIT 创建一个本地用户和一个稳定的身份源映射。 |
 | 重复登录 `repeat_login` | 复用已有用户和映射，不重复创建。 |
-| UserInfo 补充 `userinfo_completion` | 只有在 `sub` 匹配时，才能补充 ID Token 缺失的 profile 字段。 |
+| UserInfo 补充 `userinfo_completion` | 使用只存在于 UserInfo 的 `matrix_userinfo_marker`；只有在 `sub` 匹配时，才能补充 ID Token 缺失的 profile 字段。 |
 | 邮箱变化 `email_change` | 登录继续依据稳定的上游 `sub`，不自动改写本地邮箱。 |
 | 禁用 Keylo 用户 `disabled_keylo_user` | 受保护访问被拒绝，且该用户的 refresh session 已撤销。 |
 | 禁用身份源 `disabled_identity_source` | 新回调被拒绝，来源 refresh session 已撤销，审计记录包含撤销数量。 |

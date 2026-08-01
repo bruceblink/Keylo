@@ -17,7 +17,24 @@
       "serviceAccountsEnabled": false,
       "redirectUris": ["${KEYLO_MATRIX_REDIRECT_URI}"],
       "webOrigins": [],
-      "protocolMappers": []
+      "protocolMappers": [
+        {
+          "name": "matrix userinfo-only username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "matrix_username",
+            "claim.name": "matrix_userinfo_marker",
+            "jsonType.label": "String",
+            "multivalued": "false",
+            "id.token.claim": "false",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "false"
+          }
+        }
+      ]
     }
   ],
   "users": [
@@ -26,6 +43,9 @@
       "enabled": true,
       "email": "matrix-user@example.test",
       "emailVerified": true,
+      "attributes": {
+        "matrix_username": ["matrix-userinfo"]
+      },
       "firstName": "Matrix",
       "lastName": "User",
       "credentials": [
