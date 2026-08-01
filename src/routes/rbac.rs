@@ -935,6 +935,7 @@ async fn assign_role_to_user_handler(
     Path(user_id): Path<String>,
     Json(req): Json<AssignRoleRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     match assign_role_to_user(require_db(&state)?, &user_id, &req.role_id).await {
         Ok(_) => {
             audit_event(
@@ -960,6 +961,7 @@ async fn revoke_role_from_user_handler(
     Path(user_id): Path<String>,
     Path(role_id): Path<String>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     match revoke_role_from_user(require_db(&state)?, &user_id, &role_id).await {
         Ok(true) => {
             audit_event(
@@ -1016,6 +1018,7 @@ async fn assign_permission_to_role_handler(
     Path(role_id): Path<String>,
     Json(req): Json<AssignPermissionRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     match assign_permission_to_role(require_db(&state)?, &role_id, &req.permission_id).await {
         Ok(_) => {
             audit_event(
@@ -1047,6 +1050,7 @@ async fn revoke_permission_from_role_handler(
     Path(role_id): Path<String>,
     Path(permission_id): Path<String>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     match revoke_permission_from_role(require_db(&state)?, &role_id, &permission_id).await {
         Ok(true) => {
             audit_event(
@@ -1083,6 +1087,7 @@ async fn assign_roles_to_user_batch_handler(
     Path(user_id): Path<String>,
     Json(req): Json<AssignRolesBatchRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     if req.role_ids.is_empty() {
         return Err(error_response(
             StatusCode::BAD_REQUEST,
@@ -1126,6 +1131,7 @@ async fn assign_permissions_to_role_batch_handler(
     Path(role_id): Path<String>,
     Json(req): Json<AssignPermissionsBatchRequest>,
 ) -> ApiResponse {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
     if req.permission_ids.is_empty() {
         return Err(error_response(
             StatusCode::BAD_REQUEST,

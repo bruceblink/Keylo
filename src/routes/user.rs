@@ -318,6 +318,10 @@ async fn update_user_handler(
 ) -> ApiResponse {
     let db = require_db(&state)?;
 
+    if req.password.is_some() || req.active == Some(false) {
+        crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
+    }
+
     if let Err(msg) = validate_optional_password(req.password.as_deref()) {
         return Err(invalid_password_response(msg));
     }
@@ -361,6 +365,8 @@ async fn delete_user_handler(
 ) -> ApiResponse {
     let db = require_db(&state)?;
 
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
+
     match crate::db::user::delete_user(db, &user_id, Some(&claims.sub)).await {
         Ok(true) => Ok(Json(json!({
             "success": true,
@@ -390,6 +396,8 @@ async fn reset_user_password_handler(
     Json(req): Json<ResetPasswordRequest>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
+
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
 
     if let Err(msg) = validate_optional_password(Some(&req.password)) {
         return Err(invalid_password_response(msg));

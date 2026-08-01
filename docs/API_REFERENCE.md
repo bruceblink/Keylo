@@ -278,6 +278,10 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 管理员通过同一更新接口设置 `password` 时，Keylo 会在密码生效前撤销该用户的全部 refresh session 和 OIDC 浏览器会话，并记录 `user.password_updated` 审计事件；旧 refresh token 与浏览器 OIDC cookie 不能继续使用。
 
+当管理操作由已启用 TOTP 的人类用户 Principal 发起时，禁用、删除用户、管理员改密和重置密码必须先完成与当前 access token 绑定的近期 MFA 验证；管理客户端凭据属于机器自动化身份，不适用 TOTP 挑战。
+
+同一规则适用于用户角色的授予和撤销，以及角色权限的单项或批量变更。未完成近期 MFA 验证的人类管理用户会收到 `403` 和 `mfa_required: true`，不会产生部分授权修改。
+
 管理员删除用户时，Keylo 会在删除账户的同一事务中撤销 refresh session、删除该用户的 OIDC 浏览器会话和关联 Principal（及其角色绑定），并写入 `user.deleted` 审计事件。
 
 ### 5.1 Provision 请求体

@@ -59,6 +59,31 @@ pub async fn require_recent_mfa_for_enabled_user(
     }
 }
 
+/// Require recent MFA for a human caller while keeping machine client credentials usable for automation.
+pub async fn require_recent_mfa_for_user_claims(
+    state: &AppState,
+    claims: &Claims,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if !mfa_required_for_claims(claims) {
+        return Ok(());
+    }
+    let user_id = claims.uid.as_deref().ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "success": false,
+                "error": "User principal is missing uid",
+            })),
+        )
+    })?;
+    require_recent_mfa_for_enabled_user(state, user_id, &claims.jti).await
+}
+
+/// Classify human user tokens, including legacy user tokens that carry a uid but no principal type.
+fn mfa_required_for_claims(claims: &Claims) -> bool {
+    matches!(claims.principal_type.as_deref(), Some("user")) || claims.uid.is_some()
+}
+
 /// Verify an enabled factor and bind the resulting short-lived proof to this access token.
 async fn verify_recent_mfa(
     claims: Claims,
@@ -335,7 +360,7 @@ fn internal_error_response(
 
 #[cfg(test)]
 mod tests {
-    use super::require_user_id;
+    use super::{mfa_required_for_claims, require_user_id};
     use crate::models::Claims;
 
     fn claims(uid: Option<&str>, principal_type: Option<&str>) -> Claims {
@@ -363,5 +388,32 @@ mod tests {
         );
         assert!(require_user_id(&claims(None, Some("user"))).is_err());
         assert!(require_user_id(&claims(Some("user-1"), Some("client"))).is_err());
+    }
+
+    #[test]
+    fn sensitive_actions_require_mfa_for_user_claims_only() {
+        let user = Claims {
+            sub: "user:alice".to_string(),
+            uid: Some("user-1".to_string()),
+            principal_id: Some("principal-1".to_string()),
+            principal_type: Some("user".to_string()),
+            iss: "keylo".to_string(),
+            aud: "keylo".to_string(),
+            exp: 0,
+            iat: 0,
+            jti: "token-1".to_string(),
+            role: vec![],
+            scope: vec![],
+            token_type: "access".to_string(),
+        };
+        let client = Claims {
+            sub: "client:automation".to_string(),
+            uid: None,
+            principal_id: Some("principal-2".to_string()),
+            principal_type: Some("client".to_string()),
+            ..user.clone()
+        };
+        assert!(mfa_required_for_claims(&user));
+        assert!(!mfa_required_for_claims(&client));
     }
 }
