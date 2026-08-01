@@ -17,6 +17,7 @@
 /web/*.tsbuildinfo
 /examples/node-express-oidc/node_modules/
 /examples/go-net-http-oidc/.env
+/examples/rust-axum-oidc/target/
 /web/vite.config.js
 /web/vite.config.d.ts
 __pycache__/

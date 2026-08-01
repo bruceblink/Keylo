@@ -2,6 +2,8 @@
 
 适用场景：Rust/Axum 资源服务消费 Keylo JWT，并使用 JWKS 本地验签。
 
+需要由 Axum 应用自身完成浏览器 OIDC 登录时，使用可运行的 [Rust Axum OIDC RP 示例](../../examples/rust-axum-oidc/README.md)。它使用标准 `openidconnect` Discovery、Authorization Code + PKCE、`state`、`nonce`、回调 `iss` 和 ID Token 校验；本页 extractor 继续只负责资源服务侧 access token 验签。
+
 ## 1. 依赖
 
 ```toml
