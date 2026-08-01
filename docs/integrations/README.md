@@ -14,6 +14,7 @@ Keylo 2.0 中，用户、服务和客户端都会映射为 Principal。服务 to
 
 可用模板：
 
+- [OIDC 浏览器登录](oidc-browser-login.md)
 - [Spring Security](spring-security.md)
 - [Node Express](node-express.md)
 - [Go net/http](go-net-http.md)
