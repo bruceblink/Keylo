@@ -60,7 +60,20 @@ jobs:
       with:
         node-version: 24
         cache: npm
-        cache-dependency-path: web/package-lock.json
+        cache-dependency-path: |
+          web/package-lock.json
+          examples/node-express-oidc/package-lock.json
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: examples/go-net-http-oidc/go.mod
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '21'
 
     - name: Cache dependencies
       uses: actions/cache@v3
@@ -124,6 +137,19 @@ jobs:
 
     - name: Run load tests
       run: cargo test --test load_test
+
+    - name: Validate OIDC relying party examples
+      run: |
+        cd examples/node-express-oidc
+        npm ci --ignore-scripts
+        npm run check
+        cd ../go-net-http-oidc
+        go test ./...
+        cd ../rust-axum-oidc
+        cargo test
+        cd ../spring-boot-oidc
+        chmod +x gradlew
+        ./gradlew test --no-daemon
 
     - name: Build release binary
       run: cargo build --release

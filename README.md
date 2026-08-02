@@ -121,6 +121,7 @@ cargo tarpaulin --out Html
 * 安全审计 (`cargo audit`)
 * 完整测试套件
 * 覆盖率报告
+* Node、Go、Rust、Spring 标准 OIDC RP 样例构建回归
 
 ### 第三方集成
 
