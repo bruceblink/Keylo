@@ -36,5 +36,8 @@ Invoke-ExampleCheck "Rust Axum OIDC RP" (Join-Path $repositoryRoot "examples\rus
 Invoke-ExampleCheck "Spring Boot OIDC RP" (Join-Path $repositoryRoot "examples\spring-boot-oidc") {
     .\gradlew.bat test --no-daemon
 }
+Invoke-ExampleCheck "Spring Boot resource server" (Join-Path $repositoryRoot "examples\spring-boot-resource-server") {
+    .\gradlew.bat test --no-daemon
+}
 
-Write-Host "[SUCCESS] All OIDC relying party examples passed" -ForegroundColor Green
+Write-Host "[SUCCESS] All OIDC and resource-service examples passed" -ForegroundColor Green

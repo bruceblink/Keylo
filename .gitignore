@@ -21,6 +21,8 @@
 /examples/spring-boot-oidc/.gradle/
 /examples/spring-boot-oidc/build/
 /examples/spring-boot-oidc/bin/
+/examples/spring-boot-resource-server/.gradle/
+/examples/spring-boot-resource-server/build/
 /web/vite.config.js
 /web/vite.config.d.ts
 __pycache__/
