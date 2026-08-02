@@ -6,6 +6,7 @@
 
 * 完整使用步骤见 [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)
 * 完整接口定义见 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
+* 当前后续开发计划见 [docs/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md](docs/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md)
 * 多客户端权限建模见 [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
 * 统一密文配置格式见 [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)
 * 发布说明见 [docs/RELEASE_2_0.md](docs/RELEASE_2_0.md)

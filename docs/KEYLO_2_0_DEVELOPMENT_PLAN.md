@@ -1,6 +1,6 @@
 # Keylo 2.0 统一主体 RBAC 开发计划
 
-> **主线计划已对齐 `KEYCLOAK_ALIGNMENT_ROADMAP.md`。** 本文档负责统一 Principal、RBAC、资源树、授权检查和 Refresh Session 的设计细节；实际开发阶段、优先级、范围边界和验收门槛以 Keycloak 对齐路线图为准。Keycloak 是能力参照与可选互操作回归环境，不是功能追平目标或硬性外部验收依赖。当前主线以标准 OIDC 协议契约、测试向量和 HTTP 集成为准，不提前进入组织隔离、SCIM 或事件平台建设。
+> **当前主线计划见 [`KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md`](KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md)。** 本文保留统一 Principal、RBAC、资源树、授权检查和 Refresh Session 的设计细节；`KEYCLOAK_ALIGNMENT_ROADMAP.md` 保留协议与安全边界。Keycloak 是能力参照与可选互操作回归环境，不是功能追平目标或硬性外部验收依赖。
 
 ## 1. 背景与目标
 

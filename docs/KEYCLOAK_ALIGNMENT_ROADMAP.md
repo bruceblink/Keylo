@@ -1,6 +1,6 @@
 # Keylo 面向 Keycloak 的能力演进路线图
 
-> 主线开发计划以本文档为准。`KEYLO_2_0_DEVELOPMENT_PLAN.md` 保留统一 Principal、RBAC、资源树和会话模型的设计细节，但不再单独决定阶段优先级；两份文档不一致时，以本文档的阶段、边界和验收条件为准。
+> 当前主线开发计划以 [`KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md`](KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md) 为准。本文保留 Keycloak 协议与安全实践的对齐边界；`KEYLO_2_0_DEVELOPMENT_PLAN.md` 保留统一 Principal、RBAC、资源树和会话模型的设计细节。三份文档不一致时，以后续开发计划的优先级和准入条件为准。
 
 ## 1. 目的与边界
 
