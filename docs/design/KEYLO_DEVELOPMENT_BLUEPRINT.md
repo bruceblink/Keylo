@@ -1,12 +1,58 @@
-# Keylo 主线开发与核心设计
+# Keylo 主线设计与能力边界（审查版）
 
-> 本文是 Keylo 唯一的主线开发与核心设计文档。它定义产品边界、当前能力、核心授权模型、近期优先级和后续能力的准入条件。专题接口、部署与集成细节以本文末尾的专题文档为准。
+> 审查日期：2026-08-08
+>
+> 本文是 Keylo 当前唯一的主线设计文档，负责产品定位、能力取舍、当前代码基线和核心安全模型。后续开发任务、优先级、验收命令和触发条件独立维护在 [KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md](../plans/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md)。docs/archive/ 只保留历史上下文，不作为新的开发或部署依据。
+
+## 0. 审查结论
+
+本轮审查确认：Keylo 以 Keycloak 作为协议、安全和互操作参照，而不是把 Keycloak 的全部能力搬进来，这个方向是正确的。Keycloak 官方能力覆盖 OIDC、OAuth、SAML、身份代理、LDAP/AD、用户和账户控制台、灵活认证、会话治理、管理 API 以及更细粒度的管理权限；这些能力证明了 IAM 产品需要解决的边界，但不代表每个部署都应该承担同样的复杂度。
+
+Keylo 采用“先通用 IAM 和可用性，再以 SaaS 组织隔离为下一条主线”的策略：
+
+1. 保留标准互操作和安全生命周期，把它们做成可验证的稳定契约。
+2. 使用 Principal、RBAC、资源和显式授权决策表达通用授权，不复制 Realm 层级和任意策略语言。
+3. 保留 OIDC 上游身份代理和账号关联这一类高复用能力，但不为了协议数量预先实现 SAML、Device Flow、CIBA、PAR、DPoP 或 Token Exchange。
+4. 先提供 API-first 的安装、接入和排障体验；完整管理控制台、主题系统和工作流引擎不属于默认核心。
+5. 组织是 SaaS 主线的确定能力；人类用户与非人类机器主体分开治理，机器可用 API key 调用明确声明的 API；目录同步、企业协议、抗钓鱼认证或多实例运行仍按真实信号触发。
+
+审查参考：
+
+- [Keycloak Server Administration Guide](https://www.keycloak.org/docs/latest/server_admin/)
+- [Keycloak OIDC layers](https://www.keycloak.org/securing-apps/oidc-layers)
+- [Keycloak feature flags](https://www.keycloak.org/server/features)
+
+### 0.1 取其精华
+
+| Keycloak 的可复用经验 | Keylo 的落地方式 | 当前状态 |
+| --- | --- | --- |
+| 标准 OIDC/OAuth 和浏览器 SSO | Discovery、Authorization Code + PKCE、UserInfo、consent、浏览器会话、退出和标准错误 | 已实现并有真实 HTTP 测试 |
+| 身份代理和首次登录关联 | OIDC upstream、JIT、稳定 external subject、账号关联/解除关联和上游会话撤销 | OIDC upstream 已实现 |
+| Token、密钥和会话生命周期 | RS256/JWKS、audience 约束、refresh session 原子轮换、重放撤销、按主体撤销和审计 | 已实现；当前是单活动密钥 |
+| 服务账号与 client credentials | 将非人类调用映射到稳定 service Principal、scope/audience 和可撤销凭证；API key 只作为受限的直连便利，不替代 OIDC | 已实现 `service_id + service_secret -> service_access`；直接 API key 仍属于下一条主线 |
+| 最小权限管理 | Principal、角色、权限、资源树、单点/批量授权检查、变更历史和拒绝原因为审计 | 已实现；暂不做任意策略引擎 |
+| 安全默认值 | 精确 redirect URI、PKCE、HTTPS 默认、限流、登录锁定、MFA、密文配置、失败关闭 | 已实现并持续加固 |
+| 运维可追溯性 | healthz、readyz、固定基数 Prometheus 指标、审计日志、迁移和 setup 状态 | 已实现并纳入发布门槛 |
+
+### 0.2 明确不复制的复杂度
+
+| Keycloak 能力或复杂度 | Keylo 的默认决策 | 只有出现什么信号才重新评估 |
+| --- | --- | --- |
+| master Realm、Realm 复制和跨 Realm 管理 | 采用单部署多组织模型；组织边界由数据、成员关系和组织作用域 RBAC 强制，不复制 Realm 层级 | 需要物理隔离、独立密钥或独立合规域时评估独立部署 |
+| Groups、composite roles、细粒度管理员策略和策略脚本 | 继续使用固定 RBAC、资源和少量显式条件；不允许运行任意表达式或脚本 | 管理员团队需要被限制到不同客户、应用或资源子集 |
+| 完整 Admin Console、Account Console、主题和可编排认证流 | 保持 API-first；setup wizard 只负责首启和诊断，先提供组织/成员/组织角色管理 API | 多个接入方重复实现同一套管理界面且 API 已稳定 |
+| SAML、Kerberos、X.509、Passkey 等认证协议 | 不因兼容矩阵而排期 | 合同或明确安全政策只允许某一协议 |
+| LDAP/AD 用户联邦和全量同步 | 当前只保留 identity source 注册元数据；不宣称已经支持 LDAP 登录 | 客户需要目录认证或入离职同步，并能提供测试目录 |
+| SCIM、工作流、事件 SPI、插件平台 | 不预建通用平台 | 真实 IdP/HR 系统要求 provisioning、自动禁用或事件消费 |
+| Device Flow、CIBA、PAR、DPoP、Token Exchange | 同一周期最多选择一个具体场景 | CLI、受限设备、委托访问或 FAPI 合规要求已确定 |
+| 长生命周期机器凭证 | 支持受限的 machine Principal 与 API key；密钥只代表机器身份，不模拟用户登录，不默认授予平台权限 | 需要 OAuth Device Authorization Grant 让人类绑定受限设备时，再单独评估 Device Flow |
+| 多站点 HA、分布式 outbox 和全链路 tracing | 先保证单实例数据库模式可恢复 | 多实例流量、跨可用区或外部安全事件消费成为发布条件 |
 
 ## 1. 产品定位
 
 Keylo 是轻量、可扩展的通用认证与授权中心。它让 Web、移动端、桌面客户端、资源服务和内部服务能以公开协议或稳定 HTTP 契约完成身份认证与授权判断。
 
-当前主线是让 Keylo **更好用、更易用**：独立团队应能更快理解边界、更少手工配置地完成部署和接入，并在失败时定位下一步动作。Keystone 是首个接入方和回归样本，不是 Keylo 的功能边界或专用依赖。
+当前主线是让 Keylo 更好用、更易用，并为 SaaS 多组织做好基础：独立团队应能更快理解边界、更少手工配置地完成部署和接入，在组织边界内管理成员和权限，并在失败时定位下一步动作。Keystone 是首个接入方和回归样本，不是 Keylo 的功能边界或专用依赖。
 
 Keycloak 是协议、安全实践和可选互操作回归的参照，不是待追平的产品规格。Keylo 只吸收标准互通、安全默认值、会话/密钥生命周期、审计可追溯性和清晰管理边界；不复制完整 Realm 层级、脚本策略语言或无使用方的重型运维能力。
 
@@ -14,118 +60,150 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 
 | 范围 | Keylo 负责 | 不作为默认主线 |
 | --- | --- | --- |
-| 认证 | OIDC Provider、密码、MFA、外部 OIDC 身份源、Token 与会话 | 为“协议齐全”实现 SAML、Passkey、Device Flow、CIBA、PAR、DPoP 或 Token Exchange |
-| 授权 | Principal、RBAC、资源树、单点/批量授权决策、审计 | 任意表达式求值、脚本式策略引擎、完整 Realm 复制 |
-| 集成 | OIDC Discovery、JWKS、标准客户端样例、授权决策接口 | Keylo 专用的客户端锁定或 Keystone 专用数据模型 |
-| 运行 | health/ready、指标、密文配置、密钥和会话治理 | 无明确部署要求的事件平台、多租户和 HA 拓扑 |
+| 认证 | OIDC Provider、密码、MFA、OAuth 社交登录、OIDC upstream 身份代理、机器主体的 service_access/API key、Token 与会话 | 为“协议齐全”实现 SAML、Kerberos、X.509、Passkey、Device Flow、CIBA、PAR、DPoP 或 Token Exchange |
+| 身份源 | local_password、oauth2、oidc_upstream 和 ldap 的注册元数据；OIDC upstream 的 Discovery、授权码、JIT 和关联 | 把 ldap 注册项描述成已经可用的目录登录；未触发时不做 LDAP/AD 联邦和 SCIM |
+| 组织 | SaaS organization、成员关系、组织状态、组织作用域 RBAC 和跨组织默认拒绝 | 不做 Realm 复制、计费、套餐、市场和任意组织策略脚本 |
+| 授权 | Principal、RBAC、资源树、单点/批量授权决策、审计和变更历史 | 任意表达式求值、脚本式策略引擎、Realm 复制和默认多租户 |
+| 集成 | OIDC Discovery、JWKS、标准客户端样例、授权决策接口、服务 Token 和受限机器 API | Keylo 专用的客户端锁定或 Keystone 专用数据模型 |
+| 运行 | PostgreSQL 迁移、Redis 生产依赖、health/ready、指标、密文配置、审计、setup wizard | 没有多实例证据时的 HA 拓扑、事件平台和完整管理后台 |
 
 默认使用 HTTPS。完全隔离的内网可以显式启用 HTTP issuer，但 Keylo、反向代理、身份源和浏览器客户端必须都处于受控网络；HTTP 流量不得跨越公网、共享办公网或不受控 Wi-Fi。内网 HTTP 验收不能代替互联网或第三方接入的 HTTPS 验收。
 
-## 3. 当前能力基线
+## 3. 当前代码能力基线
 
-| 领域 | 已交付能力 | 持续门槛 |
+下表按 2026-08-08 的源码、迁移和测试核对，不把历史发布说明当作现状。
+
+| 领域 | 当前代码能力 | 仍然存在的边界 |
 | --- | --- | --- |
-| 标准 OIDC | Discovery、Authorization Code、PKCE、`state`、`nonce`、ID Token、UserInfo、浏览器会话和退出 | 标准 `openidconnect` 真实 HTTP 集成测试及 Node、Go、Rust、Spring RP 样例持续通过 |
-| 账户安全与联邦 | 密码策略、限流、TOTP、恢复码、敏感操作 MFA、邮箱验证状态（可信上游/管理员复核）、OIDC upstream、JIT、账号关联/解除关联 | 安全状态变化可审计，不记录 Token、验证码或密钥明文；本地邮箱变更必须重置验证状态 |
-| 授权 | Principal、角色、权限、资源树、单点/批量检查、决策原因、变更版本和回滚 | 未知/禁用 Principal、无角色或无权限默认拒绝 |
-| Token 与会话 | RS256、JWKS、服务 Token、Refresh Session 原子轮换和重放撤销 | JWT 证明主体与 audience，不承载高频变化的完整权限集合 |
-| 运行 | health/ready、Prometheus 指标、审计、密文配置、密钥轮换 | 数据库和 Redis 的生产依赖、失败路径与配置边界可验证 |
-
-已完成的 OIDC 与账户安全能力是发布基线，不因可选 Keycloak 矩阵的镜像、网络或 TLS 环境缺失而被阻塞。
+| 标准 OIDC | Discovery、Authorization Code、PKCE、state、nonce、ID Token、UserInfo、consent、浏览器会话、退出、confidential/public client 和 secret rotation | 只发布 authorization_code；没有 Dynamic Client Registration、OIDC token revocation、Device/CIBA/PAR/DPoP |
+| 本地账户 | 注册、密码登录、密码复杂度、限流、登录锁定、用户/管理员密码修改或重置、email_verified 状态 | 没有 SMTP 或其他邮件投递；验证邮箱目前由可信上游或完成近期 MFA 的管理员触发；没有用户自助 forgot-password 邮件流程 |
+| MFA | TOTP enrollment、近期验证、恢复码、敏感管理操作的 step-up 和审计 | 没有 WebAuthn/Passkey；不把 TOTP 自动扩展成任意认证流编排 |
+| 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、邮箱变化记录、启停和会话撤销 | identity source 的 ldap 类型目前只是注册元数据，不包含 LDAP bind、同步、组映射或故障切换 |
+| 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`，服务 Principal 可参与 RBAC | 当前没有直接 `X-API-Key` 鉴权、独立 device Principal、多 key 生命周期或机器凭证的组织归属 |
+| 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | 当前尚未有组织、组、composite role、数据上下文条件或细粒度 delegated admin；组织作用域 RBAC 是下一条主线 |
+| Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | JWKS 当前只包含一把活动公钥；没有新旧 key 并行的无感轮换 |
+| 运行和首启 | PostgreSQL SQLx migrations、Redis 生产就绪校验、healthz/readyz、固定基数 metrics、审计清理、密文配置、setup wizard | 尚未承诺多实例一致性、outbox/webhook、OpenTelemetry 或跨区域恢复 |
+| 管理体验 | API-first 的用户、客户端、服务、身份源、Principal、RBAC、资源和审计接口；setup wizard 只做首启诊断 | 没有 Admin Console、Account Console、主题系统或管理 CLI |
 
 ## 4. 核心技术设计
 
 ### 4.1 主体与授权模型
 
-`Principal` 是 Keylo 的统一安全主体。用户、服务账号和客户端均映射为 Principal；认证链路确认主体身份，授权链路只消费 Principal 和 RBAC 关系。
+Principal 是 Keylo 的统一安全主体。人类用户、服务/设备机器主体和协议客户端均映射为 Principal；认证链路确认主体身份，授权链路只消费 Principal 和 RBAC 关系。机器主体不走浏览器登录，也不创建人类用户会话。
 
 | 模型 | 作用 | 关键规则 |
 | --- | --- | --- |
-| Principal | `user`、`service`、`client` 的统一身份 | `subject` 稳定进入 JWT `sub`；禁用主体默认拒绝 |
-| Role | 可绑定给适用类型 Principal 的权限集合 | `assignable_to` 限制绑定对象；系统角色不可被普通操作破坏 |
-| Permission | 对外稳定的业务权限点 | 推荐命名为 `{app}:{resource}:{action}`，例如 `keystone:system:user:list` |
+| Principal | `user`、`service`、`device`、`client` 的统一身份；当前代码已有 `user/service/client`，`device` 属于后续机器主体扩展 | subject 稳定进入 JWT sub；禁用主体默认拒绝 |
+| User class | user Principal 的账户类别 | 当前至少为 internal_employee、external_customer；类别只约束入驻和可分配作用域，不直接授予权限 |
+| Machine credential | 绑定到 service/device Principal 的 service secret 或 API key | 凭证不等于权限；API key 只用于机器调用，必须经过状态、组织、scope/audience 和 RBAC 校验 |
+| Role | 可绑定给适用类型 Principal 的权限集合 | assignable_to 限制绑定对象；系统角色不可被普通操作破坏 |
+| Permission | 对外稳定的业务权限点 | 推荐命名为 {app}:{resource}:{action}，例如 keystone:system:user:list |
 | Resource | 菜单、按钮、API、服务能力或数据范围的统一表达 | 资源树用于展示和预检，不替代服务端最终授权 |
 
 授权链路固定为：
 
-```text
+~~~text
 principal -> roles -> permissions -> resources/actions
-```
+~~~
 
-`allowed_scopes` 和 `allowed_audiences` 继续约束服务 Token 的签发边界；它们不替代业务授权。JWT 校验通过只说明主体和目标 audience 合法，资源服务仍需按权限或资源向 Keylo 请求最终授权决策。
+allowed_scopes 和 allowed_audiences 继续约束服务 Token 的签发边界；它们不替代业务授权。JWT 校验通过只说明主体和目标 audience 合法，资源服务仍需按权限或资源向 Keylo 请求最终授权决策。API key 是机器凭证而不是 JWT 或 refresh session；它不能用于 `/v1/auth/*` 人类登录，也不能通过放入 `Authorization: Bearer` 绕过机器接口声明。
 
-### 4.2 Token 与会话边界
+### 4.2 Token、密钥与会话边界
 
-| Token | 用途 | 规则 |
+| 凭证或 Token | 用途 | 规则 |
 | --- | --- | --- |
-| `access` | 用户或管理客户端访问 Keylo/资源服务 | 校验签名、issuer、audience、时效和 `token_type` |
-| `refresh` | 换取新 access token | 仅安全保存；每次使用原子轮换，重放撤销所属会话 |
-| `service_access` | 服务间访问 | 先满足 scope/audience 白名单，再由服务 Principal 的 RBAC 判定能力 |
+| access | 用户、管理客户端或资源服务访问 API | 校验签名、issuer、audience、时效和 token_type |
+| refresh | 换取新 access token | 仅安全保存；每次使用原子轮换，重放撤销所属会话 |
+| service_access | 服务间访问 | 先满足 scope/audience 白名单，再由服务 Principal 的 RBAC 判定能力 |
+| api_key | 机器/设备直接调用显式支持的 API | 使用 `X-API-Key` 传递；服务端只保存 hash 和可查找的 key id/prefix，检查 active、过期、组织、scope/audience、RBAC 和限流；不创建 refresh session |
 
-Refresh Session 是稳定会话索引，支持按 Principal 或单个会话撤销。会话策略可以是多会话、单用户会话或单主体会话；显式接管必须先完成认证。
+Refresh Session 是稳定会话索引，支持按 Principal、客户端或单个会话撤销。会话策略可以是 multi_session、single_user_session 或 single_principal_session；显式接管必须先完成认证。
+
+密钥演进必须保持 issuer 和 kid 契约：当前版本接受一把活动 RSA key，后续 P0 安全工作将引入活动 key 与被动验证 key 的重叠窗口、旧 key 下线和回滚记录；在此之前不把维护窗口式切换描述成无感轮换。
 
 ### 4.3 资源服务接入边界
 
 资源服务的推荐顺序：
 
-1. 通过 Discovery/JWKS 本地验证 JWT 的签名、issuer、audience、过期时间和 token 类型。
-2. 对细粒度或高敏操作调用 `POST /v1/authorize/check` 或 `/v1/authorize/batch-check`。
-3. 对 `allowed=false` 返回 403；Keylo 不可用时不得把验签成功升级为业务权限。
-4. 资源树只用于菜单、按钮和能力展示，后端 API 必须重复最终授权判断。
+1. 人类或标准 OAuth 客户端通过 Discovery/JWKS 本地验证 JWT 的签名、issuer、audience、过期时间和 token 类型；机器调用可在明确声明的接口上直接使用 `X-API-Key`，或先换取短期 `service_access`。
+2. 对细粒度或高敏操作调用 POST /v1/authorize/check 或 POST /v1/authorize/batch-check；API key 解析出的 machine Principal 也必须走同一授权链路。
+3. 对 allowed=false 返回 403；Keylo 不可用时不得把验签成功或 API key 解析成功升级为业务权限。
+4. 资源树只用于菜单、按钮和能力展示，后端 API 必须重复最终授权判断；API key 不得放在 URL 查询参数或日志中。
 
-Spring、Node、Go、Rust 样例与授权决策契约见专题集成文档。
+Spring、Node、Go、Rust 样例与授权决策契约见 [第三方系统与服务对接指南](../integrations/THIRD_PARTY_INTEGRATION.md)。
 
-## 5. 近期主线：2.1 易用性与可用性
+### 4.4 SaaS 组织与组织作用域 RBAC
 
-近期不以新增协议数量为目标，而是降低部署、配置、接入、授权建模和排障成本。每项工作都必须说明它减少了谁的哪一步操作，以及如何验证效果。
+Organization 是 SaaS 租户边界，但不是新的认证协议或 Realm 层级。Keylo 先采用单部署、多组织、共享运行时的模型；所有组织拥有的数据和关系必须显式带 organization_id，平台级对象才允许为空。
 
-### P0：自助参考接入
+用户至少分为两类：
 
-1. 建立从部署到登录、授权检查、退出和会话撤销的可重复验收路径。
-2. 为主流技术栈提供可直接运行的最小样例；样例必须表达完整验签和最终授权边界。
-3. 为接入失败提供可定位的响应、审计查询路径和最小排障手册。
+| User class | 面向对象 | 默认作用域和组织关系 | 关键限制 |
+| --- | --- | --- | --- |
+| internal_employee | Keylo/SaaS 运营、研发、客服和安全人员 | 可以没有组织而使用平台作用域，也可以加入 kind=internal 的内部组织 | 不因“内部”类别自动获得任何客户组织权限；访问客户数据必须有显式、最小化、可审计的支持/平台角色 |
+| external_customer | 客户管理员、成员和最终用户 | 必须有一个或多个 kind=customer 的 active membership，登录后使用一个明确的 active organization context | 只能获得组织作用域角色，不能绑定 platform/global 角色 |
 
-**完成标准：** 新环境能按文档完成端到端接入；关键拒绝场景能从客户端响应和审计定位；不新增 Keystone 专用协议或数据模型。
+User class 不是 RBAC 权限。它只参与注册、身份源映射、组织成员资格和角色可分配性校验；最终允许或拒绝仍由 Principal、membership、role binding、resource organization_id 和 active organization context 共同决定。未来若增加 partner、auditor 等类别，必须先扩展分类与迁移契约，不在 Token 中用未定义字符串绕过校验。
 
-### P0：自助部署与运行基线
+“设备用户”在本文中指非人类机器主体，不等同于 OAuth 2.0 Device Authorization Grant。机器主体至少包括 `service`（现有服务客户端）和后续可独立管理的 `device`（边缘设备、代理或后台任务）；它们没有 `user_class`、密码登录、浏览器会话或人类 MFA 要求，但仍必须有明确的 Principal、组织范围和最小 RBAC 权限。
 
-1. 明确配置校验、依赖就绪、密钥加载、HTTPS 默认要求和受控内网 HTTP 边界。
-2. 用可执行步骤验证数据库迁移、密钥轮换、备份恢复和失败回退。
-3. 将 health/ready、指标和审计组织成面向运维的最小诊断路径。
-4. 优先把启动失败和不安全配置转换为可行动的提示，而不是要求使用者从源码推断原因。
+机器身份与人类身份分离：
 
-**完成标准：** 支持环境可重复完成部署、升级、密钥轮换和恢复演练；未支持的 HA 或跨公网 HTTP 场景在文档和启动校验中明确拒绝或警示。
-
-### P1：管理与接入反馈闭环
-
-至少一个真实接入方完成后，记录客户端类型、主体数量、组织边界、身份来源、合规要求、威胁模型、预期协议、实际操作步骤和验收场景。优先修复重复出现的配置、授权建模或排障摩擦，不因单次愿望直接扩展平台能力。
-
-## 6. 需求触发的扩展路线
-
-下列能力没有默认排期；同一周期只启动一个明确触发方向。
-
-| 触发信号 | 最小交付范围 | 明确不做 |
+| Machine principal | 使用场景 | 凭证与作用域 |
 | --- | --- | --- |
-| 两个及以上相互隔离的客户组织 | `organization`、成员关系、对象归属、跨组织默认拒绝和兼容迁移 | Realm 复制、任意策略脚本 |
-| 资源服务需要所有者、部门或业务上下文 | 固定条件类型、服务端决策和审计原因 | 通用表达式引擎 |
-| 企业目录自动入离职或组同步 | SCIM 用户/组 provisioning、禁用和会话撤销语义 | 未定义冲突语义的全量同步 |
-| 已签约客户只能提供 SAML | 单一明确的 SP 或 IdP 场景和回归样例 | 为协议数量实现的通用 SAML 平台 |
-| 管理员无密码或抗钓鱼需求 | 管理员 WebAuthn 注册、登录和恢复路径 | 未验证恢复流程的全员强制切换 |
-| CLI、受限设备或受委托访问 | 在 Device Flow、DPoP、Token Exchange 中选择一项 | 多项并行实现 |
-| 多实例运行或外部安全事件消费 | 一项可验证的 Trace、Outbox/Webhook 或 HA 演练 | 未验证的分布式平台改造 |
+| service | 后台服务、网关、定时任务和服务间调用 | 兼容现有 `service_id + service_secret -> service_access`；后续可绑定一个或多个 API key；可为 platform-scoped 或 organization-scoped |
+| device | 设备、边缘代理或无人值守客户端 | 后续以 API key 为主，单个 key 只绑定一个 device Principal 和一个组织上下文；不因设备类型获得额外权限 |
 
-## 7. 交付规则
+核心对象和规则：
 
-1. 安全、数据隔离和标准 OIDC 互操作问题优先于所有新增功能。
-2. 每个小功能应有风险匹配的自动验证；验证通过后独立提交。
-3. 新安全状态、会话、身份关联或数据迁移必须定义审计事件、回滚语义和兼容边界。
-4. 新协议或企业能力开始前先写清客户端类型、威胁模型、撤销语义和验收场景；信息不足时保留在候选池。
-5. 标准测试向量、真实 HTTP 集成测试和公开样例是协议发布门槛；Keycloak 矩阵是可选代表性互操作回归。
+| 对象 | 最小字段/关系 | 规则 |
+| --- | --- | --- |
+| Organization | id、slug、name、kind（customer/internal）、status、created_at | id 稳定；disabled/archived 组织默认不能新建会话；slug 只用于展示和路由，不作为授权凭据 |
+| OrganizationMembership | organization_id、principal_id、status、joined_at | 一个 Principal 可以加入多个组织；pending、active、suspended、removed 状态必须可审计 |
+| OrganizationRoleBinding | organization_id、principal_id、role_id、scope | 组织角色只能作用于同一 organization_id；组织成员不能通过角色绑定获得平台级权限 |
+| MachineCredential | principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by | 原始 API key 只在创建/轮换响应中显示一次；撤销、过期、主体或组织停用必须立即拒绝；审计只记录 key id/prefix，不记录原值 |
+| Tenant-owned object | organization_id + 领域字段 | 查询、创建、更新、删除都必须带组织过滤；跨组织 ID、slug 或资源引用默认返回 not found/forbidden，不泄露存在性 |
 
-## 8. 专题文档
+组织作用域授权固定为：
+
+~~~text
+request -> authenticated principal -> active organization context
+        -> membership status -> organization role bindings
+        -> permission/resource decision
+~~~
+
+认证 Token 只携带当前 active organization context（例如 organization_id）和稳定主体信息，不把所有组织的完整权限塞进 JWT。一个用户切换组织时必须重新确认 membership 并签发新的上下文；资源服务必须校验 Token 中的 organization_id 与请求资源所属组织一致，不能把任意 X-Organization-Id 请求头当成授权依据。
+
+机器 API key 不支持“切换组织”；其 MachineCredential 绑定的 organization_id 就是本次调用的唯一组织上下文。请求中的组织标识只能用于资源匹配，不能覆盖凭证绑定的组织。
+
+平台管理员与组织管理员分离：
+
+- 平台管理员负责组织生命周期、平台客户端和全局安全配置，跨组织操作必须显式、最小化并审计。
+- 组织 owner/admin 只能管理本组织成员、组织客户端、组织身份源和组织资源。
+- 普通成员只能消费被授予的组织权限；组织角色不得隐式提升为平台权限。
+- internal_employee 的 customer-support 访问必须通过单独的受限角色、目标组织和审计原因授予；不能把 internal_employee 作为跨组织通配符。
+- external_customer 永远不能通过组织角色绑定获得 platform/global 权限。
+- service/device/client Principal 必须标记为平台级或组织级，不能在每次请求中无声明地跨组织；external_customer 组织管理员创建的机器 key 只能属于本组织。
+- API key 轮换允许短暂重叠但不回显旧值；删除、禁用、过期和泄露响应都必须可审计、可限流并默认失败关闭。API key 不能满足人类管理员的近期 MFA 要求。
+
+第一阶段不包含计费、套餐、用量、市场、组织自定义策略脚本、OAuth Device Flow 或物理数据库分片；这些是 SaaS 产品层、协议扩展层或独立部署层的后续决策。
+
+## 5. 设计与计划分工
+
+本文只负责稳定的设计决策和当前代码事实：
+
+- 产品定位、Keycloak 取舍、默认不做的复杂度。
+- 当前已实现能力、明确缺口和身份源支持边界。
+- Principal、RBAC、资源、组织作用域、Token、密钥、会话和资源服务的核心规则。
+
+后续功能顺序、P0/P1 任务、触发式 2.2+ 能力、Docker 数据库验收、协议回归、文档门槛和提交规则见 [Keylo 后续完整开发计划](../plans/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md)。计划中的候选能力在满足触发信号前不得被解释为已承诺的实现。
+
+## 6. 权威文档
 
 | 主题 | 权威文档 |
 | --- | --- |
+| 主线设计与能力边界 | 本文 |
+| 后续完整开发计划 | [KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md](../plans/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md) |
 | API 请求、响应和错误语义 | [API_REFERENCE.md](../reference/API_REFERENCE.md) |
 | 从零开始部署与联调 | [END_TO_END_QUICKSTART.md](../guides/END_TO_END_QUICKSTART.md) |
 | 当前密钥和运行边界 | [SECRET_ENCRYPTION.md](../operations/SECRET_ENCRYPTION.md) 与 [KEY_ROTATION.md](../operations/KEY_ROTATION.md) |
@@ -135,6 +213,4 @@ Spring、Node、Go、Rust 样例与授权决策契约见专题集成文档。
 | 安装向导 | [SETUP_WIZARD_DESIGN.md](SETUP_WIZARD_DESIGN.md) |
 | Keycloak OIDC 可选互操作矩阵 | [KEYCLOAK_OIDC_MATRIX.md](../compatibility/KEYCLOAK_OIDC_MATRIX.md) |
 
-旧版生产部署说明已移至 `docs/archive/deployment/`，不作为当前部署依据。
-
-历史发布说明保留在 `RELEASE_*.md`，不参与主线规划决策。
+旧版生产部署说明已移至 docs/archive/deployment/，不作为当前部署依据。历史发布说明只用于追溯，不参与主线规划决策。

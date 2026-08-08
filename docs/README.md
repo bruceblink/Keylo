@@ -7,6 +7,7 @@
 ### 设计与开发计划
 
 - [主线开发与核心设计](design/KEYLO_DEVELOPMENT_BLUEPRINT.md)
+- [后续完整开发计划](plans/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md)
 - [安装向导设计](design/SETUP_WIZARD_DESIGN.md)
 
 ### 接口与客户端参考
