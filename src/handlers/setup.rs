@@ -475,6 +475,15 @@ pub async fn setup_initialize(
         .await
         .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
 
+    // Validate the loaded key pair before taking the session-scoped advisory lock.
+    // This keeps a rejected setup request retryable when non-production key loading
+    // or production configuration is incomplete.
+    if !has_jwt_keys(&state) {
+        return Err(AuthError::InvalidRequest(
+            "JWT keys are missing; Keylo should auto-generate them during startup".to_string(),
+        ));
+    }
+
     let setup_lock = db::try_acquire_setup_initialization_lock(&pool)
         .await
         .map_err(|err| AuthError::DatabaseError(err.to_string()))?
@@ -482,34 +491,58 @@ pub async fn setup_initialize(
             AuthError::Conflict("Setup initialization is already running".to_string())
         })?;
 
-    if db::setup_completed(&pool)
-        .await
-        .map_err(|err| AuthError::DatabaseError(err.to_string()))?
-    {
-        let _ = setup_lock.release().await;
-        return Err(AuthError::Forbidden);
+    match db::setup_completed(&pool).await {
+        Ok(true) => {
+            setup_lock
+                .release()
+                .await
+                .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
+            return Err(AuthError::Forbidden);
+        }
+        Ok(false) => {}
+        Err(error) => {
+            if let Err(release_error) = setup_lock.release().await {
+                tracing::error!(
+                    diagnostic = %release_error,
+                    "Failed to release setup initialization lock after status check failure"
+                );
+            }
+            return Err(AuthError::DatabaseError(error.to_string()));
+        }
     }
 
-    if !has_jwt_keys(&state) {
-        return Err(AuthError::InvalidRequest(
-            "JWT keys are missing; Keylo should auto-generate them during startup".to_string(),
-        ));
-    }
-
-    db::seed_default_clients_with_admin(
-        &pool,
-        Some(admin_client_id.as_str()),
-        Some(admin_client_secret.as_str()),
-    )
-    .await
-    .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
-    db::mark_setup_completed(&pool)
+    // Always attempt to release the session-scoped lock, including when seeding or
+    // marking setup complete fails, so a later retry is not permanently blocked.
+    let initialization_result = async {
+        db::seed_default_clients_with_admin(
+            &pool,
+            Some(admin_client_id.as_str()),
+            Some(admin_client_secret.as_str()),
+        )
         .await
         .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
-    setup_lock
+        db::mark_setup_completed(&pool)
+            .await
+            .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
+        Ok::<(), AuthError>(())
+    }
+    .await;
+    let release_result = setup_lock
         .release()
         .await
-        .map_err(|err| AuthError::DatabaseError(err.to_string()))?;
+        .map_err(|err| AuthError::DatabaseError(err.to_string()));
+    match initialization_result {
+        Err(error) => {
+            if let Err(release_error) = release_result {
+                tracing::error!(
+                    diagnostic = %release_error,
+                    "Failed to release setup initialization lock after initialization failure"
+                );
+            }
+            return Err(error);
+        }
+        Ok(()) => release_result?,
+    }
 
     Ok(Json(SetupInitializeResponse {
         completed: true,
