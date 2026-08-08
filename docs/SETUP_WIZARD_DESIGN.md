@@ -104,10 +104,10 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
     }
   ],
   "endpoints": {
-    "issuer": "keylo",
-    "jwks_uri": "http://127.0.0.1:2345/.well-known/jwks.json",
-    "admin_token_endpoint": "http://127.0.0.1:2345/v1/admin/token",
-    "service_token_endpoint": "http://127.0.0.1:2345/v1/service/token"
+    "issuer": "https://identity.example.com",
+    "jwks_uri": "https://identity.example.com/.well-known/jwks.json",
+    "admin_token_endpoint": "https://identity.example.com/v1/admin/token",
+    "service_token_endpoint": "https://identity.example.com/v1/service/token"
   }
 }
 ```

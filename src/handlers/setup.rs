@@ -23,10 +23,11 @@ fn require_setup_enabled(state: &AppState) -> Result<(), AuthError> {
     Ok(())
 }
 
+/// Build copy-paste-ready setup endpoints from the stable public OIDC issuer, not the bind address.
 fn setup_endpoints(state: &AppState) -> SetupEndpoints {
-    let base_url = state.config.server_url();
+    let base_url = state.config.oidc_issuer();
     SetupEndpoints {
-        issuer: state.config.jwt_issuer.clone(),
+        issuer: base_url.clone(),
         jwks_uri: format!("{}/.well-known/jwks.json", base_url),
         discovery_uri: format!("{}/.well-known/keylo-configuration", base_url),
         admin_token_endpoint: format!("{}/v1/admin/token", base_url),
@@ -393,7 +394,35 @@ pub async fn setup_initialize(
 
 #[cfg(test)]
 mod tests {
-    use super::first_non_blank;
+    use super::{first_non_blank, setup_endpoints};
+    use crate::{config::Config, state::AppState};
+
+    #[test]
+    fn setup_endpoints_use_public_oidc_issuer() {
+        let config = Config {
+            oidc_public_issuer: Some("https://identity.example.com".to_string()),
+            server_addr: "0.0.0.0".to_string(),
+            server_port: 2345,
+            ..Config::default()
+        };
+        let state = AppState::new(config, None).expect("test state should use valid JWT keys");
+
+        let endpoints = setup_endpoints(&state);
+
+        assert_eq!(endpoints.issuer, "https://identity.example.com");
+        assert_eq!(
+            endpoints.jwks_uri,
+            "https://identity.example.com/.well-known/jwks.json"
+        );
+        assert_eq!(
+            endpoints.discovery_uri,
+            "https://identity.example.com/.well-known/keylo-configuration"
+        );
+        assert_eq!(
+            endpoints.admin_token_endpoint,
+            "https://identity.example.com/v1/admin/token"
+        );
+    }
 
     #[test]
     fn first_non_blank_uses_configured_fallback_for_blank_payload() {
