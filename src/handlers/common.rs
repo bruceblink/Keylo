@@ -7,7 +7,9 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use redis::AsyncCommands;
 use serde_json::{json, Value};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+const READINESS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 async fn setup_status_value(state: &AppState) -> Value {
     if !state.config.enable_setup_wizard {
@@ -123,26 +125,37 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
 
     if let Some(db) = &state.db {
         let probe_started = Instant::now();
-        let probe_result = sqlx::query_scalar::<_, i32>("SELECT 1")
-            .fetch_one(db.as_ref())
-            .await;
+        let probe_result = tokio::time::timeout(
+            READINESS_PROBE_TIMEOUT,
+            sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(db.as_ref()),
+        )
+        .await;
         state.runtime_metrics.database_readiness_observed(
             probe_started
                 .elapsed()
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX),
-            probe_result.is_ok(),
+            matches!(&probe_result, Ok(Ok(_))),
         );
         match probe_result {
-            Ok(_) => checks["database"] = json!("ok"),
-            Err(err) => {
+            Ok(Ok(_)) => checks["database"] = json!("ok"),
+            Ok(Err(err)) => {
                 return readiness_unavailable(
                     checks,
                     "database_not_ready",
                     "database not ready",
                     "Verify DATABASE_URL and database connectivity, then retry readiness.",
                     &err.to_string(),
+                )
+            }
+            Err(_) => {
+                return readiness_unavailable(
+                    checks,
+                    "database_not_ready",
+                    "database not ready",
+                    "Verify DATABASE_URL and database connectivity, then retry readiness.",
+                    "database readiness probe timed out",
                 )
             }
         }
@@ -180,10 +193,10 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
         };
 
         let probe_started = Instant::now();
-        let probe_result = async {
+        let probe_result = tokio::time::timeout(READINESS_PROBE_TIMEOUT, async {
             let mut conn = redis_client.get_multiplexed_async_connection().await?;
             conn.ping::<String>().await
-        }
+        })
         .await;
         state.runtime_metrics.redis_readiness_observed(
             probe_started
@@ -191,17 +204,26 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX),
-            probe_result.is_ok(),
+            matches!(&probe_result, Ok(Ok(_))),
         );
         match probe_result {
-            Ok(_) => checks["redis"] = json!("ok"),
-            Err(err) => {
+            Ok(Ok(_)) => checks["redis"] = json!("ok"),
+            Ok(Err(err)) => {
                 return readiness_unavailable(
                     checks,
                     "redis_not_ready",
                     "redis not ready",
                     "Verify Redis host, port, credentials, and readiness, then retry.",
                     &err.to_string(),
+                )
+            }
+            Err(_) => {
+                return readiness_unavailable(
+                    checks,
+                    "redis_not_ready",
+                    "redis not ready",
+                    "Verify Redis host, port, credentials, and readiness, then retry readiness.",
+                    "redis readiness probe timed out",
                 )
             }
         }

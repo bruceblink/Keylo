@@ -781,7 +781,7 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 
 - 登录和内省接口按客户端 IP 限流。默认使用 TCP peer IP；只有 `TRUST_PROXY_HEADERS=true` 时才信任 `X-Forwarded-For` / `X-Real-IP`。
 - 浏览器跨域请求按 `CORS_ALLOWED_ORIGINS` 白名单校验 Origin；配置值必须是 scheme + host + 可选端口，不应包含路径。
-- `/readyz` 默认要求数据库可用；无数据库路由只应在非生产环境显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时使用。依赖探针失败时仅返回稳定公开错误，连接地址、凭据和底层错误只写入服务端日志。
+- `/readyz` 默认要求数据库可用；无数据库路由只应在非生产环境显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 时使用。数据库和 Redis 依赖探测均有短超时，失败时仅返回稳定公开错误，连接地址、凭据和底层错误只写入服务端日志。
 
 ---
 
