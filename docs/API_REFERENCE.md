@@ -215,6 +215,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 }
 ```
 
+本地注册用户的 `email_verified` 初始值为 `false`。该字段会在用户管理接口和用户创建响应中返回；管理员修改邮箱后会自动重置为 `false`。只有已验证的上游 OIDC `email_verified: true` 且邮箱与本地邮箱匹配时，Keylo 才会将本地状态提升为 `true`，并记录 `user.email_verified` 审计事件。
+
 ### 3.8 第三方 JIT 迁移注册
 
 - **POST** `/v1/auth/migrations/jit-register`
@@ -649,11 +651,11 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 
 Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `id_token_signing_alg_values_supported` 不包含 RS256，注册和登录都会拒绝，避免将授权码交给无法被当前验证器安全处理的上游身份源。
 
-成功回调返回标准 Keylo `AuthBody`，包含 Bearer access token、可轮换 refresh token 和 `expires_in`。令牌代表已关联的本地用户，沿用本地用户的角色、权限和会话策略；令牌及上游 ID Token 不会出现在审计详情中。
+成功回调返回标准 Keylo `AuthBody`，包含 Bearer access token、可轮换 refresh token 和 `expires_in`。令牌代表已关联的本地用户，沿用本地用户的角色、权限和会话策略；已验证的上游邮箱只会更新本地 `email_verified` 状态，不会自动改写本地邮箱；令牌及上游 ID Token 不会出现在审计详情中。
 
 上游 `(source, sub)` 到 Keylo 用户的绑定是不可改绑的：并发登录若发现该上游主体已经关联到其他用户，回调会返回冲突，绝不会覆盖既有映射。JIT 创建若在绑定阶段发生该冲突，会清理刚创建的无密码用户。
 
-已关联用户的上游邮箱变化以稳定 `sub` 为准继续登录，但不会自动改写 Keylo 的本地邮箱。Keylo 仅保存最新已观测的上游邮箱与验证状态供后续人工处理，并记录不含邮箱明文的审计事件；管理员可按本地用户更新流程完成邮箱变更。
+已关联用户的上游邮箱变化以稳定 `sub` 为准继续登录，但不会自动改写 Keylo 的本地邮箱。Keylo 仅保存最新已观测的上游邮箱与验证状态供后续人工处理，并记录不含邮箱明文的审计事件；只有上游邮箱与本地邮箱匹配时才会提升本地 `email_verified`，管理员可按本地用户更新流程完成邮箱变更。
 
 已登录用户可调用 `GET /v1/user/identity-sources/links` 查看自己的已关联 OIDC upstream 身份源（仅返回来源标识、展示名和关联时间），再通过 `DELETE /v1/user/identity-sources/{source_id}/link` 解除关联。解除操作会撤销仅由该身份源签发的 refresh session 并写入审计日志；若该关联是用户唯一的登录方式，接口返回冲突而不执行解除，避免用户把自己锁在账户之外。
 - `claim_mapping`：外部身份字段到 Keylo 标准字段的映射对象。`oidc_upstream` 仅支持 `external_subject`、`email`、`username`、`email_verified` 四个本地字段，值为已签名 ID Token 中的 claim 名；缺省时分别使用 `sub`、`email`、`preferred_username`、`email_verified`。映射到已有账号的邮箱仍需映射后的 `email_verified` 为 `true`，不会因自定义映射降低自动关联的安全要求。

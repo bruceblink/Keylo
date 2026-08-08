@@ -289,6 +289,7 @@ pub async fn userinfo(
     }
     if has_scope("email") {
         response["email"] = json!(user.email);
+        response["email_verified"] = json!(user.email_verified);
     }
     Ok(Json(response))
 }
@@ -698,8 +699,11 @@ pub async fn token(
             .iter()
             .any(|scope| scope == "email")
             .then_some(user.email),
-        // Keylo has no verified-email state yet, so it must not claim verification to relying parties.
-        email_verified: None,
+        email_verified: authorization
+            .scopes
+            .iter()
+            .any(|scope| scope == "email")
+            .then_some(user.email_verified),
     })?;
     Ok(Json(OidcTokenResponse {
         access_token,
@@ -723,6 +727,24 @@ mod tests {
             client_secret: client_secret.map(str::to_string),
             code_verifier: "a".repeat(43),
         }
+    }
+
+    #[test]
+    fn id_token_email_verification_claim_preserves_boolean_state() {
+        let claims = OidcIdTokenClaims {
+            iss: "https://identity.example".to_string(),
+            sub: "user-1".to_string(),
+            aud: "client-1".to_string(),
+            exp: 2,
+            iat: 1,
+            nonce: "nonce".to_string(),
+            name: None,
+            email: Some("alice@example.com".to_string()),
+            email_verified: Some(false),
+        };
+        let value = serde_json::to_value(claims).unwrap();
+
+        assert_eq!(value["email_verified"], false);
     }
 
     #[test]

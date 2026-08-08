@@ -39,7 +39,7 @@ fn external_subject_hash(external_user_id: &str) -> String {
 /// 获取用户
 pub async fn get_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE id = $1",
+        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -51,7 +51,7 @@ pub async fn get_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<User>
 /// 根据用户名获取用户
 pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE username = $1",
+        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users WHERE username = $1",
     )
     .bind(username)
     .fetch_optional(pool)
@@ -63,7 +63,7 @@ pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Optio
 /// 根据邮箱获取用户
 pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE email = $1",
+        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users WHERE email = $1",
     )
     .bind(email)
     .fetch_optional(pool)
@@ -75,7 +75,7 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User
 /// 列出用户，支持分页
 pub async fn list_users(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<User>> {
     let users = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
     )
     .bind(limit)
     .bind(offset)
@@ -85,12 +85,26 @@ pub async fn list_users(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<Us
     Ok(users)
 }
 
-/// 创建用户
+/// 创建用户，并将本地邮箱默认为未验证。
 pub async fn create_user(
     pool: &PgPool,
     username: &str,
     email: &str,
     password: Option<&str>,
+) -> Result<User> {
+    create_user_with_email_verified(pool, username, email, password, false).await
+}
+
+/// Create a user with an explicitly trusted email verification state.
+///
+/// Only verified upstream OIDC claims should pass `email_verified = true`; local
+/// registration and administrative provisioning use `create_user` instead.
+pub async fn create_user_with_email_verified(
+    pool: &PgPool,
+    username: &str,
+    email: &str,
+    password: Option<&str>,
+    email_verified: bool,
 ) -> Result<User> {
     let id = Uuid::new_v4().to_string();
     let password_hash = if let Some(p) = password {
@@ -102,14 +116,15 @@ pub async fn create_user(
 
     let user = sqlx::query_as::<_, User>(
         r#"
-        INSERT INTO users (id, username, email, password_hash, active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, TRUE, $5, $6)
-        RETURNING id, username, email, password_hash, active, created_at, updated_at
+        INSERT INTO users (id, username, email, email_verified, password_hash, active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7)
+        RETURNING id, username, email, email_verified, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(id)
     .bind(username)
     .bind(email)
+    .bind(email_verified)
     .bind(password_hash)
     .bind(now)
     .bind(now)
@@ -144,11 +159,15 @@ pub async fn update_user(
         UPDATE users
         SET username = COALESCE($2, username),
             email = COALESCE($3, email),
+            email_verified = CASE
+                WHEN $3 IS NOT NULL AND email IS DISTINCT FROM $3 THEN FALSE
+                ELSE email_verified
+            END,
             password_hash = COALESCE($4, password_hash),
             active = COALESCE($5, active),
             updated_at = $6
         WHERE id = $1
-        RETURNING id, username, email, password_hash, active, created_at, updated_at
+        RETURNING id, username, email, email_verified, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(user_id)
@@ -374,6 +393,41 @@ pub async fn reset_user_password(
     Ok(true)
 }
 
+/// Mark a local email as verified once a trusted identity source confirms it.
+///
+/// The transition is one-way here: changing a local email resets the flag, while
+/// a future email-verification workflow can explicitly establish it again.
+pub async fn mark_user_email_verified(
+    pool: &PgPool,
+    user_id: &str,
+    actor: Option<&str>,
+) -> Result<bool> {
+    let mut transaction = pool.begin().await?;
+    let updated = sqlx::query(
+        "UPDATE users SET email_verified = TRUE, updated_at = $2 WHERE id = $1 AND email_verified = FALSE",
+    )
+    .bind(user_id)
+    .bind(chrono::Local::now().naive_utc())
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected()
+        > 0;
+    if !updated {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+
+    sqlx::query("INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string())
+        .bind("user.email_verified")
+        .bind(actor)
+        .bind(format!("user_id={}", user_id))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(true)
+}
+
 /// 用户更改密码（需要验证当前密码）
 pub async fn change_user_password(
     pool: &PgPool,
@@ -385,7 +439,7 @@ pub async fn change_user_password(
     let mut transaction = pool.begin().await?;
     // Lock the account so concurrent password changes cannot both validate the same old password.
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, password_hash, active, created_at, updated_at FROM users WHERE id = $1 FOR UPDATE",
+        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -677,9 +731,9 @@ pub async fn provision_user_with_roles(
 
     let user = sqlx::query_as::<_, User>(
         r#"
-        INSERT INTO users (id, username, email, password_hash, active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, TRUE, $5, $6)
-        RETURNING id, username, email, password_hash, active, created_at, updated_at
+        INSERT INTO users (id, username, email, email_verified, password_hash, active, created_at, updated_at)
+        VALUES ($1, $2, $3, FALSE, $4, TRUE, $5, $6)
+        RETURNING id, username, email, email_verified, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(&user_id)

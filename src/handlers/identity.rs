@@ -212,7 +212,14 @@ async fn record_oidc_email_change(
         .as_ref()
         .and_then(|metadata| metadata.get("email"))
         .and_then(Value::as_str);
-    if observed_email == Some(profile.email.as_str()) {
+    let observed_email_verified = mapping
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("email_verified"))
+        .and_then(Value::as_bool);
+    if observed_email == Some(profile.email.as_str())
+        && observed_email_verified == Some(profile.email_verified)
+    {
         return Ok(());
     }
     let mut metadata = mapping.metadata.clone().unwrap_or_else(|| json!({}));
@@ -233,9 +240,14 @@ async fn record_oidc_email_change(
     .await
     .map_err(|_| AuthError::DatabaseError("Failed to record external email change".to_string()))?
     {
+        let event_type = if observed_email == Some(profile.email.as_str()) {
+            "identity_source.email_verification_observed"
+        } else {
+            "identity_source.email_change_observed"
+        };
         crate::db::create_audit_log(
             db,
-            "identity_source.email_change_observed",
+            event_type,
             Some(&mapping.user_id),
             Some(&format!(
                 "user_id={}; source_id={}",
@@ -247,6 +259,30 @@ async fn record_oidc_email_change(
             AuthError::DatabaseError("Failed to audit external email change".to_string())
         })?;
     }
+    Ok(())
+}
+
+/// Return true only when a signed upstream profile verifies the exact local email.
+fn upstream_email_matches_local(profile: &OidcUpstreamProfile, local_email: &str) -> bool {
+    profile.email_verified && profile.email.eq_ignore_ascii_case(local_email.trim())
+}
+
+/// Promote a local email only when the signed upstream profile matches it exactly.
+async fn apply_upstream_email_verification(
+    db: &sqlx::PgPool,
+    source: &IdentitySource,
+    profile: &OidcUpstreamProfile,
+    user: &crate::models::User,
+) -> Result<(), AuthError> {
+    if !upstream_email_matches_local(profile, &user.email) {
+        return Ok(());
+    }
+    let actor = format!("identity_source:{}", source.id);
+    crate::db::mark_user_email_verified(db, &user.id, Some(&actor))
+        .await
+        .map_err(|_| {
+            AuthError::DatabaseError("Failed to persist email verification".to_string())
+        })?;
     Ok(())
 }
 
@@ -270,6 +306,7 @@ async fn resolve_oidc_upstream_user(
             .filter(|user| user.active)
             .ok_or(AuthError::Forbidden)?;
         record_oidc_email_change(db, source, profile, &mapping).await?;
+        apply_upstream_email_verification(db, source, profile, &user).await?;
         return Ok(user);
     }
 
@@ -286,6 +323,7 @@ async fn resolve_oidc_upstream_user(
             return Err(AuthError::Forbidden);
         }
         create_oidc_user_mapping(db, source, profile, &user.id).await?;
+        apply_upstream_email_verification(db, source, profile, &user).await?;
         return Ok(user);
     }
 
@@ -300,17 +338,21 @@ async fn resolve_oidc_upstream_user(
         Some(_) => oidc_jit_username(source, profile),
         None => profile.username.clone(),
     };
-    let user = crate::db::create_user(db, &username, &profile.email, None)
-        .await
-        .map_err(|error| {
-            if is_unique_violation(error.as_ref()) {
-                AuthError::Conflict(
-                    "OIDC account conflicts with an existing Keylo user".to_string(),
-                )
-            } else {
-                AuthError::DatabaseError("Failed to create JIT OIDC user".to_string())
-            }
-        })?;
+    let user = crate::db::create_user_with_email_verified(
+        db,
+        &username,
+        &profile.email,
+        None,
+        profile.email_verified,
+    )
+    .await
+    .map_err(|error| {
+        if is_unique_violation(error.as_ref()) {
+            AuthError::Conflict("OIDC account conflicts with an existing Keylo user".to_string())
+        } else {
+            AuthError::DatabaseError("Failed to create JIT OIDC user".to_string())
+        }
+    })?;
     if let Err(error) = create_oidc_user_mapping(db, source, profile, &user.id).await {
         crate::db::delete_user(db, &user.id, None)
             .await
@@ -965,5 +1007,32 @@ mod tests {
             oidc_mapping_provider(&source),
             "oidc_upstream:88c474cd-d20b-48fb-8b39-1b30d177e10d"
         );
+    }
+
+    #[test]
+    fn upstream_email_verification_requires_a_matching_verified_email() {
+        let verified = OidcUpstreamProfile {
+            external_subject: "employee-123".to_string(),
+            username: "alice".to_string(),
+            email: "alice@example.com".to_string(),
+            email_verified: true,
+        };
+        assert!(upstream_email_matches_local(
+            &verified,
+            " Alice@Example.COM "
+        ));
+
+        let unverified = OidcUpstreamProfile {
+            email_verified: false,
+            ..verified.clone()
+        };
+        assert!(!upstream_email_matches_local(
+            &unverified,
+            "alice@example.com"
+        ));
+        assert!(!upstream_email_matches_local(
+            &verified,
+            "other@example.com"
+        ));
     }
 }

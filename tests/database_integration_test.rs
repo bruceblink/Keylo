@@ -85,6 +85,58 @@ mod database_tests {
     }
 
     #[tokio::test]
+    async fn test_email_verification_is_idempotent_and_resets_on_email_change() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_email_verification_is_idempotent_and_resets_on_email_change: {}",
+                    msg
+                );
+                return;
+            }
+        };
+        let user = db::create_user(
+            &pool,
+            "email-verification-user",
+            "email-verification@example.test",
+            Some("Password123!"),
+        )
+        .await
+        .unwrap();
+        assert!(!user.email_verified);
+
+        assert!(
+            db::mark_user_email_verified(&pool, &user.id, Some("identity_source:test"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !db::mark_user_email_verified(&pool, &user.id, Some("identity_source:test"))
+                .await
+                .unwrap()
+        );
+
+        let verified = db::get_user_by_id(&pool, &user.id).await.unwrap().unwrap();
+        assert!(verified.email_verified);
+
+        let updated = db::update_user(
+            &pool,
+            &user.id,
+            None,
+            Some("changed-email@example.test"),
+            None,
+            None,
+            Some("test-admin"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!updated.email_verified);
+    }
+
+    #[tokio::test]
     async fn test_deleting_user_removes_linked_principal() {
         let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {
