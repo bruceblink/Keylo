@@ -1135,8 +1135,9 @@ pub async fn auth_jwks(State(state): State<AppState>) -> Json<crate::models::Jwk
 }
 
 pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloConfiguration> {
+    // Keep JWT issuer semantics separate from the public origin used to build copy-pasteable URLs.
     let issuer = state.config.jwt_issuer.clone();
-    let base_url = state.config.server_url();
+    let base_url = state.config.oidc_issuer();
 
     Json(KeyloConfiguration {
         issuer,

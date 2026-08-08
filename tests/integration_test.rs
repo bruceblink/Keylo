@@ -935,6 +935,7 @@ mod tests {
         let config = Config {
             server_addr: "127.0.0.1".to_string(),
             server_port: 3456,
+            oidc_public_issuer: Some("https://identity.example.com".to_string()),
             jwt_audiences: vec!["admin-backend".to_string(), "inventory-svc".to_string()],
             ..test_config()
         };
@@ -947,11 +948,15 @@ mod tests {
         assert_eq!(body["issuer"], "keylo");
         assert_eq!(
             body["jwks_uri"],
-            "http://127.0.0.1:3456/.well-known/jwks.json"
+            "https://identity.example.com/.well-known/jwks.json"
         );
         assert_eq!(
             body["introspection_endpoint"],
-            "http://127.0.0.1:3456/v1/auth/introspect"
+            "https://identity.example.com/v1/auth/introspect"
+        );
+        assert_eq!(
+            body["admin_token_endpoint"],
+            "https://identity.example.com/v1/admin/token"
         );
         assert_eq!(body["supported_signing_algorithms"], json!(["RS256"]));
         assert_eq!(
