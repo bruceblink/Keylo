@@ -512,6 +512,10 @@ curl -s -X POST http://127.0.0.1:2345/v1/service/introspect \
    - 检查 Compose 实际传入的 `ENVIRONMENT`。
    - 检查服务器是否用了另一份 `docker-compose.yml` 或 `.env` 覆盖。
 
-5. 容器启动后 `skipping automatic admin client seed`
+5. `/readyz` 返回 `redis_invalid_config`
+   - 检查 `REDIS_URL` 或 `REDIS_PASSWORD_ENC` / `REDIS_PASSWORD_ENC_FILE` 与对应解密 key 是否正确。
+   - 修复配置后重启 Keylo，再重新检查 `/readyz`。
+
+6. 容器启动后 `skipping automatic admin client seed`
    - 这是未在环境变量中提供自动 seed 凭据时的预期提示。
    - 首次部署请进入 `/setup` 初始化管理客户端。

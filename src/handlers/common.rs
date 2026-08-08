@@ -112,10 +112,12 @@ fn readiness_unavailable(
     )
 }
 
+/// Probe database, setup, and configured Redis dependencies before reporting service readiness.
 pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let redis_configured = state.config.redis_url.is_some();
     let mut checks = json!({
         "database": if state.config.allow_in_memory_fallback { "disabled" } else { "missing" },
-        "redis": "disabled",
+        "redis": if redis_configured { "configured" } else { "disabled" },
         "setup": setup_status_value(&state).await
     });
 
@@ -166,33 +168,41 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
         );
     }
 
-    if state.config.redis_url.is_some() {
-        if let Some(redis_client) = &state.redis_client {
-            let probe_started = Instant::now();
-            let probe_result = async {
-                let mut conn = redis_client.get_multiplexed_async_connection().await?;
-                conn.ping::<String>().await
-            }
-            .await;
-            state.runtime_metrics.redis_readiness_observed(
-                probe_started
-                    .elapsed()
-                    .as_millis()
-                    .try_into()
-                    .unwrap_or(u64::MAX),
-                probe_result.is_ok(),
+    if redis_configured {
+        let Some(redis_client) = &state.redis_client else {
+            return readiness_unavailable(
+                checks,
+                "redis_invalid_config",
+                "redis configuration invalid",
+                "Verify REDIS_URL or encrypted Redis credentials, then retry readiness.",
+                "configured Redis URL could not be parsed",
             );
-            match probe_result {
-                Ok(_) => checks["redis"] = json!("ok"),
-                Err(err) => {
-                    return readiness_unavailable(
-                        checks,
-                        "redis_not_ready",
-                        "redis not ready",
-                        "Verify Redis host, port, credentials, and readiness, then retry.",
-                        &err.to_string(),
-                    )
-                }
+        };
+
+        let probe_started = Instant::now();
+        let probe_result = async {
+            let mut conn = redis_client.get_multiplexed_async_connection().await?;
+            conn.ping::<String>().await
+        }
+        .await;
+        state.runtime_metrics.redis_readiness_observed(
+            probe_started
+                .elapsed()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            probe_result.is_ok(),
+        );
+        match probe_result {
+            Ok(_) => checks["redis"] = json!("ok"),
+            Err(err) => {
+                return readiness_unavailable(
+                    checks,
+                    "redis_not_ready",
+                    "redis not ready",
+                    "Verify Redis host, port, credentials, and readiness, then retry.",
+                    &err.to_string(),
+                )
             }
         }
     }
@@ -209,7 +219,9 @@ pub async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
 
 #[cfg(test)]
 mod tests {
-    use super::readiness_unavailable;
+    use super::{readiness_unavailable, readyz};
+    use crate::{config::Config, state::AppState};
+    use axum::extract::State;
     use axum::http::StatusCode;
     use serde_json::json;
 
@@ -229,5 +241,26 @@ mod tests {
         assert!(body.0["next_action"].as_str().unwrap().contains("Redis"));
         assert_eq!(body.0["error"], "redis not ready");
         assert!(!body.0.to_string().contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn readiness_rejects_an_invalid_configured_redis_url() {
+        let config = Config {
+            allow_in_memory_fallback: true,
+            enable_setup_wizard: false,
+            redis_url: Some("http://localhost:6379".to_string()),
+            ..Config::default()
+        };
+        let state = AppState::new(config, None).expect("test state should use valid JWT keys");
+
+        let (status, body) = readyz(State(state)).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.0["error_code"], "redis_invalid_config");
+        assert!(body.0["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("REDIS_URL"));
+        assert_eq!(body.0["checks"]["redis"], "configured");
     }
 }
