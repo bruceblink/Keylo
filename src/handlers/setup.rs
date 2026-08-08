@@ -23,6 +23,7 @@ const REDIS_CONNECTION_RETRY_MESSAGE: &str =
 const REDIS_INVALID_CONFIG_MESSAGE: &str =
     "Redis configuration is invalid. Verify Redis host, port, credentials, and encryption settings, then retry.";
 const REDIS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const DATABASE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 const PRODUCTION_GENERATED_JWT_KEYS_MESSAGE: &str =
     "Production requires explicitly configured persistent JWT RSA keys";
 
@@ -194,10 +195,16 @@ async fn database_pool_from_config(state: &AppState) -> Result<Option<sqlx::PgPo
         database_url.to_string(),
         database_password_from_env_result().map_err(|err| err.to_string())?,
     );
-    db::init_db_pool(&database_url)
+    let pool = tokio::time::timeout(DATABASE_CONNECTION_TIMEOUT, db::init_db_pool(&database_url))
         .await
-        .map(Some)
-        .map_err(|err| err.to_string())
+        .map_err(|_| {
+            format!(
+                "Database connection timed out after {} seconds",
+                DATABASE_CONNECTION_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|err| err.to_string())?;
+    Ok(Some(pool))
 }
 
 fn has_jwt_keys(state: &AppState) -> bool {
@@ -314,7 +321,6 @@ pub async fn setup_status(
     State(state): State<AppState>,
 ) -> Result<Json<SetupStatusResponse>, AuthError> {
     require_setup_enabled(&state)?;
-    let completed_before_auth = setup_completed(&state).await;
 
     let database_url_ok = !state.config.database_url.trim().is_empty();
     let redis_required = state.config.is_production();
@@ -359,7 +365,7 @@ pub async fn setup_status(
         ),
     ];
 
-    let mut completed = completed_before_auth;
+    let mut completed = false;
     match database_pool_from_config(&state).await {
         Ok(Some(pool)) => {
             checks.push(check(
