@@ -4,12 +4,13 @@
 
 快速上手建议：
 
-* 完整使用步骤见 [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)
-* 完整接口定义见 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
-* 主线开发计划与核心设计见 [docs/KEYLO_DEVELOPMENT_BLUEPRINT.md](docs/KEYLO_DEVELOPMENT_BLUEPRINT.md)
-* 多客户端权限建模见 [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
-* 统一密文配置格式见 [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)
-* 发布说明见 [docs/RELEASE_2_0.md](docs/RELEASE_2_0.md)
+* 文档导航见 [docs/README.md](docs/README.md)
+* 完整使用步骤见 [docs/guides/END_TO_END_QUICKSTART.md](docs/guides/END_TO_END_QUICKSTART.md)
+* 完整接口定义见 [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md)
+* 主线开发计划与核心设计见 [docs/design/KEYLO_DEVELOPMENT_BLUEPRINT.md](docs/design/KEYLO_DEVELOPMENT_BLUEPRINT.md)
+* 多客户端权限建模见 [docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md)
+* 统一密文配置格式见 [docs/operations/SECRET_ENCRYPTION.md](docs/operations/SECRET_ENCRYPTION.md)
+* 发布说明见 [docs/archive/releases/RELEASE_2_0.md](docs/archive/releases/RELEASE_2_0.md)
 
 ---
 
@@ -126,32 +127,24 @@ cargo tarpaulin --out Html
 
 ### 第三方集成
 
-第三方系统对接 Keylo 的登录流程、Token 内省和服务接入方式见 [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)。
+第三方系统对接 Keylo 的登录流程、Token 内省和服务接入方式见 [docs/integrations/THIRD_PARTY_INTEGRATION.md](docs/integrations/THIRD_PARTY_INTEGRATION.md)。
 
 Spring、Node、Go、Rust 等资源服务的最小接入模板见 [docs/integrations/README.md](docs/integrations/README.md)。
 
-多客户端统一用户池与 API 级授权接入说明见 [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)。
+多客户端统一用户池与 API 级授权接入说明见 [docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md)。
 
-完整接口清单见 [docs/API_REFERENCE.md](docs/API_REFERENCE.md)。
+完整接口清单见 [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md)。
 
-如果你是以 AgileBoot 这类 Spring Boot 管理后台接入 Keylo，可进一步参考 [docs/AGILEBOOT_INTEGRATION.md](docs/AGILEBOOT_INTEGRATION.md)。
+如果你是以 AgileBoot 这类 Spring Boot 管理后台接入 Keylo，可进一步参考 [docs/integrations/AGILEBOOT_INTEGRATION.md](docs/integrations/AGILEBOOT_INTEGRATION.md)。
 
 ### 生产部署与发布说明
 
-Keylo 的生产部署要求、发布能力边界和密钥轮换建议见以下文档：
+Keylo 当前的本地部署、密钥和运行边界见文档导航；历史发布说明只用于追溯：
 
-* [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
-* [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)
-* [docs/RELEASE_2_0.md](docs/RELEASE_2_0.md)
-* [docs/RELEASE_1_5_2.md](docs/RELEASE_1_5_2.md)
-* [docs/RELEASE_1_5_1.md](docs/RELEASE_1_5_1.md)
-* [docs/RELEASE_1_5.md](docs/RELEASE_1_5.md)
-* [docs/RELEASE_1_4.md](docs/RELEASE_1_4.md)
-* [docs/RELEASE_1_3_1.md](docs/RELEASE_1_3_1.md)
-* [docs/RELEASE_1_3.md](docs/RELEASE_1_3.md)
-* [docs/RELEASE_1_1.md](docs/RELEASE_1_1.md)
-* [docs/RELEASE_1_0.md](docs/RELEASE_1_0.md)
-* [docs/KEY_ROTATION.md](docs/KEY_ROTATION.md)
+* [docs/README.md](docs/README.md)
+* [docs/operations/SECRET_ENCRYPTION.md](docs/operations/SECRET_ENCRYPTION.md)
+* [docs/operations/KEY_ROTATION.md](docs/operations/KEY_ROTATION.md)
+* [docs/archive/releases/README.md](docs/archive/releases/README.md)
 
 ---
 
@@ -199,7 +192,7 @@ python scripts/secret_tool.py generate-deployment --keep-database-plain
 docker-compose up -d
 ```
 
-`scripts/secret_tool.py` 是合并后的统一密钥工具。Keylo 常用 `generate-deployment`、`generate-redis`、`generate-rsa` 和 `decrypt`；周边 Compose/Keystone 场景可使用 `generate-keystone-deployment`、`generate-jwt-secret` 以及 `generate-rsa --format der-env`。Keylo 与 Keystone 的 Redis secret 都使用 `.redis.acl`、`.redis_password.enc` 和 `.redis_password.key`，密文内容为 Redis 密码本身。完整说明见 [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)。
+`scripts/secret_tool.py` 是合并后的统一密钥工具。Keylo 常用 `generate-deployment`、`generate-redis`、`generate-rsa` 和 `decrypt`；周边 Compose/Keystone 场景可使用 `generate-keystone-deployment`、`generate-jwt-secret` 以及 `generate-rsa --format der-env`。Keylo 与 Keystone 的 Redis secret 都使用 `.redis.acl`、`.redis_password.enc` 和 `.redis_password.key`，密文内容为 Redis 密码本身。完整说明见 [docs/operations/SECRET_ENCRYPTION.md](docs/operations/SECRET_ENCRYPTION.md)。
 
 如果需要自定义数据库密码，先写入 `.secrets/.database_password`，再执行 `generate-deployment --keep-database-plain`。如果使用外部数据库，或 PostgreSQL 已经完成初始化且不再需要 `.secrets/.database_password`，可以用以下命令生成 Keylo 运行期密文并删除明文文件：
 
@@ -238,11 +231,11 @@ RUST_LOG=keylo=debug cargo run
 
 为避免 README 与实现长期漂移，完整接口说明统一收敛到专门文档：
 
-* 全量接口与鉴权规则： [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
-* 多客户端统一用户池与 RBAC： [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
-* 第三方系统对接： [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)
+* 全量接口与鉴权规则： [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md)
+* 多客户端统一用户池与 RBAC： [docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md)
+* 第三方系统对接： [docs/integrations/THIRD_PARTY_INTEGRATION.md](docs/integrations/THIRD_PARTY_INTEGRATION.md)
 * 接入模板： [docs/integrations/README.md](docs/integrations/README.md)
-* AgileBoot 对接： [docs/AGILEBOOT_INTEGRATION.md](docs/AGILEBOOT_INTEGRATION.md)
+* AgileBoot 对接： [docs/integrations/AGILEBOOT_INTEGRATION.md](docs/integrations/AGILEBOOT_INTEGRATION.md)
 
 ### 常用接口（快速确认）
 
@@ -280,7 +273,7 @@ src/
 ├── errors.rs        # 错误定义
 └── utils.rs         # 工具函数
 
-docs/                # 对接、发布与运维文档
+docs/                # 按设计、参考、指南、集成、运维和归档分类的文档
 migrations/          # SQLx 迁移脚本
 tests/               # 集成与负载测试
 Dockerfile           # 容器镜像配置
@@ -521,7 +514,7 @@ docker compose logs -f keylo-service
 * 首次 setup 未完成时访问 `/` 会进入 `/setup`；初始化完成后 `/` 返回服务状态 JSON
 * 非生产环境未配置 RSA 密钥文件时，Keylo 会自动生成随机 RSA 密钥对并通过 JWKS 发布公钥；生产环境必须显式挂载固定密钥
 * React 前端位于 `web/`，构建后由 Keylo 托管 `/setup`
-* 设计说明见 [docs/SETUP_WIZARD_DESIGN.md](docs/SETUP_WIZARD_DESIGN.md)
+* 设计说明见 [docs/design/SETUP_WIZARD_DESIGN.md](docs/design/SETUP_WIZARD_DESIGN.md)
 
 ### 5. 运维与安全基线
 

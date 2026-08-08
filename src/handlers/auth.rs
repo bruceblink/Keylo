@@ -1168,7 +1168,7 @@ pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloCon
         ],
         supported_signing_algorithms: vec!["RS256".to_string()],
         supported_audiences: state.config.jwt_audiences.clone(),
-        documentation_uri: format!("{}/docs/THIRD_PARTY_INTEGRATION.md", base_url),
+        documentation_uri: format!("{}/docs/integrations/THIRD_PARTY_INTEGRATION.md", base_url),
     })
 }
 

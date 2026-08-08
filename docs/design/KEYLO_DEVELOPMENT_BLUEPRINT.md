@@ -126,14 +126,15 @@ Spring、Node、Go、Rust 样例与授权决策契约见专题集成文档。
 
 | 主题 | 权威文档 |
 | --- | --- |
-| API 请求、响应和错误语义 | [API_REFERENCE.md](API_REFERENCE.md) |
-| 从零开始部署与联调 | [END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md) |
-| 生产部署、密钥和运行边界 | [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) |
-| 第三方/资源服务接入 | [THIRD_PARTY_INTEGRATION.md](THIRD_PARTY_INTEGRATION.md) 与 [integrations/README.md](integrations/README.md) |
-| Keystone 迁移 | [KEYSTONE_KEYLO_2_0_MIGRATION.md](KEYSTONE_KEYLO_2_0_MIGRATION.md) |
-| 客户端 Token 与会话保存 | [KEYLO_2_0_CLIENT_GUIDE.md](KEYLO_2_0_CLIENT_GUIDE.md) |
+| API 请求、响应和错误语义 | [API_REFERENCE.md](../reference/API_REFERENCE.md) |
+| 从零开始部署与联调 | [END_TO_END_QUICKSTART.md](../guides/END_TO_END_QUICKSTART.md) |
+| 当前密钥和运行边界 | [SECRET_ENCRYPTION.md](../operations/SECRET_ENCRYPTION.md) 与 [KEY_ROTATION.md](../operations/KEY_ROTATION.md) |
+| 第三方/资源服务接入 | [THIRD_PARTY_INTEGRATION.md](../integrations/THIRD_PARTY_INTEGRATION.md) 与 [integrations/README.md](../integrations/README.md) |
+| Keystone 迁移 | [keystone.md](../integrations/keystone.md) |
+| 客户端 Token 与会话保存 | [KEYLO_2_0_CLIENT_GUIDE.md](../reference/KEYLO_2_0_CLIENT_GUIDE.md) |
 | 安装向导 | [SETUP_WIZARD_DESIGN.md](SETUP_WIZARD_DESIGN.md) |
-| Keycloak OIDC 可选互操作矩阵 | [KEYCLOAK_OIDC_MATRIX.md](KEYCLOAK_OIDC_MATRIX.md) |
-| 密文配置与密钥轮换 | [SECRET_ENCRYPTION.md](SECRET_ENCRYPTION.md) 与 [KEY_ROTATION.md](KEY_ROTATION.md) |
+| Keycloak OIDC 可选互操作矩阵 | [KEYCLOAK_OIDC_MATRIX.md](../compatibility/KEYCLOAK_OIDC_MATRIX.md) |
+
+旧版生产部署说明已移至 `docs/archive/deployment/`，不作为当前部署依据。
 
 历史发布说明保留在 `RELEASE_*.md`，不参与主线规划决策。

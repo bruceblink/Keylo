@@ -955,6 +955,10 @@ mod tests {
             "https://identity.example.com/v1/auth/introspect"
         );
         assert_eq!(
+            body["documentation_uri"],
+            "https://identity.example.com/docs/integrations/THIRD_PARTY_INTEGRATION.md"
+        );
+        assert_eq!(
             body["admin_token_endpoint"],
             "https://identity.example.com/v1/admin/token"
         );

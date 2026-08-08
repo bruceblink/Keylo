@@ -1,8 +1,8 @@
 # Keylo 多客户端统一用户池 + API 级授权集成指南
 
-> 本文档聚焦“如何落地集成”。完整接口清单与字段定义请以 [API_REFERENCE.md](API_REFERENCE.md) 为准。
+> 本文档聚焦“如何落地集成”。完整接口清单与字段定义请以 [API 参考](../reference/API_REFERENCE.md) 为准。
 
-> 如果你需要一份从系统初始化到管理客户端、用户、RBAC、服务客户端的完整操作手册，请参考：[END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md)
+> 如果你需要一份从系统初始化到管理客户端、用户、RBAC、服务客户端的完整操作手册，请参考：[端到端快速开始](../guides/END_TO_END_QUICKSTART.md)
 
 ## 1. 适用场景
 
@@ -60,7 +60,7 @@
    - 查询最终权限并集：`GET /v1/admin/users/{user_id}/effective-permissions`
    - 回收权限后重新签发 token，确认接口行为变化
 
-> 以上接口的请求/响应示例见 [API_REFERENCE.md](API_REFERENCE.md)。
+> 以上接口的请求/响应示例见 [API 参考](../reference/API_REFERENCE.md)。
 
 ---
 
@@ -121,4 +121,4 @@
 ## 7. 错误码与实现细节
 
 - 常见错误码：`insufficient_scope`、`insufficient_role`、`invalid_audience`、`token_type_invalid`、`permission_not_bound`、`role_not_bound`
-- 认证中间件顺序与完整错误码定义请参考 [API_REFERENCE.md](API_REFERENCE.md)
+- 认证中间件顺序与完整错误码定义请参考 [API 参考](../reference/API_REFERENCE.md)

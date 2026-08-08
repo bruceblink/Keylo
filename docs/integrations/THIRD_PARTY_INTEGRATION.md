@@ -1,6 +1,6 @@
 # Keylo 第三方系统与服务对接指南
 
-本文档聚焦第三方系统如何把 Keylo 作为统一认证中心接入，避免与 [API_REFERENCE.md](API_REFERENCE.md) 和 [END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md) 重复。
+本文档聚焦第三方系统如何把 Keylo 作为统一认证中心接入，避免与 [API 参考](../reference/API_REFERENCE.md) 和 [端到端快速开始](../guides/END_TO_END_QUICKSTART.md) 重复。
 
 适用对象：
 
@@ -275,7 +275,7 @@ Keylo 提供统一身份源注册中心，用于提前登记和治理外部身�
 
 推荐用以下路径完成第三方联调：
 
-1. 按 [END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md) 初始化 Keylo
+1. 按 [端到端快速开始](../guides/END_TO_END_QUICKSTART.md) 初始化 Keylo
 2. 读取 `/.well-known/keylo-configuration`
 3. 获取管理客户端 Token
 4. 按需登记身份源
@@ -288,7 +288,7 @@ Keylo 提供统一身份源注册中心，用于提前登记和治理外部身�
 11. 验证 `/v1/authorize/check`、`/v1/principals/me/resource-tree`
 12. 验证 `/v1/auth/introspect` 或 `/v1/service/introspect`
 
-具体请求体和响应体请直接查阅 [API_REFERENCE.md](API_REFERENCE.md)。
+具体请求体和响应体请直接查阅 [API 参考](../reference/API_REFERENCE.md)。
 
 ---
 
@@ -308,10 +308,10 @@ Keylo 提供统一身份源注册中心，用于提前登记和治理外部身�
 
 ## 11. 相关文档
 
-- [API_REFERENCE.md](API_REFERENCE.md)
-- [END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md)
-- [MULTI_CLIENT_RBAC_INTEGRATION.md](MULTI_CLIENT_RBAC_INTEGRATION.md)
-- [KEYSTONE_KEYLO_2_0_MIGRATION.md](KEYSTONE_KEYLO_2_0_MIGRATION.md)
-- [KEYLO_2_0_CLIENT_GUIDE.md](KEYLO_2_0_CLIENT_GUIDE.md)
+- [API 参考](../reference/API_REFERENCE.md)
+- [端到端快速开始](../guides/END_TO_END_QUICKSTART.md)
+- [多客户端 RBAC 集成](MULTI_CLIENT_RBAC_INTEGRATION.md)
+- [Keystone 迁移方案](keystone.md)
+- [客户端 Token 指南](../reference/KEYLO_2_0_CLIENT_GUIDE.md)
 - [AGILEBOOT_INTEGRATION.md](AGILEBOOT_INTEGRATION.md)
-- [integrations/README.md](integrations/README.md)
+- [集成样例目录](README.md)

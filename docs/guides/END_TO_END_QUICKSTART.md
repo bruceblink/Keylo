@@ -15,10 +15,10 @@
 建议阅读顺序：
 
 - 这份文档负责“怎么一步步用起来”
-- [API_REFERENCE.md](API_REFERENCE.md) 负责完整接口定义
-- [MULTI_CLIENT_RBAC_INTEGRATION.md](MULTI_CLIENT_RBAC_INTEGRATION.md) 负责多客户端权限建模建议
-- [SECRET_ENCRYPTION.md](SECRET_ENCRYPTION.md) 负责统一密文配置格式和多语言解密说明
-- [integrations/README.md](integrations/README.md) 提供 Spring、Node、Go、Rust 接入模板
+- [API 参考](../reference/API_REFERENCE.md) 负责完整接口定义
+- [多客户端 RBAC 集成](../integrations/MULTI_CLIENT_RBAC_INTEGRATION.md) 负责多客户端权限建模建议
+- [密文配置](../operations/SECRET_ENCRYPTION.md) 负责统一密文配置格式和多语言解密说明
+- [集成样例目录](../integrations/README.md) 提供 Spring、Node、Go、Rust 接入模板
 
 ---
 
@@ -491,7 +491,7 @@ curl -s -X POST http://127.0.0.1:2345/v1/service/introspect \
 6. `/v1/auth/introspect` 能使用服务 token 正常内省用户 token
 7. 轻量发现接口 `/.well-known/keylo-configuration` 可正常访问
 8. JWKS 接口 `/.well-known/jwks.json` 可正常访问
-9. 第三方服务可按 [integrations/README.md](integrations/README.md) 完成本地验签接入
+9. 第三方服务可按 [集成样例目录](../integrations/README.md) 完成本地验签接入
 
 ---
 

@@ -188,3 +188,13 @@ Keylo 2.0 用户登录会返回 refresh token。Keystone Web/BFF 需要：
 - 旧 refresh token 重放会失败，客户端保存的新 refresh token 可以继续刷新。
 - 客户端可以使用 refresh token 调用 `/v1/auth/logout-refresh-token` 主动释放 Keylo refresh session。
 - 管理员可以通过 `/v1/admin/refresh-sessions` 查询在线会话，并通过 `DELETE /v1/admin/refresh-sessions/{session_id}` 强制退出。
+
+## 7. 当前边界
+
+这份迁移方案同时承担 Keystone 接入状态基线；不再维护一份独立的静态替换审计副本。Keylo 的当前契约是：
+
+- Keylo 负责身份认证、Principal、RBAC、资源树、授权决策、refresh session 和审计。
+- Keystone 保留业务数据、业务角色展示和数据范围策略；资源树只用于菜单/按钮展示，不能替代后端授权。
+- JWT 本地验签通过不等于业务请求被允许；Keylo 不可用或返回 `allowed=false` 时，资源服务必须保持拒绝。
+- `*:*:*` 只有在 Keylo RBAC 中显式创建并绑定时才有效，不再作为“验签成功”的隐式管理员映射。
+- 部门、岗位、数据权限范围和任意脚本策略不属于当前 Keylo 主线；需要时应先按主线开发计划提交明确触发场景。

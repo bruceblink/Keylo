@@ -3,9 +3,9 @@
 本文档只保留本地开发所需的信息；完整使用流程、接口定义和集成方案分别以以下文档为准：
 
 - [README.md](README.md)：项目概览、部署入口、环境变量说明
-- [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)：从初始化到管理客户端、用户、RBAC、服务客户端的完整操作步骤
-- [docs/API_REFERENCE.md](docs/API_REFERENCE.md)：完整接口清单与鉴权规则
-- [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)：统一密文配置格式与多语言解密说明
+- [docs/guides/END_TO_END_QUICKSTART.md](docs/guides/END_TO_END_QUICKSTART.md)：从初始化到管理客户端、用户、RBAC、服务客户端的完整操作步骤
+- [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md)：完整接口清单与鉴权规则
+- [docs/operations/SECRET_ENCRYPTION.md](docs/operations/SECRET_ENCRYPTION.md)：统一密文配置格式与多语言解密说明
 
 ---
 
@@ -194,8 +194,8 @@ export DATABASE_PASSWORD_KEY_FILE="./.secrets/.database_password.key"
 
 ## 6. 进一步阅读
 
-- [docs/END_TO_END_QUICKSTART.md](docs/END_TO_END_QUICKSTART.md)
-- [docs/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/MULTI_CLIENT_RBAC_INTEGRATION.md)
-- [docs/THIRD_PARTY_INTEGRATION.md](docs/THIRD_PARTY_INTEGRATION.md)
-- [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
-- [docs/SECRET_ENCRYPTION.md](docs/SECRET_ENCRYPTION.md)
+- [docs/guides/END_TO_END_QUICKSTART.md](docs/guides/END_TO_END_QUICKSTART.md)
+- [docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md)
+- [docs/integrations/THIRD_PARTY_INTEGRATION.md](docs/integrations/THIRD_PARTY_INTEGRATION.md)
+- [docs/operations/SECRET_ENCRYPTION.md](docs/operations/SECRET_ENCRYPTION.md)
+- [docs/operations/KEY_ROTATION.md](docs/operations/KEY_ROTATION.md)

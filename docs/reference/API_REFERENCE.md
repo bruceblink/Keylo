@@ -4,11 +4,11 @@
 
 > 基于当前代码路由整理，覆盖认证、用户、RBAC、OAuth、服务间认证与系统健康检查。
 
-> 从初始化到用户/RBAC/服务客户端的完整实操流程，请参考：[END_TO_END_QUICKSTART.md](END_TO_END_QUICKSTART.md)
+> 从初始化到用户/RBAC/服务客户端的完整实操流程，请参考：[端到端快速开始](../guides/END_TO_END_QUICKSTART.md)
 
-> 多客户端统一用户池与权限模型落地步骤请参考：[MULTI_CLIENT_RBAC_INTEGRATION.md](MULTI_CLIENT_RBAC_INTEGRATION.md)
+> 多客户端统一用户池与权限模型落地步骤请参考：[多客户端 RBAC 集成](../integrations/MULTI_CLIENT_RBAC_INTEGRATION.md)
 
-> Keylo 2.0 Keystone 迁移与客户端 refresh/session 保存策略请参考：[KEYSTONE_KEYLO_2_0_MIGRATION.md](KEYSTONE_KEYLO_2_0_MIGRATION.md) 和 [KEYLO_2_0_CLIENT_GUIDE.md](KEYLO_2_0_CLIENT_GUIDE.md)
+> Keylo 2.0 Keystone 迁移与客户端 refresh/session 保存策略请参考：[Keystone 迁移方案](../integrations/keystone.md) 和 [客户端 Token 指南](KEYLO_2_0_CLIENT_GUIDE.md)
 
 ## 1. 鉴权约定
 
@@ -112,7 +112,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
   "supported_claims": ["iss", "sub", "aud", "exp", "iat", "jti", "scope", "role", "token_type", "uid", "principal_id", "principal_type"],
   "supported_signing_algorithms": ["RS256"],
   "supported_audiences": ["admin-backend", "crawler"],
-  "documentation_uri": "http://127.0.0.1:2345/docs/THIRD_PARTY_INTEGRATION.md"
+  "documentation_uri": "http://127.0.0.1:2345/docs/integrations/THIRD_PARTY_INTEGRATION.md"
 }
 ```
 
