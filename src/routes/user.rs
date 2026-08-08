@@ -91,6 +91,10 @@ pub fn admin_user_routes() -> Router<AppState> {
             "/v1/admin/users/{user_id}/reset-password",
             post(reset_user_password_handler),
         )
+        .route(
+            "/v1/admin/users/{user_id}/verify-email",
+            post(verify_user_email_handler),
+        )
 }
 
 pub fn self_user_routes() -> Router<AppState> {
@@ -424,6 +428,58 @@ async fn reset_user_password_handler(
             })),
         )),
     }
+}
+
+/// Mark a user's current email as verified after an administrator completes recent MFA.
+async fn verify_user_email_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+
+    crate::routes::mfa::require_recent_mfa_for_user_claims(&state, &claims).await?;
+
+    let user = crate::db::user::get_user_by_id(db, &user_id)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Failed to fetch user: {}", error),
+                })),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "success": false,
+                    "error": "User not found",
+                })),
+            )
+        })?;
+
+    crate::db::user::mark_user_email_verified(db, &user.id, Some(&claims.sub))
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": format!("Failed to verify user email: {}", error),
+                })),
+            )
+        })?;
+
+    Ok(Json(json!({
+        "success": true,
+        "data": {
+            "user_id": user.id,
+            "email_verified": true,
+        },
+    })))
 }
 
 async fn change_password_handler(

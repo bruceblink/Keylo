@@ -26,7 +26,7 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 | 领域 | 已交付能力 | 持续门槛 |
 | --- | --- | --- |
 | 标准 OIDC | Discovery、Authorization Code、PKCE、`state`、`nonce`、ID Token、UserInfo、浏览器会话和退出 | 标准 `openidconnect` 真实 HTTP 集成测试及 Node、Go、Rust、Spring RP 样例持续通过 |
-| 账户安全与联邦 | 密码策略、限流、TOTP、恢复码、敏感操作 MFA、邮箱验证状态、OIDC upstream、JIT、账号关联/解除关联 | 安全状态变化可审计，不记录 Token、验证码或密钥明文；本地邮箱变更必须重置验证状态 |
+| 账户安全与联邦 | 密码策略、限流、TOTP、恢复码、敏感操作 MFA、邮箱验证状态（可信上游/管理员复核）、OIDC upstream、JIT、账号关联/解除关联 | 安全状态变化可审计，不记录 Token、验证码或密钥明文；本地邮箱变更必须重置验证状态 |
 | 授权 | Principal、角色、权限、资源树、单点/批量检查、决策原因、变更版本和回滚 | 未知/禁用 Principal、无角色或无权限默认拒绝 |
 | Token 与会话 | RS256、JWKS、服务 Token、Refresh Session 原子轮换和重放撤销 | JWT 证明主体与 audience，不承载高频变化的完整权限集合 |
 | 运行 | health/ready、Prometheus 指标、审计、密文配置、密钥轮换 | 数据库和 Redis 的生产依赖、失败路径与配置边界可验证 |

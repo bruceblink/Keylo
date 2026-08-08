@@ -274,6 +274,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | DELETE | `/v1/admin/users/{user_id}` | 删除用户 |
 | GET | `/v1/admin/users/{user_id}/effective-permissions` | 用户最终权限并集 |
 | POST | `/v1/admin/users/{user_id}/reset-password` | 重置密码 |
+| POST | `/v1/admin/users/{user_id}/verify-email` | 将当前邮箱标记为已验证 |
 | POST | `/v1/admin/users/migrations/import` | 同步执行第三方用户导入 |
 | POST | `/v1/admin/users/migrations/jobs` | 提交异步导入任务 |
 | GET | `/v1/admin/users/migrations/jobs/{job_id}` | 查询异步导入任务状态 |
@@ -283,6 +284,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 管理员通过更新接口将用户设为 `active: false` 时，Keylo 会在同一事务中撤销该用户全部 refresh session 和 OIDC 浏览器会话，并记录包含撤销数量的 `user.disabled` 审计事件。带 Principal 的既有 access token 会在下一次受保护请求时被拒绝，不会继续等待其自然过期；已存在的 OIDC 浏览器 cookie 也不能再进入授权或同意流程。
 
 管理员通过同一更新接口设置 `password` 时，Keylo 会在密码生效前撤销该用户的全部 refresh session 和 OIDC 浏览器会话，并记录 `user.password_updated` 审计事件；旧 refresh token 与浏览器 OIDC cookie 不能继续使用。
+
+管理员完成近期 MFA 后可调用 `POST /v1/admin/users/{user_id}/verify-email` 标记用户当前邮箱为已验证。该操作幂等，不会发送邮件、不修改邮箱地址，并记录 `user.email_verified` 审计事件；管理员后续修改邮箱会自动清除该状态。
 
 当管理操作由已启用 TOTP 的人类用户 Principal 发起时，禁用、删除用户、管理员改密和重置密码必须先完成与当前 access token 绑定的近期 MFA 验证；管理客户端凭据属于机器自动化身份，不适用 TOTP 挑战。
 
