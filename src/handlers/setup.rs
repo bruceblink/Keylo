@@ -14,6 +14,8 @@ use axum::Json;
 use std::path::Path;
 
 const SETUP_DIST_DIR: &str = "web/dist";
+const DATABASE_CONNECTION_RETRY_MESSAGE: &str =
+    "Database connection failed. Verify DATABASE_URL and database connectivity, then retry.";
 
 fn require_setup_enabled(state: &AppState) -> Result<(), AuthError> {
     if !state.config.enable_setup_wizard {
@@ -50,6 +52,18 @@ fn check(
         required,
         message: message.into(),
     }
+}
+
+/// Keep anonymous setup diagnostics safe while retaining the detailed database error in server logs.
+fn database_connection_failure_check(error: &str) -> SetupCheck {
+    tracing::warn!(diagnostic = error, "Setup database check failed");
+    check(
+        "database_connection",
+        "Database Connection",
+        false,
+        true,
+        DATABASE_CONNECTION_RETRY_MESSAGE,
+    )
 }
 
 async fn database_pool_from_config(state: &AppState) -> Result<Option<sqlx::PgPool>, String> {
@@ -263,13 +277,7 @@ pub async fn setup_status(
             true,
             "Database URL is missing",
         )),
-        Err(err) => checks.push(check(
-            "database_connection",
-            "Database Connection",
-            false,
-            true,
-            format!("Database connection failed: {err}"),
-        )),
+        Err(err) => checks.push(database_connection_failure_check(&err)),
     }
 
     Ok(Json(SetupStatusResponse {
@@ -394,7 +402,7 @@ pub async fn setup_initialize(
 
 #[cfg(test)]
 mod tests {
-    use super::{first_non_blank, setup_endpoints};
+    use super::{database_connection_failure_check, first_non_blank, setup_endpoints};
     use crate::{config::Config, state::AppState};
 
     #[test]
@@ -422,6 +430,18 @@ mod tests {
             endpoints.admin_token_endpoint,
             "https://identity.example.com/v1/admin/token"
         );
+    }
+
+    #[test]
+    fn database_connection_check_hides_diagnostic_details() {
+        let check = database_connection_failure_check(
+            "failed to connect to postgres://keylo:secret@db.internal:5432/keylo",
+        );
+
+        assert!(!check.ok);
+        assert_eq!(check.message, super::DATABASE_CONNECTION_RETRY_MESSAGE);
+        assert!(check.message.contains("DATABASE_URL"));
+        assert!(!check.message.contains("secret"));
     }
 
     #[test]
