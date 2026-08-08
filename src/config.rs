@@ -178,7 +178,7 @@ fn generate_and_store_rsa_key_pair(
     Ok((private_pem, public_pem))
 }
 
-fn load_or_generate_jwt_keys() -> (String, String, bool) {
+fn load_or_generate_jwt_keys(allow_generation: bool) -> (String, String, bool) {
     let private_key = read_env_or_file_with_default_path(
         "JWT_PRIVATE_KEY_PEM",
         "JWT_PRIVATE_KEY_PATH",
@@ -196,6 +196,11 @@ fn load_or_generate_jwt_keys() -> (String, String, bool) {
             panic!("JWT private key is configured but JWT public key is missing")
         }
         (None, Some(_)) => panic!("JWT public key is configured but JWT private key is missing"),
+        (None, None) if !allow_generation => {
+            panic!(
+                "JWT RSA keys must be explicitly configured in production; automatic key generation is disabled"
+            )
+        }
         (None, None) => {
             let private_key_path =
                 env_or_default_path("JWT_PRIVATE_KEY_PATH", DEFAULT_JWT_PRIVATE_KEY_PATH);
@@ -622,13 +627,15 @@ impl Config {
     pub fn from_env() -> Self {
         load_dotenv();
 
+        let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
+        let allow_generated_jwt_keys = !environment.eq_ignore_ascii_case("production");
         let jwt_issuer = env::var("JWT_ISSUER").unwrap_or_else(|_| DEFAULT_JWT_ISSUER.to_string());
         let jwt_key_id = env::var("JWT_KEY_ID").unwrap_or_else(|_| DEFAULT_JWT_KEY_ID.to_string());
         let jwt_audiences = parse_csv_env(
             &env::var("JWT_AUDIENCES").unwrap_or_else(|_| DEFAULT_JWT_AUDIENCES.to_string()),
         );
         let (jwt_private_key_pem, jwt_public_key_pem, jwt_keys_generated) =
-            load_or_generate_jwt_keys();
+            load_or_generate_jwt_keys(allow_generated_jwt_keys);
 
         let database_url = env::var("DATABASE_URL").unwrap_or_default();
 
@@ -646,8 +653,6 @@ impl Config {
             .ok()
             .filter(|value| !value.trim().is_empty());
         let mfa_require_for_admins = parse_bool_env("MFA_REQUIRE_FOR_ADMINS", false);
-
-        let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
 
         let token_expiry_seconds = parse_i64_env("TOKEN_EXPIRY_SECONDS", 900);
         let refresh_token_expiry_seconds = parse_i64_env("REFRESH_TOKEN_EXPIRY_SECONDS", 2_592_000);
@@ -785,6 +790,8 @@ impl Config {
         }
 
         if self.is_production() {
+            self.validate_production_jwt_keys(&mut errors);
+
             if database_password_source_is_plaintext() {
                 errors.push(
                     "DATABASE_PASSWORD/DATABASE_PASSWORD_FILE cannot be used in production; use DATABASE_PASSWORD_ENC or DATABASE_PASSWORD_ENC_FILE"
@@ -852,6 +859,8 @@ impl Config {
             errors.push("DATABASE_URL must be set before setup initialization".to_string());
         }
 
+        self.validate_production_jwt_keys(&mut errors);
+
         self.validate_setup_wizard_startup(&mut errors);
 
         config_result(errors)
@@ -886,6 +895,16 @@ impl Config {
 
         if self.setup_keys_dir.trim().is_empty() {
             errors.push("SETUP_KEYS_DIR must not be empty".to_string());
+        }
+    }
+
+    /// Reject startup with a process-generated key pair in production, where key continuity must be managed explicitly.
+    fn validate_production_jwt_keys(&self, errors: &mut Vec<String>) {
+        if self.is_production() && self.jwt_keys_generated {
+            errors.push(
+                "Production requires explicitly configured persistent JWT RSA keys; automatically generated keys are not allowed"
+                    .to_string(),
+            );
         }
     }
 
@@ -1297,6 +1316,18 @@ mod tests {
 
         std::env::remove_var("DATABASE_PASSWORD");
         assert!(err.contains("DATABASE_PASSWORD/DATABASE_PASSWORD_FILE cannot be used"));
+    }
+
+    #[test]
+    fn production_database_startup_rejects_generated_jwt_keys() {
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.jwt_keys_generated = true;
+        config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        assert!(err.contains("automatically generated keys are not allowed"));
     }
 
     #[test]

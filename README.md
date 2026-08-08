@@ -360,13 +360,13 @@ HTTP 访问日志默认记录请求者 IP、请求方法、URI、HTTP 版本、�
 
 Keylo 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 暴露公开验签密钥集合。
 
-* 生产环境建议提前生成、挂载并备份固定 RSA 密钥
+* 生产环境必须提前生成、挂载并备份固定 RSA 密钥；缺少显式密钥配置时启动会拒绝自动生成
 * 下游系统推荐优先使用 JWKS 做本地验签
 * 需要统一吊销控制时，继续结合 `/v1/auth/introspect` 和 `/v1/service/introspect`
 
 ### RSA 密钥生成
 
-本地开发和生产环境都建议显式提供 RSA 密钥。未配置私钥/公钥时，Keylo 会自动生成随机 RSA 密钥对并写入默认或指定路径。
+本地开发未配置私钥/公钥时，Keylo 会自动生成随机 RSA 密钥对并写入默认或指定路径；生产环境必须显式提供固定密钥，禁止自动生成。
 
 推荐使用 `secret_tool.py` 生成 2048 位或以上的 RSA 密钥对：
 
@@ -519,7 +519,7 @@ docker compose logs -f keylo-service
 * 安装向导默认启用；首次未完成 setup 时访问 `/` 会进入 `/setup`
 * 如需关闭安装向导，可设置 `ENABLE_SETUP_WIZARD=false`
 * 首次 setup 未完成时访问 `/` 会进入 `/setup`；初始化完成后 `/` 返回服务状态 JSON
-* 未配置 RSA 密钥文件时，Keylo 会自动生成随机 RSA 密钥对并通过 JWKS 发布公钥
+* 非生产环境未配置 RSA 密钥文件时，Keylo 会自动生成随机 RSA 密钥对并通过 JWKS 发布公钥；生产环境必须显式挂载固定密钥
 * React 前端位于 `web/`，构建后由 Keylo 托管 `/setup`
 * 设计说明见 [docs/SETUP_WIZARD_DESIGN.md](docs/SETUP_WIZARD_DESIGN.md)
 

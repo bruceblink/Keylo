@@ -23,6 +23,8 @@ const REDIS_CONNECTION_RETRY_MESSAGE: &str =
 const REDIS_INVALID_CONFIG_MESSAGE: &str =
     "Redis configuration is invalid. Verify Redis host, port, credentials, and encryption settings, then retry.";
 const REDIS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const PRODUCTION_GENERATED_JWT_KEYS_MESSAGE: &str =
+    "Production requires explicitly configured persistent JWT RSA keys";
 
 fn require_setup_enabled(state: &AppState) -> Result<(), AuthError> {
     if !state.config.enable_setup_wizard {
@@ -203,6 +205,32 @@ fn has_jwt_keys(state: &AppState) -> bool {
         && !state.config.jwt_public_key_pem.trim().is_empty()
 }
 
+/// Report whether the loaded RSA pair is usable for the current environment.
+fn jwt_keys_check(state: &AppState) -> SetupCheck {
+    if state.config.is_production() && state.config.jwt_keys_generated {
+        return check(
+            "jwt_keys",
+            "JWT RSA Keys",
+            false,
+            true,
+            PRODUCTION_GENERATED_JWT_KEYS_MESSAGE,
+        );
+    }
+
+    let keys_ok = has_jwt_keys(state);
+    check(
+        "jwt_keys",
+        "JWT RSA Keys",
+        keys_ok,
+        true,
+        if keys_ok {
+            "JWT private/public keys are configured"
+        } else {
+            "JWT private/public keys are missing"
+        },
+    )
+}
+
 async fn setup_completed(state: &AppState) -> bool {
     let Some(pool) = database_pool_from_config(state).await.ok().flatten() else {
         return false;
@@ -290,7 +318,6 @@ pub async fn setup_status(
 
     let database_url_ok = !state.config.database_url.trim().is_empty();
     let redis_required = state.config.is_production();
-    let jwt_keys_ok = has_jwt_keys(&state);
     let admin_id_configured = state
         .config
         .admin_client_id
@@ -316,17 +343,7 @@ pub async fn setup_status(
             },
         ),
         redis_status_check,
-        check(
-            "jwt_keys",
-            "JWT RSA Keys",
-            jwt_keys_ok,
-            true,
-            if jwt_keys_ok {
-                "JWT private/public keys are configured"
-            } else {
-                "JWT private/public keys are missing"
-            },
-        ),
+        jwt_keys_check(&state),
         check(
             "admin_client_config",
             "Admin Client Config",
@@ -504,8 +521,9 @@ pub async fn setup_initialize(
 #[cfg(test)]
 mod tests {
     use super::{
-        database_connection_failure_check, first_non_blank, migration_check,
-        migration_status_failure_check, redis_check, setup_endpoints, REDIS_INVALID_CONFIG_MESSAGE,
+        database_connection_failure_check, first_non_blank, jwt_keys_check, migration_check,
+        migration_status_failure_check, redis_check, setup_endpoints,
+        PRODUCTION_GENERATED_JWT_KEYS_MESSAGE, REDIS_INVALID_CONFIG_MESSAGE,
     };
     use crate::{config::Config, state::AppState};
 
@@ -605,6 +623,22 @@ mod tests {
         assert!(check.required);
         assert_eq!(check.message, REDIS_INVALID_CONFIG_MESSAGE);
         assert!(!check.message.contains("secret"));
+    }
+
+    #[test]
+    fn jwt_keys_check_rejects_generated_keys_in_production() {
+        let config = Config {
+            environment: "production".to_string(),
+            jwt_keys_generated: true,
+            ..Config::default()
+        };
+        let state = AppState::new(config, None).expect("test state should use valid JWT keys");
+
+        let check = jwt_keys_check(&state);
+
+        assert!(!check.ok);
+        assert!(check.required);
+        assert_eq!(check.message, PRODUCTION_GENERATED_JWT_KEYS_MESSAGE);
     }
 
     #[test]
