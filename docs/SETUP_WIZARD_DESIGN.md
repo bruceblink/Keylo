@@ -22,7 +22,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 - 环境与依赖诊断。
 - 数据库连接状态。
 - migration 执行状态与 checksum 校验；首次 setup 尚未执行时该项为待处理提示，不会阻塞初始化。
-- Redis 配置状态。
+- Redis 配置与连通性状态。
 - JWT RSA 密钥状态；未配置密钥文件时 Keylo 自动生成随机 RSA 密钥对并写入 `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`。
 - 管理客户端初始化状态。
 - 初始化完成后的接入端点摘要。
@@ -86,6 +86,8 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 | `POST` | `/setup/initialize` | 执行初始化 |
 
 ### 5.1 `GET /setup/status`
+
+`checks` 中的 `redis` 项会在 Redis 已配置时执行一次限时连通性探测。生产环境该项为必需检查；非生产环境未配置 Redis 时标记为可选通过，已配置但不可用时只显示安全的修复提示，不回显 Redis URL、凭据或底层连接错误。
 
 返回字段：
 

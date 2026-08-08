@@ -11,11 +11,18 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::HeaderValue;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Json;
+use redis::AsyncCommands;
 use std::path::Path;
+use std::time::Duration;
 
 const SETUP_DIST_DIR: &str = "web/dist";
 const DATABASE_CONNECTION_RETRY_MESSAGE: &str =
     "Database connection failed. Verify DATABASE_URL and database connectivity, then retry.";
+const REDIS_CONNECTION_RETRY_MESSAGE: &str =
+    "Redis connection failed. Verify Redis host, port, credentials, and readiness, then retry.";
+const REDIS_INVALID_CONFIG_MESSAGE: &str =
+    "Redis configuration is invalid. Verify Redis host, port, credentials, and encryption settings, then retry.";
+const REDIS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn require_setup_enabled(state: &AppState) -> Result<(), AuthError> {
     if !state.config.enable_setup_wizard {
@@ -97,6 +104,78 @@ fn migration_status_failure_check(error: &str) -> SetupCheck {
         false,
         "Migration status is unavailable; run migrations and retry setup.",
     )
+}
+
+/// Probe configured Redis with a short timeout and keep connection details out of anonymous setup responses.
+async fn redis_check(state: &AppState, required: bool) -> SetupCheck {
+    let configured = state
+        .config
+        .redis_url
+        .as_deref()
+        .is_some_and(|url| !url.trim().is_empty());
+    if !configured {
+        return check(
+            "redis",
+            "Redis",
+            !required,
+            required,
+            if required {
+                "Redis is required in production"
+            } else {
+                "Redis is optional outside production"
+            },
+        );
+    }
+
+    let Some(redis_client) = state.redis_client.as_ref() else {
+        tracing::warn!("Setup Redis check found an invalid configured client");
+        return check(
+            "redis",
+            "Redis",
+            false,
+            required,
+            REDIS_INVALID_CONFIG_MESSAGE,
+        );
+    };
+
+    let probe = tokio::time::timeout(REDIS_PROBE_TIMEOUT, async {
+        let mut connection = redis_client.get_multiplexed_async_connection().await?;
+        connection.ping::<String>().await
+    })
+    .await;
+
+    match probe {
+        Ok(Ok(_)) => check(
+            "redis",
+            "Redis",
+            true,
+            required,
+            "Redis connection succeeded",
+        ),
+        Ok(Err(error)) => {
+            tracing::warn!(diagnostic = %error, "Setup Redis check failed");
+            check(
+                "redis",
+                "Redis",
+                false,
+                required,
+                REDIS_CONNECTION_RETRY_MESSAGE,
+            )
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_seconds = REDIS_PROBE_TIMEOUT.as_secs(),
+                "Setup Redis check timed out"
+            );
+            check(
+                "redis",
+                "Redis",
+                false,
+                required,
+                "Redis connection check timed out. Verify Redis readiness and network access, then retry.",
+            )
+        }
+    }
 }
 
 async fn database_pool_from_config(state: &AppState) -> Result<Option<sqlx::PgPool>, String> {
@@ -211,11 +290,6 @@ pub async fn setup_status(
 
     let database_url_ok = !state.config.database_url.trim().is_empty();
     let redis_required = state.config.is_production();
-    let redis_ok = state
-        .config
-        .redis_url
-        .as_deref()
-        .is_some_and(|url| !url.trim().is_empty());
     let jwt_keys_ok = has_jwt_keys(&state);
     let admin_id_configured = state
         .config
@@ -228,6 +302,7 @@ pub async fn setup_status(
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty());
 
+    let redis_status_check = redis_check(&state, redis_required).await;
     let mut checks = vec![
         check(
             "database_url",
@@ -240,19 +315,7 @@ pub async fn setup_status(
                 "DATABASE_URL is missing"
             },
         ),
-        check(
-            "redis",
-            "Redis",
-            redis_ok || !redis_required,
-            redis_required,
-            if redis_ok {
-                "Redis URL is configured"
-            } else if redis_required {
-                "Redis URL is required in production"
-            } else {
-                "Redis URL is optional outside production"
-            },
-        ),
+        redis_status_check,
         check(
             "jwt_keys",
             "JWT RSA Keys",
@@ -442,7 +505,7 @@ pub async fn setup_initialize(
 mod tests {
     use super::{
         database_connection_failure_check, first_non_blank, migration_check,
-        migration_status_failure_check, setup_endpoints,
+        migration_status_failure_check, redis_check, setup_endpoints, REDIS_INVALID_CONFIG_MESSAGE,
     };
     use crate::{config::Config, state::AppState};
 
@@ -508,6 +571,39 @@ mod tests {
         assert!(!check.ok);
         assert!(!check.required);
         assert!(check.message.contains("run migrations"));
+        assert!(!check.message.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn redis_check_marks_unconfigured_redis_optional_outside_production() {
+        let config = Config {
+            environment: "test".to_string(),
+            redis_url: None,
+            ..Config::default()
+        };
+        let state = AppState::new(config, None).expect("test state should use valid JWT keys");
+
+        let check = redis_check(&state, false).await;
+
+        assert!(check.ok);
+        assert!(!check.required);
+        assert_eq!(check.message, "Redis is optional outside production");
+    }
+
+    #[tokio::test]
+    async fn redis_check_reports_invalid_config_without_exposing_url() {
+        let config = Config {
+            environment: "production".to_string(),
+            redis_url: Some("http://keylo:secret@redis:6379".to_string()),
+            ..Config::default()
+        };
+        let state = AppState::new(config, None).expect("test state should use valid JWT keys");
+
+        let check = redis_check(&state, true).await;
+
+        assert!(!check.ok);
+        assert!(check.required);
+        assert_eq!(check.message, REDIS_INVALID_CONFIG_MESSAGE);
         assert!(!check.message.contains("secret"));
     }
 
