@@ -284,6 +284,7 @@ pub async fn setup_status(
         enabled: true,
         completed,
         environment: state.config.environment.clone(),
+        admin_client_id_configured: admin_id_configured,
         admin_client_secret_configured: admin_secret_configured,
         checks,
         endpoints: setup_endpoints(&state),

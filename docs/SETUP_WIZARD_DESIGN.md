@@ -94,6 +94,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
   "enabled": true,
   "completed": false,
   "environment": "development",
+  "admin_client_id_configured": true,
   "admin_client_secret_configured": false,
   "checks": [
     {

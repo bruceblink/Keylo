@@ -24,6 +24,7 @@ type SetupStatus = {
   enabled: boolean;
   completed: boolean;
   environment: string;
+  admin_client_id_configured: boolean;
   admin_client_secret_configured: boolean;
   checks: SetupCheck[];
   endpoints: SetupEndpoints;
@@ -51,7 +52,7 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 function App() {
-  const [adminClientId, setAdminClientId] = useState('cli-admin-root');
+  const [adminClientId, setAdminClientId] = useState('');
   const [adminClientSecret, setAdminClientSecret] = useState('');
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [message, setMessage] = useState('等待状态加载。');
@@ -62,12 +63,13 @@ function App() {
     [status]
   );
   const setupCompleted = status?.completed === true;
+  const adminClientIdConfigured = status?.admin_client_id_configured === true;
   const adminClientSecretConfigured = status?.admin_client_secret_configured === true;
   const canInitialize =
     status !== null &&
     !loading &&
     requiredFailures.length === 0 &&
-    adminClientId.trim().length > 0 &&
+    (adminClientIdConfigured || adminClientId.trim().length > 0) &&
     (adminClientSecretConfigured || adminClientSecret.trim().length > 0);
 
   async function loadStatus(nextMessage?: string) {
@@ -77,6 +79,9 @@ function App() {
       const response = await fetch('/setup/status');
       const data = await readJson<SetupStatus>(response);
       setStatus(data);
+      if (!data.admin_client_id_configured && !adminClientId.trim()) {
+        setAdminClientId('cli-admin-root');
+      }
       setMessage(
         nextMessage ??
           (data.completed ? '安装已完成，初始化入口已关闭。' : '状态已更新。')
@@ -91,9 +96,10 @@ function App() {
   async function initialize() {
     setLoading(true);
     setMessage('正在初始化...');
-    const payload: { admin_client_id: string; admin_client_secret?: string } = {
-      admin_client_id: adminClientId
-    };
+    const payload: { admin_client_id?: string; admin_client_secret?: string } = {};
+    if (adminClientId.trim()) {
+      payload.admin_client_id = adminClientId;
+    }
     if (adminClientSecret.trim()) {
       payload.admin_client_secret = adminClientSecret;
     }
@@ -175,8 +181,18 @@ function App() {
               id="admin-client-id"
               autoComplete="off"
               value={adminClientId}
+              placeholder={
+                adminClientIdConfigured ? '已从环境配置读取，可留空' : '请输入管理客户端 ID'
+              }
               onChange={(event) => setAdminClientId(event.target.value)}
             />
+            {adminClientIdConfigured ? (
+              <p className="hint ok">
+                已检测到环境配置中的 Admin Client ID，初始化时可不填写此项。
+              </p>
+            ) : (
+              <p className="hint">未检测到环境配置中的 Admin Client ID，可使用默认值或输入新的 ID。</p>
+            )}
 
             <label htmlFor="admin-client-secret">Admin Client Secret</label>
             <input

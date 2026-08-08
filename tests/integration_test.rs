@@ -2387,6 +2387,7 @@ mod tests {
         let status_body: serde_json::Value = status_resp.json();
         assert_eq!(status_body["enabled"], true);
         assert_eq!(status_body["environment"], "test");
+        assert_eq!(status_body["admin_client_id_configured"], true);
         let database_connected = status_body["checks"]
             .as_array()
             .unwrap()
