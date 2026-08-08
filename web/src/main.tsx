@@ -64,7 +64,9 @@ function App() {
   const setupCompleted = status?.completed === true;
   const adminClientSecretConfigured = status?.admin_client_secret_configured === true;
   const canInitialize =
+    status !== null &&
     !loading &&
+    requiredFailures.length === 0 &&
     adminClientId.trim().length > 0 &&
     (adminClientSecretConfigured || adminClientSecret.trim().length > 0);
 
