@@ -5,6 +5,7 @@ use bcrypt::{hash, DEFAULT_COST};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
+use std::time::Duration;
 use uuid::Uuid;
 
 pub mod identity;
@@ -39,17 +40,23 @@ fn token_hash(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// 初始化数据库连接池
+/// Keep every pool creation bounded so an unavailable database fails fast.
+const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Initialize a bounded database connection pool for request and startup paths.
 pub async fn init_db_pool(database_url: &str) -> Result<PgPool> {
     let max_connections: u32 = std::env::var("DB_POOL_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(10);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(max_connections)
-        .connect(database_url)
-        .await?;
+    let pool = tokio::time::timeout(
+        DATABASE_CONNECT_TIMEOUT,
+        PgPoolOptions::new()
+            .max_connections(max_connections)
+            .connect(database_url),
+    )
+    .await??;
 
     Ok(pool)
 }
