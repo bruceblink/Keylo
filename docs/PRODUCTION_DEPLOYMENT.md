@@ -53,6 +53,7 @@ ALLOW_INSECURE_INTERNAL_HTTP=false
 - 生产环境要求首次 setup 初始化管理客户端。首次未完成 setup 时访问 `/` 会进入 `/setup`，完成后 `/` 返回服务状态 JSON。
 - **1.1.0 起生产环境 Redis 为强制依赖**：若 Redis 不可用，限流中间件将拒绝请求，服务不会降级为内存限流。
 - Redis 不发布宿主机端口，且只加入 Keylo 专用内部网络；生产环境 Redis 密码必须通过 `REDIS_PASSWORD_ENC` 或 `REDIS_PASSWORD_ENC_FILE` 加密配置。
+- `/readyz` 失败时返回稳定的 `error_code`、`error` 和 `next_action`；其中 `next_action` 可直接用于部署探针或运维提示，数据库连接细节仍只写入服务日志。
 - `DB_POOL_SIZE` 控制数据库连接池大小，默认 10；只有需要按部署规模调优时才覆盖。
 - 如果数据库初始化失败，服务会直接失败启动，不再回退到内存模式。
 - 非生产环境默认也会在数据库初始化失败时失败启动；只有显式设置 `ALLOW_IN_MEMORY_FALLBACK=true` 才允许无数据库路由。该模式仍会校验基础配置。

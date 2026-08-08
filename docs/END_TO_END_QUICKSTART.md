@@ -142,6 +142,8 @@ Keylo 会在启动早期校验数据库 URL、Token 时长等关键配置；缺�
   - 数据库模式下检查 `DATABASE_URL`。
   - 生产环境检查 Redis 密码密文配置。
 
+`/readyz` 返回 `503` 时优先查看 `error_code` 和 `next_action`：它们会说明是数据库未配置、数据库/Redis 未就绪还是首次 setup 未完成；底层连接错误仍只记录在服务日志中。
+
 首次未完成 setup 时，访问 `http://127.0.0.1:2345/setup` 完成初始化。若 `.env` 已配置 `ADMIN_CLIENT_SECRET`，页面可直接使用配置值初始化；若未配置，则需要在页面输入新的 `Admin Client Secret`。密钥只会以哈希形式写入数据库。
 
 ### 1.6 读取轻量发现配置

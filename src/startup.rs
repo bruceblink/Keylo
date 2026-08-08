@@ -697,6 +697,13 @@ wwIDAQAB
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error_code"], "database_not_configured");
+        assert!(body["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("DATABASE_URL"));
     }
 
     #[tokio::test]
