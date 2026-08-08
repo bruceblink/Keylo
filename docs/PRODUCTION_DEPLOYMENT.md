@@ -36,7 +36,7 @@ ALLOW_INSECURE_INTERNAL_HTTP=false
 
 `JWT_KEY_ID` 是当前 JWT 签名密钥的标识符，会写入 JWT header 的 `kid` 字段，同时暴露在 `/.well-known/jwks.json` 中对应公钥的 `kid` 字段。下游服务本地验签时，会根据 token header 中的 `kid` 到 JWKS 中选择同名公钥。单密钥部署可以使用类似 `keylo-rs256-1` 的稳定值；每次更换 RSA 私钥/公钥时，应同步更换 `JWT_KEY_ID`，例如递增为 `keylo-rs256-2`，避免下游 JWKS 缓存把新 token 误用旧公钥验证。
 
-如果使用仓库内的 [docker-compose.yml](docker-compose.yml)，还需要保证：
+如果使用仓库内的 [docker-compose.yml](../docker-compose.yml)，还需要保证：
 
 - 宿主机存在 RSA 密钥目录，并通过 `${JWT_KEYS_DIR:-./keys}` 挂载到容器 `/app/keys`
 - 宿主机存在 PostgreSQL 初始化明文密码文件 `${POSTGRES_PASSWORD_FILE:-./.secrets/.database_password}`，该文件只提供给 PostgreSQL 初始化
