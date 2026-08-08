@@ -60,6 +60,47 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MigrationStatus {
+    pub applied: usize,
+    pub expected: usize,
+    pub current: bool,
+}
+
+/// Read the SQLx migration ledger without changing the database, including checksum validation.
+pub async fn migration_status(pool: &PgPool) -> Result<MigrationStatus> {
+    let migrator = sqlx::migrate!("./migrations");
+    let expected: Vec<(i64, Vec<u8>)> = migrator
+        .iter()
+        .map(|migration| (migration.version, migration.checksum.to_vec()))
+        .collect();
+    let rows = sqlx::query(
+        "SELECT version, checksum
+         FROM _sqlx_migrations
+         WHERE success = TRUE
+         ORDER BY version",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let current = rows.len() == expected.len()
+        && rows.iter().all(|row| {
+            let version: i64 = row.get("version");
+            let checksum: Vec<u8> = row.get("checksum");
+            expected
+                .iter()
+                .any(|(expected_version, expected_checksum)| {
+                    *expected_version == version && *expected_checksum == checksum
+                })
+        });
+
+    Ok(MigrationStatus {
+        applied: rows.len(),
+        expected: expected.len(),
+        current,
+    })
+}
+
 /// 创建客户端
 pub async fn create_client(
     pool: &PgPool,

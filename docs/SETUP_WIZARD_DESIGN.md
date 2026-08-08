@@ -21,7 +21,7 @@ Keylo 当前采用 API-first 的轻量统一认证与授权中心定位，核心
 
 - 环境与依赖诊断。
 - 数据库连接状态。
-- migration 执行状态。
+- migration 执行状态与 checksum 校验；首次 setup 尚未执行时该项为待处理提示，不会阻塞初始化。
 - Redis 配置状态。
 - JWT RSA 密钥状态；未配置密钥文件时 Keylo 自动生成随机 RSA 密钥对并写入 `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`。
 - 管理客户端初始化状态。

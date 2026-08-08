@@ -66,6 +66,39 @@ fn database_connection_failure_check(error: &str) -> SetupCheck {
     )
 }
 
+/// Turn migration ledger state into a non-blocking setup check because initialization runs migrations.
+fn migration_check(status: db::MigrationStatus) -> SetupCheck {
+    let message = if status.current {
+        format!("All {} database migrations are applied", status.applied)
+    } else if status.applied == 0 {
+        "Database migrations are pending; setup initialization will run them".to_string()
+    } else {
+        format!(
+            "Database migrations are incomplete ({}/{} applied); run migrations before serving traffic",
+            status.applied, status.expected
+        )
+    };
+    check(
+        "migrations",
+        "Database Migrations",
+        status.current,
+        false,
+        message,
+    )
+}
+
+/// Hide migration query details from the anonymous setup response while leaving the check actionable.
+fn migration_status_failure_check(error: &str) -> SetupCheck {
+    tracing::warn!(diagnostic = error, "Setup migration status check failed");
+    check(
+        "migrations",
+        "Database Migrations",
+        false,
+        false,
+        "Migration status is unavailable; run migrations and retry setup.",
+    )
+}
+
 async fn database_pool_from_config(state: &AppState) -> Result<Option<sqlx::PgPool>, String> {
     if let Some(pool) = &state.db {
         return Ok(Some(pool.as_ref().clone()));
@@ -256,6 +289,10 @@ pub async fn setup_status(
                 true,
                 "Database connection succeeded",
             ));
+            match db::migration_status(&pool).await {
+                Ok(status) => checks.push(migration_check(status)),
+                Err(err) => checks.push(migration_status_failure_check(&err.to_string())),
+            }
             let admin_exists = db::has_active_admin_client(&pool).await.unwrap_or(false);
             checks.push(check(
                 "admin_client_exists",
@@ -403,7 +440,10 @@ pub async fn setup_initialize(
 
 #[cfg(test)]
 mod tests {
-    use super::{database_connection_failure_check, first_non_blank, setup_endpoints};
+    use super::{
+        database_connection_failure_check, first_non_blank, migration_check,
+        migration_status_failure_check, setup_endpoints,
+    };
     use crate::{config::Config, state::AppState};
 
     #[test]
@@ -442,6 +482,32 @@ mod tests {
         assert!(!check.ok);
         assert_eq!(check.message, super::DATABASE_CONNECTION_RETRY_MESSAGE);
         assert!(check.message.contains("DATABASE_URL"));
+        assert!(!check.message.contains("secret"));
+    }
+
+    #[test]
+    fn migration_check_is_visible_without_blocking_initialization() {
+        let check = migration_check(crate::db::MigrationStatus {
+            applied: 0,
+            expected: 32,
+            current: false,
+        });
+
+        assert_eq!(check.key, "migrations");
+        assert!(!check.ok);
+        assert!(!check.required);
+        assert!(check.message.contains("will run them"));
+    }
+
+    #[test]
+    fn migration_status_failure_is_safe_and_actionable() {
+        let check = migration_status_failure_check(
+            "relation _sqlx_migrations does not exist for postgres://keylo:secret@db/keylo",
+        );
+
+        assert!(!check.ok);
+        assert!(!check.required);
+        assert!(check.message.contains("run migrations"));
         assert!(!check.message.contains("secret"));
     }
 

@@ -2399,6 +2399,13 @@ mod tests {
         if !database_connected {
             return;
         }
+        let migrations_check = status_body["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["key"] == "migrations")
+            .expect("setup status should expose migration state");
+        assert_eq!(migrations_check["ok"], true);
         assert!(status_body["endpoints"]["jwks_uri"]
             .as_str()
             .unwrap()
