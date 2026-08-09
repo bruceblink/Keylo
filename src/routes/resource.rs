@@ -64,19 +64,45 @@ async fn list_resources_handler(
             "organization_id must not be blank".to_string(),
         ));
     }
-    let resources = crate::db::list_resources_for_admin(
-        db,
-        organization_id,
-        query.app.as_deref(),
-        query.resource_type.as_deref(),
-        query.active,
-    )
-    .await
-    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    let has_explicit_pagination = query.limit.is_some() || query.offset.is_some();
+    let requested_limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let requested_offset = query.offset.unwrap_or(0).max(0);
+    let (resources, has_more, limit, offset) = if has_explicit_pagination {
+        let (resources, has_more) = crate::db::list_resources_for_admin_page(
+            db,
+            organization_id,
+            query.app.as_deref(),
+            query.resource_type.as_deref(),
+            query.active,
+            requested_limit,
+            requested_offset,
+        )
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        (resources, has_more, requested_limit, requested_offset)
+    } else {
+        let resources = crate::db::list_resources_for_admin(
+            db,
+            organization_id,
+            query.app.as_deref(),
+            query.resource_type.as_deref(),
+            query.active,
+        )
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        let count = resources.len() as i64;
+        (resources, false, count, 0)
+    };
 
     Ok(Json(json!({
         "success": true,
-        "data": resources
+        "data": resources,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 

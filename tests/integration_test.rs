@@ -2141,6 +2141,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_admin_resource_list_returns_scoped_pagination_metadata() {
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let app = format!("pagination-app-{suffix}");
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        for code in ["first", "second"] {
+            let response = server
+                .post("/v1/admin/resources")
+                .add_header("Authorization", format!("Bearer {admin_token}"))
+                .json(&json!({
+                    "app": app,
+                    "resource_type": "menu",
+                    "code": code,
+                    "name": format!("Pagination {code}")
+                }))
+                .await;
+            response.assert_status_ok();
+        }
+
+        let page = server
+            .get(&format!(
+                "/v1/admin/resources?app={app}&type=menu&limit=1&offset=0"
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        page.assert_status_ok();
+        let body: serde_json::Value = page.json();
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(body["pagination"]["limit"], 1);
+        assert_eq!(body["pagination"]["offset"], 0);
+        assert_eq!(body["pagination"]["has_more"], true);
+        assert_eq!(body["pagination"]["next_offset"], 1);
+    }
+
+    #[tokio::test]
     async fn test_inactive_user_cannot_get_auth_token() {
         let server = setup_test_server().await;
 

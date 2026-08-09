@@ -283,6 +283,43 @@ pub async fn list_resources_for_admin(
     .await?)
 }
 
+/// List one administrative resource page and report whether another page exists.
+pub async fn list_resources_for_admin_page(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    app: Option<&str>,
+    resource_type: Option<&str>,
+    active: Option<bool>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<Resource>, bool)> {
+    let limit = limit.max(0);
+    let mut resources = sqlx::query_as::<_, Resource>(
+        r#"
+        SELECT id, organization_id, app, resource_type, code, name, parent_id, display_order,
+               description, metadata, active, version, created_at, updated_at
+        FROM resources
+        WHERE ($1::text IS NULL OR organization_id = $1)
+          AND ($2::text IS NULL OR app = $2)
+          AND ($3::text IS NULL OR resource_type = $3)
+          AND ($4::boolean IS NULL OR active = $4)
+        ORDER BY organization_id NULLS FIRST, app, resource_type, display_order, code
+        LIMIT $5 OFFSET $6
+        "#,
+    )
+    .bind(organization_id)
+    .bind(app)
+    .bind(resource_type)
+    .bind(active)
+    .bind(limit + 1)
+    .bind(offset.max(0))
+    .fetch_all(pool)
+    .await?;
+    let has_more = resources.len() > limit as usize;
+    resources.truncate(limit as usize);
+    Ok((resources, has_more))
+}
+
 pub async fn get_resource_by_id(pool: &PgPool, resource_id: &str) -> Result<Option<Resource>> {
     let sql = format!("{} WHERE id = $1", select_resource_sql());
     Ok(sqlx::query_as::<_, Resource>(&sql)

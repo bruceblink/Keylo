@@ -69,6 +69,8 @@ pub struct ResourceListQuery {
     #[serde(rename = "type")]
     pub resource_type: Option<String>,
     pub active: Option<bool>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -580,7 +580,7 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/admin/resources?organization_id=&app=&type=&active=` | 资源列表；提供 organization_id 时只返回该组织资源 |
+| GET | `/v1/admin/resources?organization_id=&app=&type=&active=&limit=&offset=` | 资源列表；提供 organization_id 时只返回该组织资源，响应包含 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | POST | `/v1/admin/resources` | 创建或更新资源 |
 | PUT | `/v1/admin/resources/{resource_id}` | 更新资源可变字段；必须提供 `expected_version`，冲突返回 `409` |
 | GET | `/v1/admin/resources/{resource_id}/changes?limit=&offset=` | 资源更新版本、操作者、原因及前后快照 |
