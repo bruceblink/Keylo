@@ -140,6 +140,28 @@ pub async fn list_oidc_clients(pool: &PgPool) -> Result<Vec<OidcClient>> {
     .await?)
 }
 
+/// Return a bounded page of platform-scoped clients and whether another page exists.
+pub async fn list_oidc_clients_page(
+    pool: &PgPool,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<OidcClient>, bool)> {
+    let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
+    let mut clients = sqlx::query_as::<_, OidcClient>(
+        "SELECT id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, scope_kind, organization_id, created_at, updated_at FROM oidc_clients WHERE scope_kind = 'platform' AND organization_id IS NULL ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
+    )
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let has_more = clients.len() > limit as usize;
+    if has_more {
+        clients.truncate(limit as usize);
+    }
+    Ok((clients, has_more))
+}
+
 /// Public protocol lookup uses globally unique client_id but preserves stored scope.
 pub async fn get_oidc_client(pool: &PgPool, client_id: &str) -> Result<Option<OidcClient>> {
     Ok(sqlx::query_as::<_, OidcClient>("SELECT id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, scope_kind, organization_id, created_at, updated_at FROM oidc_clients WHERE client_id = $1")
@@ -168,6 +190,30 @@ pub async fn list_oidc_clients_in_organization(
     .bind(organization_id)
     .fetch_all(pool)
     .await?)
+}
+
+/// Return a bounded page of clients owned by one organization.
+pub async fn list_oidc_clients_in_organization_page(
+    pool: &PgPool,
+    organization_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<OidcClient>, bool)> {
+    let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
+    let mut clients = sqlx::query_as::<_, OidcClient>(
+        "SELECT id, client_id, name, description, client_type, redirect_uris, grant_types, scopes, active, scope_kind, organization_id, created_at, updated_at FROM oidc_clients WHERE organization_id = $1 AND scope_kind = 'organization' ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(organization_id)
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let has_more = clients.len() > limit as usize;
+    if has_more {
+        clients.truncate(limit as usize);
+    }
+    Ok((clients, has_more))
 }
 
 pub async fn get_oidc_client_in_organization(

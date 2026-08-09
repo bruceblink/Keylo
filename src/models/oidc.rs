@@ -49,6 +49,13 @@ pub struct UpdateOidcClientRequest {
     pub active: Option<bool>,
 }
 
+/// Bounds administrative OIDC client listings without changing the default response shape.
+#[derive(Debug, Deserialize)]
+pub struct OidcClientListQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
 /// Authorization data retained until the token endpoint atomically consumes the one-time code.
 #[derive(Debug, Clone)]
 pub struct OidcAuthorizationCode {

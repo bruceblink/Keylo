@@ -493,6 +493,19 @@ mod tests {
         assert_eq!(created_body["data"]["scope_kind"], "organization");
         assert_eq!(created_body["data"]["organization_id"], organization_a.id);
 
+        let organization_clients = server
+            .get(&format!(
+                "/v1/organizations/{}/oidc/clients?limit=1&offset=0",
+                organization_a.id
+            ))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        organization_clients.assert_status_ok();
+        let organization_clients: serde_json::Value = organization_clients.json();
+        assert_eq!(organization_clients["pagination"]["limit"], 1);
+        assert_eq!(organization_clients["pagination"]["offset"], 0);
+        assert_eq!(organization_clients["pagination"]["has_more"], false);
+
         let cross_org = server
             .get(&format!(
                 "/v1/organizations/{}/oidc/clients",
@@ -515,11 +528,14 @@ mod tests {
             .expect("Platform admin token should exist")
             .to_string();
         let platform_clients = server
-            .get("/v1/admin/oidc/clients")
+            .get("/v1/admin/oidc/clients?limit=1&offset=0")
             .add_header("Authorization", format!("Bearer {admin_token}"))
             .await;
         platform_clients.assert_status_ok();
         let platform_clients: serde_json::Value = platform_clients.json();
+        assert_eq!(platform_clients["pagination"]["limit"], 1);
+        assert_eq!(platform_clients["pagination"]["offset"], 0);
+        assert!(platform_clients["pagination"]["has_more"].is_boolean());
         assert!(!platform_clients["data"]
             .as_array()
             .unwrap()

@@ -16,9 +16,10 @@ use crate::{
         validate_authorization_request, validate_grant_types, validate_oidc_client_registration,
         validate_oidc_scopes, validate_redirect_uris, verify_pkce_s256, Claims,
         CreateOidcClientRequest, OidcAccessTokenClaims, OidcAuthorizationCode,
-        OidcAuthorizeRequest, OidcBrowserSession, OidcClient, OidcConsentRequest,
-        OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest, OidcTokenResponse,
-        RotateClientSecretRequest, UpdateOidcClientRequest, OIDC_CLIENT_SCOPE_ORGANIZATION,
+        OidcAuthorizeRequest, OidcBrowserSession, OidcClient, OidcClientListQuery,
+        OidcConsentRequest, OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest,
+        OidcTokenResponse, RotateClientSecretRequest, UpdateOidcClientRequest,
+        OIDC_CLIENT_SCOPE_ORGANIZATION,
     },
     state::AppState,
 };
@@ -173,11 +174,35 @@ pub async fn create_client(
 
 pub async fn list_clients(
     State(state): State<AppState>,
+    Query(params): Query<OidcClientListQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    let clients = crate::db::list_oidc_clients(database(&state)?)
-        .await
-        .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
-    Ok(Json(json!({"success": true, "data": clients})))
+    let db = database(&state)?;
+    let has_explicit_pagination = params.limit.is_some() || params.offset.is_some();
+    let requested_limit = params.limit.unwrap_or(50).clamp(1, 200);
+    let requested_offset = params.offset.unwrap_or(0).max(0);
+    let (clients, has_more, limit, offset) = if has_explicit_pagination {
+        let (clients, has_more) =
+            crate::db::list_oidc_clients_page(db, requested_limit, requested_offset)
+                .await
+                .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+        (clients, has_more, requested_limit, requested_offset)
+    } else {
+        let clients = crate::db::list_oidc_clients(db)
+            .await
+            .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+        let count = clients.len() as i64;
+        (clients, false, count, 0)
+    };
+    Ok(Json(json!({
+        "success": true,
+        "data": clients,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 /// Return only a platform-scoped client from the platform administration surface.
@@ -289,13 +314,41 @@ pub async fn list_organization_clients(
     claims: Claims,
     State(state): State<AppState>,
     Path(organization_id): Path<String>,
+    Query(params): Query<OidcClientListQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     crate::routes::organization::require_delegated_manager(&state, &claims, &organization_id)
         .await?;
-    let clients = crate::db::list_oidc_clients_in_organization(database(&state)?, &organization_id)
+    let db = database(&state)?;
+    let has_explicit_pagination = params.limit.is_some() || params.offset.is_some();
+    let requested_limit = params.limit.unwrap_or(50).clamp(1, 200);
+    let requested_offset = params.offset.unwrap_or(0).max(0);
+    let (clients, has_more, limit, offset) = if has_explicit_pagination {
+        let (clients, has_more) = crate::db::list_oidc_clients_in_organization_page(
+            db,
+            &organization_id,
+            requested_limit,
+            requested_offset,
+        )
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
-    Ok(Json(json!({"success": true, "data": clients})))
+        (clients, has_more, requested_limit, requested_offset)
+    } else {
+        let clients = crate::db::list_oidc_clients_in_organization(db, &organization_id)
+            .await
+            .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+        let count = clients.len() as i64;
+        (clients, false, count, 0)
+    };
+    Ok(Json(json!({
+        "success": true,
+        "data": clients,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 /// Register a client in the path organization; the request body cannot select another scope.

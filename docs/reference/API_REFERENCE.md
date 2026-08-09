@@ -99,7 +99,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| GET | `/v1/admin/oidc/clients` | 查询 OIDC relying party 客户端 |
+| GET | `/v1/admin/oidc/clients` | 查询 OIDC relying party 客户端；支持 `limit`/`offset` 分页元数据 |
 | POST | `/v1/admin/oidc/clients` | 注册 OIDC 客户端 |
 | PUT | `/v1/admin/oidc/clients/{client_id}` | 更新客户端元数据或启用状态 |
 | POST | `/v1/admin/oidc/clients/{client_id}/rotate-secret` | 轮换 confidential client secret |
@@ -108,7 +108,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| GET | `/v1/organizations/{organization_id}/oidc/clients` | 查询当前组织的 OIDC client |
+| GET | `/v1/organizations/{organization_id}/oidc/clients` | 查询当前组织的 OIDC client；支持 `limit`/`offset` 分页元数据 |
 | POST | `/v1/organizations/{organization_id}/oidc/clients` | 创建 organization-scoped OIDC client |
 | GET | `/v1/organizations/{organization_id}/oidc/clients/{client_id}` | 查询当前组织的指定 client |
 | PUT | `/v1/organizations/{organization_id}/oidc/clients/{client_id}` | 更新当前组织 client 元数据或启用状态 |
