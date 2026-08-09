@@ -39,7 +39,7 @@ Keylo 支持：
 - `secret:v1:aes-256-gcm:<nonce_base64>:<ciphertext_base64>` 跨语言统一密文格式
 - AES-256-GCM 解密
 
-格式设计和 Rust/Python/Java/.NET/C++ 解密示例见 [SECRET_ENCRYPTION.md](SECRET_ENCRYPTION.md)。
+格式设计和 Rust/Python/Java/.NET/C++ 解密示例见 [SECRET_ENCRYPTION.md](../../operations/SECRET_ENCRYPTION.md)。
 
 生产环境会拒绝：
 
@@ -101,7 +101,7 @@ POSTGRES_PASSWORD_FILE=/run/secrets/.postgres_password
 5. 生产环境确认 Redis URL、RSA key、管理员客户端配置完整。当前版本推荐通过 `REDIS_URL_ENC_FILE` / `REDIS_URL_KEY_FILE` 配置 Redis URL 密文。
 6. 重启服务并检查启动日志与 `/readyz`。
 
-详细部署步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
+详细部署步骤见 [PRODUCTION_DEPLOYMENT.md](../deployment/PRODUCTION_DEPLOYMENT.md)。
 
 ---
 

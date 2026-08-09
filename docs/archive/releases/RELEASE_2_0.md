@@ -26,10 +26,10 @@ Keylo 2.0.0 是统一主体 RBAC 版本，重点把用户、服务和客户端�
 
 ## 新增文档
 
-- [API_REFERENCE.md](API_REFERENCE.md)
-- [THIRD_PARTY_INTEGRATION.md](THIRD_PARTY_INTEGRATION.md)
-- [KEYSTONE_KEYLO_2_0_MIGRATION.md](KEYSTONE_KEYLO_2_0_MIGRATION.md)
-- [KEYLO_2_0_CLIENT_GUIDE.md](KEYLO_2_0_CLIENT_GUIDE.md)
+- [API_REFERENCE.md](../../reference/API_REFERENCE.md)
+- [THIRD_PARTY_INTEGRATION.md](../../integrations/THIRD_PARTY_INTEGRATION.md)
+- [Keystone integration guide](../../integrations/keystone.md)
+- [KEYLO_2_0_CLIENT_GUIDE.md](../../reference/KEYLO_2_0_CLIENT_GUIDE.md)
 
 ## 发布前验证
 
