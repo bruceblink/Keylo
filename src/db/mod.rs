@@ -827,7 +827,10 @@ pub async fn list_audit_log_export(
                     AND id < $3
                 )
            )
-         ORDER BY created_at DESC, id DESC
+          -- Keep the cursor ordering aligned with the microsecond value that
+          -- is returned in `next_cursor`; the `created_at` response alias is
+          -- only second-precision and must not control page ordering.
+          ORDER BY audit_logs.created_at DESC, audit_logs.id DESC
          LIMIT $4",
     )
     .bind(event_type)
