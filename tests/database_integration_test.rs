@@ -27,12 +27,17 @@ mod database_tests {
         // 清理测试数据，保留表结构
         if (sqlx::query(
             "TRUNCATE TABLE
+                organization_role_bindings,
+                organization_memberships,
+                organizations,
                 oidc_authorization_codes,
                 oidc_clients,
                 user_oauth_accounts,
                 oauth_providers,
                 role_permissions,
                 user_roles,
+                principal_roles,
+                principals,
                 permissions,
                 roles,
                 audit_logs,
@@ -48,6 +53,17 @@ mod database_tests {
             .is_err()
         {
             return Err("Failed to clean database data");
+        }
+
+        if (sqlx::query(
+            "INSERT INTO organizations (id, slug, name, kind, status)
+             VALUES ('org-internal', 'internal', 'Internal Organization', 'internal', 'active')",
+        )
+        .execute(&pool)
+        .await)
+            .is_err()
+        {
+            return Err("Failed to restore the internal organization");
         }
 
         Ok(pool)
@@ -134,6 +150,196 @@ mod database_tests {
         .unwrap()
         .unwrap();
         assert!(!updated.email_verified);
+    }
+
+    #[tokio::test]
+    async fn test_organization_domain_tracks_explicit_human_classes_and_memberships() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_organization_domain_tracks_explicit_human_classes_and_memberships: {msg}"
+                );
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization = db::create_organization(
+            &pool,
+            &format!("customer-{suffix}"),
+            "Customer organization",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create organization");
+        assert_eq!(organization.status, "active");
+
+        let user = db::create_user(
+            &pool,
+            &format!("customer-user-{suffix}"),
+            &format!("customer-user-{suffix}@example.test"),
+            Some("CustomerUser#123"),
+        )
+        .await
+        .expect("Failed to create user");
+        assert_eq!(user.user_class, keylo::models::USER_CLASS_EXTERNAL_CUSTOMER);
+
+        let external_principal = db::ensure_user_principal(&pool, &user.id)
+            .await
+            .expect("Failed to resolve external user principal")
+            .expect("External user principal should exist");
+        assert!(db::upsert_organization_membership(
+            &pool,
+            "org-internal",
+            &external_principal.id,
+            "active",
+            Some("test-admin"),
+        )
+        .await
+        .is_err());
+
+        let user = db::set_user_class(
+            &pool,
+            &user.id,
+            keylo::models::USER_CLASS_INTERNAL_EMPLOYEE,
+            Some("test-admin"),
+        )
+        .await
+        .expect("Failed to set user class")
+        .expect("User should exist");
+        assert_eq!(user.user_class, keylo::models::USER_CLASS_INTERNAL_EMPLOYEE);
+
+        let principal = db::ensure_user_principal(&pool, &user.id)
+            .await
+            .expect("Failed to resolve user principal")
+            .expect("User principal should exist");
+        let membership = db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &principal.id,
+            "active",
+            Some("test-admin"),
+        )
+        .await
+        .expect("Failed to create organization membership");
+        assert_eq!(membership.status, "active");
+
+        let role = db::create_organization_role(
+            &pool,
+            &format!("organization-member-{suffix}"),
+            Some("Organization member role"),
+            "user",
+        )
+        .await
+        .expect("Failed to create user role");
+        let binding = db::assign_organization_role(
+            &pool,
+            &organization.id,
+            &principal.id,
+            &role.id,
+            Some("test-admin"),
+        )
+        .await
+        .expect("Failed to bind organization role");
+        assert_eq!(binding.scope, "organization");
+
+        let platform_role = db::create_role_with_options(
+            &pool,
+            &format!("platform-role-{suffix}"),
+            Some("Platform role must not be tenant-bound"),
+            "user",
+            false,
+        )
+        .await
+        .expect("Failed to create platform role");
+        assert!(db::assign_organization_role(
+            &pool,
+            &organization.id,
+            &principal.id,
+            &platform_role.id,
+            Some("test-admin"),
+        )
+        .await
+        .is_err());
+        assert!(sqlx::query(
+            "INSERT INTO organization_role_bindings (organization_id, principal_id, role_id, scope) VALUES ($1, $2, $3, 'organization')",
+        )
+        .bind(&organization.id)
+        .bind(&principal.id)
+        .bind(&platform_role.id)
+        .execute(&pool)
+        .await
+        .is_err());
+
+        let bindings = db::get_organization_role_bindings(&pool, &organization.id, &principal.id)
+            .await
+            .expect("Failed to list organization role bindings");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].role_id, role.id);
+
+        let disabled = db::set_organization_status(&pool, &organization.id, "disabled")
+            .await
+            .expect("Failed to disable organization")
+            .expect("Organization should exist");
+        assert_eq!(disabled.status, "disabled");
+        assert!(db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &principal.id,
+            "active",
+            Some("test-admin"),
+        )
+        .await
+        .is_err());
+        assert!(db::assign_organization_role(
+            &pool,
+            &organization.id,
+            &principal.id,
+            &role.id,
+            Some("test-admin"),
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_super_admin_bootstrap_is_an_internal_member() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_super_admin_bootstrap_is_an_internal_member: {msg}");
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let username = format!("bootstrap-admin-{suffix}");
+        let config = keylo::config::Config {
+            enable_super_admin_bootstrap: true,
+            super_admin_username: Some(username.clone()),
+            super_admin_email: Some(format!("{username}@example.test")),
+            super_admin_password: Some("BootstrapAdmin#123".to_string()),
+            ..keylo::config::Config::default()
+        };
+
+        db::seed_super_admin_user(&pool, &config)
+            .await
+            .expect("Failed to seed super administrator");
+        let user = db::get_user_by_username(&pool, &username)
+            .await
+            .expect("Failed to load bootstrap user")
+            .expect("Bootstrap user should exist");
+        assert_eq!(user.user_class, keylo::models::USER_CLASS_INTERNAL_EMPLOYEE);
+        let principal = db::get_principal_by_ref(&pool, "user", &user.id)
+            .await
+            .expect("Failed to load bootstrap principal")
+            .expect("Bootstrap principal should exist");
+        let membership = db::get_organization_membership(&pool, "org-internal", &principal.id)
+            .await
+            .expect("Failed to load internal membership")
+            .expect("Bootstrap user should join the internal organization");
+        assert_eq!(membership.status, "active");
     }
 
     #[tokio::test]

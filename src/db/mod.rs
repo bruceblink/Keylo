@@ -13,6 +13,7 @@ pub mod mfa;
 pub mod oauth;
 pub mod oidc;
 pub mod oidc_upstream;
+pub mod organization;
 pub mod principal;
 pub mod rbac;
 pub mod refresh_session;
@@ -26,6 +27,7 @@ pub use mfa::*;
 pub use oauth::*;
 pub use oidc::*;
 pub use oidc_upstream::*;
+pub use organization::*;
 pub use principal::*;
 pub use rbac::*;
 pub use refresh_session::*;
@@ -282,6 +284,11 @@ pub async fn seed_super_admin_user(pool: &PgPool, config: &Config) -> Result<()>
     } else {
         create_user(pool, username, email, Some(password)).await?
     };
+
+    // Bootstrap identities are platform operators, never customer accounts.
+    let user = promote_user_to_internal_employee(pool, &user.id, Some("system"))
+        .await?
+        .unwrap_or(user);
 
     assign_role_to_user(pool, &user.id, &super_role.id).await?;
     if get_permission_by_name(pool, "admin.full").await?.is_none() {

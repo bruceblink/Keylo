@@ -1,6 +1,6 @@
 # Keylo 后续完整开发计划
 
-> 本计划以 [Keylo 主线设计](../design/KEYLO_DEVELOPMENT_BLUEPRINT.md) 为前置约束，按 2026-08-08 的源码、迁移和测试制定。它只规划已经确认的后续工作；docs/archive/ 不作为计划依据。
+> 本计划以 [Keylo 主线设计](../design/KEYLO_DEVELOPMENT_BLUEPRINT.md) 为前置约束，按 2026-08-09 的源码、迁移和测试制定。它只规划已经确认的后续工作；docs/archive/ 不作为计划依据。
 
 ## 1. 计划原则
 
@@ -68,14 +68,21 @@
 
 ### 3.1 组织领域模型与迁移
 
-- 新增 Organization：稳定 id、slug、name、kind（customer/internal）、status、created_at、updated_at；停用/归档是软状态，默认阻止新会话和新资源写入。
-- 新增 user_class 枚举：internal_employee、external_customer。user_class 只参与入驻、身份源映射、组织成员资格和角色可分配性校验，不直接授予权限。
-- 新增 OrganizationMembership：organization_id、principal_id、status、joined_at、invited_by；状态至少区分 pending、active、suspended、removed。
-- 新增组织级角色绑定：organization_id、principal_id、role_id、scope；组织角色不得授予平台级权限。
+已完成的基础（2026-08-09）：
+
+- [x] 新增 Organization：稳定 id、slug、name、kind（customer/internal）、status、created_at、updated_at；当前持久化层阻止向 disabled/archived 组织创建 pending/active 成员关系。
+- [x] 新增 user_class 枚举：internal_employee、external_customer。新建人类用户默认 external_customer；启动引导的 super admin 显式提升为 internal_employee 并加入 `org-internal`。历史数据仅依据明确的 `super_admin` 或 `admin.full` 平台权限回填，禁止用 `admin*` 角色名前缀推断类别；没有明确租户归属的 external_customer 保持无 active organization context，不被静默塞入客户组织。
+- [x] 新增 OrganizationMembership：organization_id、principal_id、status、joined_at、invited_by；状态支持 pending、active、suspended、removed。
+- [x] 新增组织级角色绑定：organization_id、principal_id、role_id、scope；角色在数据库中区分 platform/organization scope，持久化层要求 organization scope、active organization、active membership，并复用角色 `assignable_to` 的 Principal 类型校验。
+
+仍待完成：
+
+- [ ] 将 user_class 纳入入驻、身份源映射和角色作用域校验；类别本身不得直接授予权限。
+- [ ] 为组织/成员/组织角色绑定提供受保护的管理 API、审计与近期 MFA 规则；在授权引擎接入前，不得把 organization_role_bindings 解释为已经生效的角色。
 - 将人类与机器主体分开建模：`user` 继续使用 `user_class`，`service` 保持现有服务 Principal，新增 `device` 作为设备/边缘代理/无人值守任务的机器 Principal；机器主体没有 user_class、密码登录、浏览器会话或人类 MFA 要求。
 - 新增 MachineCredential/API key 记录：principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by、allowed_scopes、allowed_audiences；原始 key 只在创建或轮换响应中显示一次。
-- 为用户、OIDC client、service client、identity source、resource、refresh session 和授权审计定义 organization_id 归属；明确平台级对象允许为空的清单。
-- 设计兼容迁移：现有数据先进入明确的 default organization 或显式 platform scope，并为每个 user 生成明确的 user_class 映射；迁移脚本必须可重复、可审计、可回滚，禁止用隐式 NULL 代表所有组织或用默认类别掩盖不确定性。
+- 为用户、OIDC client、service client、identity source、resource、refresh session 和授权审计逐项定义 organization_id 归属；当前这些既有对象仍为 platform-scoped，不能仅加 nullable 列而不同时完成查询过滤、唯一约束和授权路径。
+- 设计兼容迁移：现有数据必须进入明确的 default organization 或显式 platform scope，并为每个 user 生成明确的 user_class 映射；迁移保持前向、可重复和可审计。生产恢复使用已验证的备份/恢复或修复迁移，不假设未实现的 down migration；禁止用隐式 NULL 代表所有组织或用默认类别掩盖不确定性。
 
 验收：迁移在干净数据库和已有单组织数据库上都能执行；重复执行不产生重复组织、类别或绑定；任一租户归属或 user_class 不明确的对象都会阻止发布而不是被静默归入错误组织。
 
@@ -83,7 +90,7 @@
 
 - 提供平台级组织创建、查询、停用、归档和恢复 API；组织 slug 唯一且不可作为 secret。
 - 提供组织 owner/admin 管理成员、邀请、加入、暂停和移除的 API；敏感成员操作要求近期 MFA 并写审计。
-- internal_employee 可以使用平台作用域，或加入 kind=internal 的内部组织；external_customer 必须加入 kind=customer 的 active organization。
+- internal_employee 可以使用平台作用域，或加入 kind=internal 的内部组织；external_customer 只有加入 kind=customer 的 active organization 后才能进入客户资源，未归属或 pending 状态不得创建组织上下文。
 - 身份源必须声明允许创建的 user_class 和组织归属策略；外部 OIDC/社交登录默认只能创建 external_customer，不得通过邮箱或 claim 自动获得 internal_employee。
 - 组织切换必须重新校验 membership 并签发新的 active organization context；不能信任任意 X-Organization-Id 请求头。
 - 组织删除初期只允许 archive；物理删除、数据导出和保留策略另行审批。

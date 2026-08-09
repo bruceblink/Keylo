@@ -1,6 +1,6 @@
 # Keylo 主线设计与能力边界（审查版）
 
-> 审查日期：2026-08-08
+> 审查日期：2026-08-09
 >
 > 本文是 Keylo 当前唯一的主线设计文档，负责产品定位、能力取舍、当前代码基线和核心安全模型。后续开发任务、优先级、验收命令和触发条件独立维护在 [KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md](../plans/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md)。docs/archive/ 只保留历史上下文，不作为新的开发或部署依据。
 
@@ -71,7 +71,7 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 
 ## 3. 当前代码能力基线
 
-下表按 2026-08-08 的源码、迁移和测试核对，不把历史发布说明当作现状。
+下表按 2026-08-09 的源码、迁移和测试核对，不把历史发布说明当作现状。
 
 | 领域 | 当前代码能力 | 仍然存在的边界 |
 | --- | --- | --- |
@@ -80,7 +80,8 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 | MFA | TOTP enrollment、近期验证、恢复码、敏感管理操作的 step-up 和审计 | 没有 WebAuthn/Passkey；不把 TOTP 自动扩展成任意认证流编排 |
 | 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、邮箱变化记录、启停和会话撤销 | identity source 的 ldap 类型目前只是注册元数据，不包含 LDAP bind、同步、组映射或故障切换 |
 | 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`，服务 Principal 可参与 RBAC | 当前没有直接 `X-API-Key` 鉴权、独立 device Principal、多 key 生命周期或机器凭证的组织归属 |
-| 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | 当前尚未有组织、组、composite role、数据上下文条件或细粒度 delegated admin；组织作用域 RBAC 是下一条主线 |
+| 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | 组织领域数据已落库，但当前授权仍只读取 platform 角色；尚未有组织上下文、组织角色决策、资源组织过滤、组、composite role 或细粒度 delegated admin |
+| SaaS 组织基础 | `organizations`、`user_class`、成员关系和组织角色绑定已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织 | 尚未提供组织/成员管理 HTTP API；组织角色绑定尚未参与授权，客户数据表仍是 platform-scoped，因此不能把该基础层视为已完成的租户隔离 |
 | Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | JWKS 当前只包含一把活动公钥；没有新旧 key 并行的无感轮换 |
 | 运行和首启 | PostgreSQL SQLx migrations、Redis 生产就绪校验、healthz/readyz、固定基数 metrics、审计清理、密文配置、setup wizard | 尚未承诺多实例一致性、outbox/webhook、OpenTelemetry 或跨区域恢复 |
 | 管理体验 | API-first 的用户、客户端、服务、身份源、Principal、RBAC、资源和审计接口；setup wizard 只做首启诊断 | 没有 Admin Console、Account Console、主题系统或管理 CLI |
@@ -136,12 +137,14 @@ Spring、Node、Go、Rust 样例与授权决策契约见 [第三方系统与服�
 
 Organization 是 SaaS 租户边界，但不是新的认证协议或 Realm 层级。Keylo 先采用单部署、多组织、共享运行时的模型；所有组织拥有的数据和关系必须显式带 organization_id，平台级对象才允许为空。
 
+当前实现状态（2026-08-09）：组织、用户类别、成员关系和组织角色绑定已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。组织管理 API、Token 的 active organization context、组织角色授权决策、资源组织归属和跨组织拒绝仍未实现；在这些链路完成前，组织表只是一层安全基础，不能被当作隔离保证。
+
 用户至少分为两类：
 
 | User class | 面向对象 | 默认作用域和组织关系 | 关键限制 |
 | --- | --- | --- | --- |
 | internal_employee | Keylo/SaaS 运营、研发、客服和安全人员 | 可以没有组织而使用平台作用域，也可以加入 kind=internal 的内部组织 | 不因“内部”类别自动获得任何客户组织权限；访问客户数据必须有显式、最小化、可审计的支持/平台角色 |
-| external_customer | 客户管理员、成员和最终用户 | 必须有一个或多个 kind=customer 的 active membership，登录后使用一个明确的 active organization context | 只能获得组织作用域角色，不能绑定 platform/global 角色 |
+| external_customer | 客户管理员、成员和最终用户 | 只有在 kind=customer 的 active membership 存在时才能进入组织作用域；未邀请或 pending 状态不得获得 active organization context | 只能获得组织作用域角色，不能绑定 platform/global 角色 |
 
 User class 不是 RBAC 权限。它只参与注册、身份源映射、组织成员资格和角色可分配性校验；最终允许或拒绝仍由 Principal、membership、role binding、resource organization_id 和 active organization context 共同决定。未来若增加 partner、auditor 等类别，必须先扩展分类与迁移契约，不在 Token 中用未定义字符串绕过校验。
 

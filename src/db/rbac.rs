@@ -91,8 +91,50 @@ pub async fn create_role_with_options(
     assignable_to: &str,
     system: bool,
 ) -> Result<Role> {
+    create_role_with_scope(
+        pool,
+        name,
+        description,
+        assignable_to,
+        system,
+        ROLE_SCOPE_PLATFORM,
+    )
+    .await
+}
+
+/// Creates an organization-only role. Its scope is immutable through the
+/// existing platform role update API so a tenant role cannot become global.
+pub async fn create_organization_role(
+    pool: &PgPool,
+    name: &str,
+    description: Option<&str>,
+    assignable_to: &str,
+) -> Result<Role> {
+    create_role_with_scope(
+        pool,
+        name,
+        description,
+        assignable_to,
+        false,
+        ROLE_SCOPE_ORGANIZATION,
+    )
+    .await
+}
+
+/// Inserts a role with an immutable scope chosen by the caller-facing wrapper.
+async fn create_role_with_scope(
+    pool: &PgPool,
+    name: &str,
+    description: Option<&str>,
+    assignable_to: &str,
+    system: bool,
+    scope: &str,
+) -> Result<Role> {
     if !valid_role_assignable_to(assignable_to) {
         anyhow::bail!("invalid_assignable_to");
+    }
+    if !matches!(scope, ROLE_SCOPE_PLATFORM | ROLE_SCOPE_ORGANIZATION) {
+        anyhow::bail!("invalid_role_scope");
     }
 
     let id = Uuid::new_v4().to_string();
@@ -100,8 +142,8 @@ pub async fn create_role_with_options(
 
     let role = sqlx::query_as::<_, Role>(
         r#"
-        INSERT INTO roles (id, name, description, assignable_to, system, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO roles (id, name, description, assignable_to, system, scope, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id, name, description, assignable_to, system, version, created_at, updated_at
         "#,
     )
@@ -110,6 +152,7 @@ pub async fn create_role_with_options(
     .bind(description)
     .bind(assignable_to)
     .bind(system)
+    .bind(scope)
     .bind(now)
     .bind(now)
     .fetch_one(pool)

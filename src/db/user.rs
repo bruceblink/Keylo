@@ -7,6 +7,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::models::User;
+use crate::models::{is_valid_user_class, USER_CLASS_EXTERNAL_CUSTOMER};
 
 const PASSWORD_COST: u32 = DEFAULT_COST;
 
@@ -39,7 +40,7 @@ fn external_subject_hash(external_user_id: &str) -> String {
 /// 获取用户
 pub async fn get_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users WHERE id = $1",
+        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -51,7 +52,7 @@ pub async fn get_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<User>
 /// 根据用户名获取用户
 pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users WHERE username = $1",
+        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users WHERE username = $1",
     )
     .bind(username)
     .fetch_optional(pool)
@@ -63,7 +64,7 @@ pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Optio
 /// 根据邮箱获取用户
 pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users WHERE email = $1",
+        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users WHERE email = $1",
     )
     .bind(email)
     .fetch_optional(pool)
@@ -75,7 +76,7 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User
 /// 列出用户，支持分页
 pub async fn list_users(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<User>> {
     let users = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
     )
     .bind(limit)
     .bind(offset)
@@ -116,15 +117,16 @@ pub async fn create_user_with_email_verified(
 
     let user = sqlx::query_as::<_, User>(
         r#"
-        INSERT INTO users (id, username, email, email_verified, password_hash, active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7)
-        RETURNING id, username, email, email_verified, password_hash, active, created_at, updated_at
+        INSERT INTO users (id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8)
+        RETURNING id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(id)
     .bind(username)
     .bind(email)
     .bind(email_verified)
+    .bind(USER_CLASS_EXTERNAL_CUSTOMER)
     .bind(password_hash)
     .bind(now)
     .bind(now)
@@ -132,6 +134,53 @@ pub async fn create_user_with_email_verified(
     .await?;
 
     crate::db::ensure_user_principal(pool, &user.id).await?;
+
+    Ok(user)
+}
+
+/// Changes a human account classification without treating the class itself as a role.
+pub async fn set_user_class(
+    pool: &PgPool,
+    user_id: &str,
+    user_class: &str,
+    actor: Option<&str>,
+) -> Result<Option<User>> {
+    let user_class = user_class.trim();
+    if !is_valid_user_class(user_class) {
+        anyhow::bail!("invalid_user_class");
+    }
+
+    let mut transaction = pool.begin().await?;
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        UPDATE users
+        SET user_class = $2,
+            updated_at = $3
+        WHERE id = $1
+        RETURNING id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at
+        "#,
+    )
+    .bind(user_id)
+    .bind(user_class)
+    .bind(chrono::Local::now().naive_utc())
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    if let Some(user) = &user {
+        sqlx::query(
+            "INSERT INTO audit_logs (id, event_type, actor, detail) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind("user.class_changed")
+        .bind(actor)
+        .bind(format!(
+            "user_id={}; user_class={}",
+            user.id, user.user_class
+        ))
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
 
     Ok(user)
 }
@@ -167,7 +216,7 @@ pub async fn update_user(
             active = COALESCE($5, active),
             updated_at = $6
         WHERE id = $1
-        RETURNING id, username, email, email_verified, password_hash, active, created_at, updated_at
+        RETURNING id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(user_id)
@@ -439,7 +488,7 @@ pub async fn change_user_password(
     let mut transaction = pool.begin().await?;
     // Lock the account so concurrent password changes cannot both validate the same old password.
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, password_hash, active, created_at, updated_at FROM users WHERE id = $1 FOR UPDATE",
+        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -731,14 +780,15 @@ pub async fn provision_user_with_roles(
 
     let user = sqlx::query_as::<_, User>(
         r#"
-        INSERT INTO users (id, username, email, email_verified, password_hash, active, created_at, updated_at)
-        VALUES ($1, $2, $3, FALSE, $4, TRUE, $5, $6)
-        RETURNING id, username, email, email_verified, password_hash, active, created_at, updated_at
+        INSERT INTO users (id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at)
+        VALUES ($1, $2, $3, FALSE, $4, $5, TRUE, $6, $7)
+        RETURNING id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(&user_id)
     .bind(username)
     .bind(email)
+    .bind(USER_CLASS_EXTERNAL_CUSTOMER)
     .bind(password_hash)
     .bind(now)
     .bind(now)

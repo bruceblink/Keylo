@@ -9,6 +9,7 @@ pub struct User {
     pub username: String,
     pub email: String,
     pub email_verified: bool,
+    pub user_class: String,
     #[serde(skip_serializing)]
     pub password_hash: Option<String>,
     pub active: bool,
