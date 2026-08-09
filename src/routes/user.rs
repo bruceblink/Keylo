@@ -603,6 +603,7 @@ mod tests {
             principal_id: Some("principal-1".to_string()),
             principal_type: principal_type.map(str::to_string),
             organization_id: None,
+            customer_support_grant_id: None,
             iss: "keylo".to_string(),
             aud: "admin-backend".to_string(),
             scope: vec!["read".to_string(), "write".to_string()],

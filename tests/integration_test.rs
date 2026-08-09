@@ -1019,7 +1019,12 @@ mod tests {
         assert_eq!(body["supported_signing_algorithms"], json!(["RS256"]));
         assert_eq!(
             body["supported_token_types"],
-            json!(["access", "refresh", "service_access"])
+            json!([
+                "access",
+                "refresh",
+                "service_access",
+                "customer_support_access"
+            ])
         );
         assert_eq!(
             body["supported_audiences"],
@@ -3706,6 +3711,7 @@ mod tests {
                 principal_id: Some(principal.id),
                 principal_type: Some("user".to_string()),
                 organization_id: None,
+                customer_support_grant_id: None,
                 iss: test_config().jwt_issuer,
                 aud: "admin-backend".to_string(),
                 scope: vec!["read".to_string(), "write".to_string(), "admin".to_string()],

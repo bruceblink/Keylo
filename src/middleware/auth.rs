@@ -52,6 +52,36 @@ fn ensure_access_claims(
     Ok(())
 }
 
+/// Validates the fixed claim shape used only by customer-support read routes.
+///
+/// A support token never inherits ordinary `access` authority. Its grant id and
+/// target organization are mandatory because route handlers re-check both
+/// values against the database before exposing any customer data.
+fn ensure_customer_support_access_claims(claims: &Claims) -> Result<(), AuthError> {
+    if claims.token_type != "customer_support_access" {
+        return Err(AuthError::TokenTypeInvalid);
+    }
+    if claims.principal_type.as_deref() != Some("user")
+        || claims.uid.as_deref().is_none_or(str::is_empty)
+        || claims.principal_id.as_deref().is_none_or(str::is_empty)
+        || claims.organization_id.as_deref().is_none_or(str::is_empty)
+        || claims
+            .customer_support_grant_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
+        return Err(AuthError::InvalidToken);
+    }
+    if !claims.has_role("customer_support") {
+        return Err(AuthError::InsufficientRole);
+    }
+    if !claims.has_audience("admin-backend") {
+        return Err(AuthError::InvalidAudience);
+    }
+
+    Ok(())
+}
+
 fn ensure_service_claims(
     claims: &ServiceClaims,
     required_scope: Option<&str>,
@@ -185,6 +215,55 @@ pub async fn auth_middleware(
     request.extensions_mut().insert(claims);
 
     // 继续处理请求
+    Ok(next.run(request).await)
+}
+
+/// Authenticates a dedicated support token without widening normal access-token routes.
+///
+/// This middleware is mounted only around `/v1/customer-support/organizations/*`.
+/// It verifies the signed token and current Principal state; each handler still
+/// performs the grant, organization, and operation-specific database check.
+pub async fn customer_support_auth_middleware(
+    State(state): State<AppState>,
+    auth: Option<TypedHeader<Authorization<Bearer>>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let token = match bearer_token(auth) {
+        Ok(token) => token,
+        Err(err) => return Ok(err.into_response()),
+    };
+    let claims = match state.jwt_keys.decode_token(&token) {
+        Ok(claims) => claims,
+        Err(err) => return Ok(err.into_response()),
+    };
+    if let Err(err) = ensure_customer_support_access_claims(&claims) {
+        return Ok(err.into_response());
+    }
+
+    let db = match state.db.as_deref() {
+        Some(db) => db,
+        None => {
+            return Ok(AuthError::DatabaseError(
+                "Database required for customer-support authentication".to_string(),
+            )
+            .into_response())
+        }
+    };
+    match crate::db::is_token_blacklisted(db, &token).await {
+        Ok(true) => return Ok(AuthError::InvalidToken.into_response()),
+        Ok(false) => {}
+        Err(_) => {
+            return Ok(
+                AuthError::DatabaseError("Token validation failed".to_string()).into_response(),
+            )
+        }
+    }
+    if let Err(err) = ensure_claim_principal_active(db, &claims).await {
+        return Ok(err.into_response());
+    }
+
+    request.extensions_mut().insert(claims);
     Ok(next.run(request).await)
 }
 

@@ -8,6 +8,7 @@ use sqlx::Row;
 use std::time::Duration;
 use uuid::Uuid;
 
+pub mod customer_support;
 pub mod identity;
 pub mod mfa;
 pub mod oauth;
@@ -22,6 +23,7 @@ pub mod service;
 pub mod settings;
 pub mod user;
 
+pub use customer_support::*;
 pub use identity::*;
 pub use mfa::*;
 pub use oauth::*;

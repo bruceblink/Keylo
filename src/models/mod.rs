@@ -1,4 +1,5 @@
 mod auth;
+mod customer_support;
 mod identity;
 mod jwt;
 mod mfa;
@@ -13,6 +14,7 @@ mod setup;
 mod user;
 
 pub use auth::*;
+pub use customer_support::*;
 pub use identity::*;
 pub use jwt::*;
 pub use mfa::*;

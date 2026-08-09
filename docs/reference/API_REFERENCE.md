@@ -629,7 +629,42 @@ access token 带有 `organization_id` 时，这两个端点会实时确认该 Pr
 
 `organization_role_bindings` 只在持有相同 signed organization context、且组织与 membership 均为 active 时参与组织作用域的授权决策；它们不会转化为通用 platform 权限。跨组织、停用组织、非 active membership 和平台角色绑定均失败关闭。成功写操作会分别写入 `organization.membership.invited`、`organization.membership.updated`、`organization.membership.joined`、`organization.role_binding.assigned` 或 `organization.role_binding.revoked` 审计事件。
 
-### 7.7 Refresh Session 与会话策略
+### 7.7 受限 Customer Support 访问
+
+Customer Support 不是组织成员关系，也不使用 `organization_role_bindings`。它只允许带有固定 platform `customer_support` 系统角色的 `internal_employee`，在平台管理员明确授予一个活跃 customer 组织、操作集合和人工原因后，临时读取该组织的排障数据。该角色不能拥有通用 RBAC permission，不能作为跨组织通配符。
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/v1/admin/customer-support-grants?organization_id=&support_principal_id=&granted_by_principal_id=&include_revoked=&limit=&offset=` | platform admin | 精确筛选临时支持授权 |
+| GET | `/v1/admin/customer-support-audit-logs?organization_id=&actor_principal_id=&grant_id=&operation=&outcome=&limit=&offset=` | platform admin | 精确筛选不可变支持审计轨迹 |
+| POST | `/v1/admin/customer-support-grants` | internal human platform admin | 创建目标组织、操作与到期时间固定的授权 |
+| DELETE | `/v1/admin/customer-support-grants/{grant_id}` | internal human platform admin | 请求体 `{ "reason": "..." }`；重复撤销幂等 |
+| POST | `/v1/customer-support/context` | 普通、platform-scoped support user access token | 请求体 `{ "grant_id": "..." }`，换取不超过 5 分钟且不超过授权到期时间的 `customer_support_access` token |
+| GET | `/v1/customer-support/organizations/{organization_id}` | `customer_support_access` | 需要 `organization.read` |
+| GET | `/v1/customer-support/organizations/{organization_id}/memberships` | `customer_support_access` | 需要 `membership.read` |
+| GET | `/v1/customer-support/organizations/{organization_id}/resources` | `customer_support_access` | 需要 `resource.read` |
+| GET | `/v1/customer-support/organizations/{organization_id}/authorization-audit-logs` | `customer_support_access` | 需要 `authorization_audit.read` |
+| GET | `/v1/customer-support/organizations/{organization_id}/refresh-sessions` | `customer_support_access` | 需要 `refresh_session.read` |
+
+创建授权请求：
+
+```json
+{
+  "support_principal_id": "user-support-1",
+  "organization_id": "org-acme",
+  "reason": "Investigate the reported invoice synchronization failure",
+  "operations": ["organization.read", "membership.read", "resource.read"],
+  "expires_at": "2026-08-10T08:00:00Z"
+}
+```
+
+`reason` 必填且最多 1000 个字符；`operations` 必须非空、去重，并且只能从上述五个 read operation 中选择。`expires_at` 必须是未来 24 小时内的 RFC3339 时间。创建和撤销由 internal human platform admin 执行，并沿用已启用 MFA 的近期验证规则；machine client、external_customer、停用用户或不具备 live platform admin 权限的调用者都会被拒绝。
+
+context 换取会实时确认授权未撤销、未过期，目标仍是 active customer 组织，support Principal 与用户仍 active、属于 `internal_employee` 并仍持有固定角色。支持 token 的 `organization_id`、`customer_support_grant_id` 与 operation scope 都由服务器签发；它不创建 refresh session，不能调用普通 `/v1/auth/*`、平台管理、授权或组织成员管理接口。每次支持读取和 introspection 都会重新检查上述 live 状态，因此授权撤销、角色移除、人员停用或组织停用会立即失效。
+
+授权创建、撤销、context 换取、每次允许读取、拒绝和后端读取失败都会写入 `customer_support_audit_logs`。日志包含 grant、actor Principal、目标组织、operation、授权原因快照、target、allow/deny 结果和稳定 denial reason；审计写入失败时相关支持操作失败关闭。
+
+### 7.8 Refresh Session 与会话策略
 
 Keylo 2.0 使用 refresh session 作为稳定会话索引：
 
@@ -904,7 +939,7 @@ Access token 关键字段：
 - `principal_type`：Principal 类型，当前为 `user`、`service` 或 `client`。
 - `iss`：签发方（Issuer）。用于校验 token 来源是否可信，需与服务端配置的发行者一致。
 - `aud`：受众（Audience）。标识 token 目标服务（如 `admin-backend`）；后端应校验是否匹配当前资源服务。
-- `token_type`：令牌类型。当前常见为 `access`（访问令牌）或 `refresh`（刷新令牌）；受保护接口只接受 `access`。
+- `token_type`：令牌类型。当前常见为 `access`（访问令牌）、`refresh`（刷新令牌）、`service_access` 或受限的 `customer_support_access`；每个受保护接口只接受其声明的类型。
 - `scope`（数组）：权限点集合。用于接口级授权判断，建议采用能力点命名（如 `ssc.camera.write`）。
 - `role`（数组，兼容历史字符串）：角色集合。用于粗粒度角色判断（如 `admin`、`user`）；当前输出为数组，兼容历史单字符串。
 - `exp`：过期时间（Unix 时间戳，秒）。当前时间超过该值后 token 无效。
@@ -916,6 +951,8 @@ Access token 关键字段：
 第三方服务应只把以下字段作为稳定契约消费：`iss`、`sub`、`aud`、`exp`、`iat`、`jti`、`scope`、`role`、`token_type`、`uid`、`principal_id`、`principal_type`。
 
 Keylo 后续可能在 token 中增加更多字段。第三方服务应忽略未知 claims，避免将未文档化字段作为授权依据。
+
+`customer_support_access` 是 Keylo 内置的受限支持 token，不是第三方通用 access token。它额外包含 `organization_id` 和 `customer_support_grant_id`；只有 Keylo 的 `/v1/customer-support/organizations/*` 路由可以将这些字段用于授权，资源服务不得仅凭这两个字段开放客户数据。
 
 ### 11.2 Audience 配置
 

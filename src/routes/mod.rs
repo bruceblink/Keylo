@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod authorization;
+pub mod customer_support;
 pub mod identity;
 pub mod mfa;
 pub mod oauth;

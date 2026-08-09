@@ -250,10 +250,22 @@ fn service_protected_routes(app_state: &AppState) -> Router<AppState> {
         ))
 }
 
+/// Mounts the support-only read surface behind its own token middleware.
+///
+/// These routes intentionally sit outside `protected_routes`: generic access
+/// middleware accepts only normal access tokens, while a support token must
+/// never become usable by ordinary admin or authorization endpoints.
+fn customer_support_protected_routes(app_state: &AppState) -> Router<AppState> {
+    routes::customer_support::customer_support_access_routes().layer(
+        middleware::from_fn_with_state(app_state.clone(), auth::customer_support_auth_middleware),
+    )
+}
+
 fn protected_routes(app_state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/protected", get(protected))
         .merge(routes::auth::protected_router())
+        .merge(routes::customer_support::customer_support_context_routes())
         .merge(
             routes::user::self_user_routes()
                 .route_layer(middleware::from_fn(auth::user_authorization_middleware)),
@@ -282,6 +294,17 @@ fn protected_routes(app_state: &AppState) -> Router<AppState> {
         ))
         .merge(
             routes::organization::organization_admin_routes()
+                .route_layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    auth::admin_authorization_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    auth::platform_admin_authorization_middleware,
+                )),
+        )
+        .merge(
+            routes::customer_support::customer_support_admin_routes()
                 .route_layer(middleware::from_fn_with_state(
                     app_state.clone(),
                     auth::admin_authorization_middleware,
@@ -332,6 +355,7 @@ fn database_router(app_state: AppState, cors_allowed_origins: Vec<String>) -> Ro
         .merge(base_public_routes(true))
         .merge(routes::setup::setup_routes())
         .merge(service_protected_routes(&app_state))
+        .merge(customer_support_protected_routes(&app_state))
         .merge(protected_routes(&app_state))
         .layer(cors_layer(cors_allowed_origins))
         .layer(middleware::from_fn_with_state(

@@ -159,6 +159,7 @@ async fn access_claims_for_principal(
                 principal_id: Some(principal.id.clone()),
                 principal_type: Some("user".to_string()),
                 organization_id: None,
+                customer_support_grant_id: None,
                 iss: state.config.jwt_issuer.clone(),
                 aud: "admin-backend".to_string(),
                 scope: access_scope("user", is_admin_user),
@@ -184,6 +185,7 @@ async fn access_claims_for_principal(
                 principal_id: Some(principal.id.clone()),
                 principal_type: Some("client".to_string()),
                 organization_id: None,
+                customer_support_grant_id: None,
                 iss: state.config.jwt_issuer.clone(),
                 aud: "admin-backend".to_string(),
                 scope: access_scope("client", true),
@@ -265,6 +267,7 @@ pub async fn issue_external_user_session(
         principal_id: Some(principal.id.clone()),
         principal_type: Some("user".to_string()),
         organization_id: None,
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope("user", is_admin_user),
@@ -280,6 +283,7 @@ pub async fn issue_external_user_session(
         principal_id: Some(principal.id.clone()),
         principal_type: Some("user".to_string()),
         organization_id: None,
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -559,6 +563,7 @@ pub async fn auth_token(
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("user".to_string()),
         organization_id: organization_id.clone(),
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, is_admin_user),
@@ -577,6 +582,7 @@ pub async fn auth_token(
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("user".to_string()),
         organization_id: organization_id.clone(),
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -721,6 +727,7 @@ pub async fn admin_token(
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("client".to_string()),
         organization_id: None,
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, true),
@@ -737,6 +744,7 @@ pub async fn admin_token(
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("client".to_string()),
         organization_id: None,
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -1209,6 +1217,41 @@ pub async fn auth_select_organization_context(
 
 /// Resolve the current database state for a token so introspection does not advertise disabled identities as active.
 async fn introspected_claims_are_active(db: &sqlx::PgPool, claims: &Claims) -> bool {
+    // Support tokens deliberately have no organization membership. Their live
+    // grant is the only tenant boundary, so applying the normal membership
+    // check below would incorrectly report every valid support token inactive.
+    if claims.token_type == "customer_support_access" {
+        let (Some(grant_id), Some(principal_id), Some(organization_id), Some(user_id)) = (
+            claims.customer_support_grant_id.as_deref(),
+            claims.principal_id.as_deref(),
+            claims.organization_id.as_deref(),
+            claims.uid.as_deref(),
+        ) else {
+            return false;
+        };
+        if claims.principal_type.as_deref() != Some("user")
+            || !claims.has_role(crate::models::CUSTOMER_SUPPORT_ROLE_NAME)
+            || !claims.has_audience("admin-backend")
+        {
+            return false;
+        }
+        let Ok(Some(principal)) = crate::db::get_principal_by_id(db, principal_id).await else {
+            return false;
+        };
+        if !principal.active || principal.principal_type != "user" || principal.ref_id != user_id {
+            return false;
+        }
+        return matches!(
+            crate::db::get_live_customer_support_access_context(
+                db,
+                grant_id,
+                principal_id,
+                organization_id,
+            )
+            .await,
+            Ok(decision) if decision.allowed
+        );
+    }
     if let Some(organization_id) = claims.organization_id.as_deref() {
         if claims.principal_type.as_deref() != Some("user") {
             return false;
@@ -1323,6 +1366,7 @@ pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloCon
             "access".to_string(),
             "refresh".to_string(),
             "service_access".to_string(),
+            "customer_support_access".to_string(),
         ],
         supported_claims: vec![
             "iss".to_string(),
@@ -1338,6 +1382,7 @@ pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloCon
             "principal_id".to_string(),
             "principal_type".to_string(),
             "organization_id".to_string(),
+            "customer_support_grant_id".to_string(),
         ],
         supported_signing_algorithms: vec!["RS256".to_string()],
         supported_audiences: state.config.jwt_audiences.clone(),
@@ -1394,6 +1439,7 @@ pub async fn auth_refresh(
         principal_id: refresh_claims.principal_id.clone(),
         principal_type: refresh_claims.principal_type.clone(),
         organization_id: refresh_claims.organization_id.clone(),
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: refresh_claims.aud.clone(),
         scope: vec!["refresh".into()],
@@ -1489,6 +1535,7 @@ pub async fn auth_refresh(
         principal_id: Some(principal.id.clone()),
         principal_type: Some("client".to_string()),
         organization_id: None,
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],

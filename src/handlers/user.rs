@@ -663,6 +663,7 @@ pub async fn jit_register_user(
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("user".to_string()),
         organization_id: None,
+        customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: if is_admin {

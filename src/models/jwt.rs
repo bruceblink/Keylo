@@ -40,6 +40,10 @@ pub struct Claims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organization_id: Option<String>,
 
+    /// One-time customer-support grant that bounds a dedicated support token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_support_grant_id: Option<String>,
+
     /// Issuer：签发方
     pub iss: String,
 
@@ -311,6 +315,7 @@ mod tests {
             principal_id: Some("user-user-1".to_string()),
             principal_type: Some("user".to_string()),
             organization_id: None,
+            customer_support_grant_id: None,
             iss: state.config.jwt_issuer.clone(),
             aud: "admin-backend".to_string(),
             scope: vec!["read".to_string(), "write".to_string()],

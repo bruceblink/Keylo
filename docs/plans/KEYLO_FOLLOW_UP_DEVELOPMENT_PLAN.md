@@ -107,14 +107,14 @@
 - [x] 资源和权限检查同时解析 authenticated principal、active organization context、membership status、组织角色绑定和资源 organization_id。
 - [x] check、batch-check 与 resource-tree 对 organization_id 不一致、组织不存在或停用、成员非 active、资源属于其他组织时默认拒绝，并保持普通 deny/forbidden 边界，避免通过错误差异泄露租户存在性。
 - [x] external_customer 只能绑定 organization scope；internal_employee 的平台角色和内部组织角色分离，类别本身不授予客户组织访问。
-- [ ] customer-support 访问必须限定目标组织、操作和审计原因。
+- [x] customer-support 访问必须限定目标组织、操作和审计原因。
 - [x] 组织服务账号和客户端明确标记 platform-scoped 或 organization-scoped；组织级服务 Token 只能访问所属组织。service client 的 scope 不可变，组织 client 创建会原子建立 service Principal 与 active membership；Token 签发、check、batch-check、effective-permissions、resource-tree 和服务内省路径都会实时校验 client、Principal、组织与 membership，组织级 client 不可调用内省端点。
 - [ ] external_customer 组织管理员创建的 service/device Principal 与 API key 只能属于本组织；internal_employee 的平台级机器身份不得因内部类别自动访问客户组织。
 - [x] JWT 只携带当前组织上下文和稳定主体信息，不携带所有组织的完整权限集合；切换组织要重新签发上下文。
 
 验收：跨组织 check、batch-check、resource-tree、client 管理、identity source 管理和 refresh 都有拒绝测试；external_customer 绑定 platform/global role 会失败；internal_employee 的无授权客户访问会失败；平台管理员的跨组织操作必须显式调用、最小授权和审计。
 
-当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销、组织停用、organization-scoped refresh session 和 organization-scoped service Token；OIDC client、identity source、device 与 API key 仍属于后续未完成项。
+当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销、组织停用、organization-scoped refresh session、organization-scoped service Token，以及带目标组织、operation、原因和实时撤销的 customer-support 访问；OIDC client、identity source、device 与 API key 仍属于后续未完成项。
 
 ### 3.4 非人类主体与 API_KEY 认证
 
