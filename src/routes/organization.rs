@@ -5,14 +5,18 @@ use axum::{
     Router,
 };
 use serde_json::json;
+use std::collections::BTreeSet;
 
 use crate::{
+    db::service as svc_db,
     errors::{is_unique_violation, AuthError},
     models::{
         Claims, CreateOrganizationRequest, InviteOrganizationMemberRequest, OrganizationListQuery,
-        OrganizationRoleBindingRequest, Principal, UpdateOrganizationMembershipRequest,
-        UpdateOrganizationStatusRequest, UpsertOrganizationMembershipRequest,
-        USER_CLASS_EXTERNAL_CUSTOMER, USER_CLASS_INTERNAL_EMPLOYEE,
+        OrganizationRoleBindingRequest, Principal, RegisterOrganizationServiceRequest,
+        RotateServiceSecretRequest, UpdateOrganizationMembershipRequest,
+        UpdateOrganizationServiceRequest, UpdateOrganizationStatusRequest,
+        UpsertOrganizationMembershipRequest, USER_CLASS_EXTERNAL_CUSTOMER,
+        USER_CLASS_INTERNAL_EMPLOYEE,
     },
     state::AppState,
 };
@@ -69,6 +73,18 @@ pub fn organization_member_routes() -> Router<AppState> {
         .route(
             "/v1/organizations/{organization_id}/memberships/{principal_id}/roles/{role_id}",
             delete(revoke_delegated_role_handler),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/services",
+            get(list_delegated_services_handler).post(register_delegated_service_handler),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/services/{service_id}",
+            get(get_delegated_service_handler).put(update_delegated_service_handler),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/services/{service_id}/rotate-secret",
+            post(rotate_delegated_service_secret_handler),
         )
 }
 
@@ -589,4 +605,285 @@ async fn revoke_delegated_role_handler(
     )
     .await;
     Ok(Json(json!({"success": true, "data": {"revoked": revoked}})))
+}
+
+/// Lists only the service clients whose persisted scope is the caller's organization.
+async fn list_delegated_services_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    require_delegated_manager(&state, &claims, &organization_id).await?;
+    let db = require_organization_db(&state)?;
+    let services = svc_db::list_service_clients_in_organization(db, &organization_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+
+    Ok(Json(json!({"success": true, "data": services})))
+}
+
+/// Creates an organization-scoped service without accepting a caller-selected tenant id.
+async fn register_delegated_service_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    Json(payload): Json<RegisterOrganizationServiceRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let actor = require_delegated_manager(&state, &claims, &organization_id).await?;
+    require_delegated_mfa(&state, &claims).await?;
+    if payload.service_id.trim().is_empty()
+        || payload.service_secret.trim().is_empty()
+        || payload.name.trim().is_empty()
+    {
+        return Err(AuthError::MissingCredentials);
+    }
+    if payload
+        .token_ttl_seconds
+        .is_some_and(|ttl| ttl <= 0 || ttl > state.config.refresh_token_expiry_seconds)
+    {
+        return Err(AuthError::InvalidRequest(format!(
+            "token_ttl_seconds must be between 1 and {}",
+            state.config.refresh_token_expiry_seconds
+        )));
+    }
+    let allowed_scopes = normalize_service_values("allowed_scopes", payload.allowed_scopes, false)?;
+    let allowed_audiences =
+        normalize_service_values("allowed_audiences", payload.allowed_audiences, true)?;
+    let integration_type = defaulted_service_value(payload.integration_type.as_deref(), "internal");
+    let owner = payload.owner.as_deref().and_then(trimmed_service_value);
+    let contact = payload.contact.as_deref().and_then(trimmed_service_value);
+    let db = require_organization_db(&state)?;
+
+    svc_db::create_service_client_as_organization_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        svc_db::CreateServiceClientParams {
+            service_id: payload.service_id.trim(),
+            service_secret: payload.service_secret.trim(),
+            name: payload.name.trim(),
+            description: payload.description.as_deref(),
+            organization_id: Some(&organization_id),
+            allowed_scopes: &allowed_scopes,
+            allowed_audiences: &allowed_audiences,
+            integration_type: &integration_type,
+            // Organization-scoped services cannot use introspection endpoints.
+            introspection_allowed: false,
+            token_ttl_seconds: payload.token_ttl_seconds,
+            owner: owner.as_deref(),
+            contact: contact.as_deref(),
+        },
+    )
+    .await
+    .map_err(|error| {
+        if is_unique_violation(error.as_ref()) {
+            AuthError::Conflict("Service client already exists".to_string())
+        } else if error
+            .to_string()
+            .contains("organization_service_client_context_inactive")
+        {
+            AuthError::Forbidden
+        } else {
+            map_delegated_error(error)
+        }
+    })?;
+
+    let service =
+        svc_db::get_service_client_in_organization(db, &organization_id, payload.service_id.trim())
+            .await
+            .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+            .ok_or(AuthError::Forbidden)?;
+    audit_organization_event(
+        db,
+        "organization.service.created",
+        Some(&claims.sub),
+        format!(
+            "organization_id={}, service_id={}, actor_principal_id={}",
+            organization_id, service.service_id, actor.id
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({"success": true, "data": service})))
+}
+
+/// Reads a service only after matching both the signed tenant context and stored scope.
+async fn get_delegated_service_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, service_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    require_delegated_manager(&state, &claims, &organization_id).await?;
+    let db = require_organization_db(&state)?;
+    let service = svc_db::get_service_client_in_organization(db, &organization_id, &service_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .ok_or(AuthError::NotFound)?;
+
+    Ok(Json(json!({"success": true, "data": service})))
+}
+
+/// Updates mutable tenant-service metadata while preserving its fixed scope.
+async fn update_delegated_service_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, service_id)): Path<(String, String)>,
+    Json(payload): Json<UpdateOrganizationServiceRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let actor = require_delegated_manager(&state, &claims, &organization_id).await?;
+    require_delegated_mfa(&state, &claims).await?;
+    if payload
+        .token_ttl_seconds
+        .is_some_and(|ttl| ttl <= 0 || ttl > state.config.refresh_token_expiry_seconds)
+    {
+        return Err(AuthError::InvalidRequest(format!(
+            "token_ttl_seconds must be between 1 and {}",
+            state.config.refresh_token_expiry_seconds
+        )));
+    }
+    let allowed_scopes = payload
+        .allowed_scopes
+        .map(|values| normalize_service_values("allowed_scopes", values, false))
+        .transpose()?;
+    let allowed_audiences = payload
+        .allowed_audiences
+        .map(|values| normalize_service_values("allowed_audiences", values, true))
+        .transpose()?;
+    let integration_type = payload
+        .integration_type
+        .as_deref()
+        .and_then(trimmed_service_value);
+    let owner = payload.owner.as_deref().and_then(trimmed_service_value);
+    let contact = payload.contact.as_deref().and_then(trimmed_service_value);
+    let db = require_organization_db(&state)?;
+    let updated = svc_db::update_service_client_as_organization_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        svc_db::UpdateServiceClientParams {
+            service_id: &service_id,
+            name: payload.name.as_deref(),
+            description: payload.description.as_deref(),
+            allowed_scopes: allowed_scopes.as_deref(),
+            allowed_audiences: allowed_audiences.as_deref(),
+            active: payload.active,
+            integration_type: integration_type.as_deref(),
+            // The delegated request type cannot enable organization introspection.
+            introspection_allowed: Some(false),
+            token_ttl_seconds: payload.token_ttl_seconds,
+            owner: owner.as_deref(),
+            contact: contact.as_deref(),
+        },
+    )
+    .await
+    .map_err(map_delegated_error)?;
+    if !updated {
+        return Err(AuthError::NotFound);
+    }
+    audit_organization_event(
+        db,
+        "organization.service.updated",
+        Some(&claims.sub),
+        format!(
+            "organization_id={}, service_id={}, actor_principal_id={}",
+            organization_id, service_id, actor.id
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({"success": true, "data": {"updated": true}})))
+}
+
+/// Rotates a tenant service secret after live manager and MFA checks.
+async fn rotate_delegated_service_secret_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, service_id)): Path<(String, String)>,
+    Json(payload): Json<RotateServiceSecretRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let actor = require_delegated_manager(&state, &claims, &organization_id).await?;
+    require_delegated_mfa(&state, &claims).await?;
+    let provided_secret = payload
+        .new_secret
+        .as_deref()
+        .and_then(trimmed_service_value);
+    let secret_generated = provided_secret.is_none();
+    let new_secret = provided_secret.unwrap_or_else(svc_db::generate_service_secret);
+    let db = require_organization_db(&state)?;
+    let rotated = svc_db::rotate_service_secret_as_organization_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        &service_id,
+        &new_secret,
+    )
+    .await
+    .map_err(map_delegated_error)?;
+    if !rotated {
+        return Err(AuthError::NotFound);
+    }
+    audit_organization_event(
+        db,
+        "organization.service.secret_rotated",
+        Some(&claims.sub),
+        format!(
+            "organization_id={}, service_id={}, actor_principal_id={}, generated={secret_generated}",
+            organization_id, service_id, actor.id
+        ),
+    )
+    .await;
+
+    let mut data = json!({
+        "service_id": service_id,
+        "secret_generated": secret_generated,
+    });
+    if secret_generated {
+        data["new_secret"] = json!(new_secret);
+    }
+    Ok(Json(json!({"success": true, "data": data})))
+}
+
+/// Normalizes service scope and audience fields before they reach persistence.
+fn normalize_service_values(
+    field_name: &str,
+    values: Vec<String>,
+    allow_wildcard: bool,
+) -> Result<Vec<String>, AuthError> {
+    let mut normalized = BTreeSet::new();
+    for value in values {
+        let item = value.trim();
+        if item.is_empty() {
+            return Err(AuthError::InvalidRequest(format!(
+                "{field_name} must not contain empty values"
+            )));
+        }
+        if item.split_whitespace().count() != 1 {
+            return Err(AuthError::InvalidRequest(format!(
+                "{field_name} values must not contain whitespace"
+            )));
+        }
+        if item == "*" && !allow_wildcard {
+            return Err(AuthError::InvalidRequest(format!(
+                "{field_name} does not allow wildcard values"
+            )));
+        }
+        normalized.insert(item.to_string());
+    }
+    if normalized.is_empty() {
+        return Err(AuthError::InvalidRequest(format!(
+            "{field_name} must contain at least one value"
+        )));
+    }
+    Ok(normalized.into_iter().collect())
+}
+
+fn trimmed_service_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn defaulted_service_value(value: Option<&str>, default: &str) -> String {
+    value
+        .and_then(trimmed_service_value)
+        .unwrap_or_else(|| default.to_string())
 }

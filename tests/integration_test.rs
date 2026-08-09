@@ -2831,6 +2831,244 @@ mod tests {
         assert_eq!(owner_principal.principal_type, "user");
     }
 
+    /// Ensures customer organization owners can manage only their own service clients.
+    #[tokio::test]
+    async fn test_external_customer_owner_manages_only_organization_services() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization_a = db::create_organization(
+            &pool,
+            &format!("delegated-service-a-{suffix}"),
+            "Delegated service organization A",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create delegated service organization A");
+        let organization_b = db::create_organization(
+            &pool,
+            &format!("delegated-service-b-{suffix}"),
+            "Delegated service organization B",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create delegated service organization B");
+        let owner = db::create_user(
+            &pool,
+            &format!("delegated-service-owner-{suffix}"),
+            &format!("delegated-service-owner-{suffix}@example.test"),
+            Some("DelegatedServiceOwner#123"),
+        )
+        .await
+        .expect("Failed to create external customer owner");
+        let owner_principal = db::get_principal_by_ref(&pool, "user", &owner.id)
+            .await
+            .expect("Failed to load owner principal")
+            .expect("Owner principal should exist");
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &owner_principal.id,
+            "active",
+            None,
+            Some(keylo::models::ORGANIZATION_MANAGEMENT_ROLE_OWNER),
+        )
+        .await
+        .expect("Failed to create owner membership");
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": owner.username,
+                "client_secret": "DelegatedServiceOwner#123"
+            }))
+            .await;
+        login.assert_status_ok();
+        let platform_token = login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Platform token should exist")
+            .to_string();
+        let context = server
+            .post("/v1/auth/organization-context")
+            .add_header("Authorization", format!("Bearer {platform_token}"))
+            .json(&json!({"organization_id": organization_a.id}))
+            .await;
+        context.assert_status_ok();
+        let organization_token = context.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Organization context token should exist")
+            .to_string();
+
+        let list_path = format!("/v1/organizations/{}/services", organization_a.id);
+        let empty_list = server
+            .get(&list_path)
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        empty_list.assert_status_ok();
+        assert!(empty_list.json::<serde_json::Value>()["data"]
+            .as_array()
+            .expect("Service list should be an array")
+            .is_empty());
+
+        let service_id = format!("delegated-service-{suffix}");
+        let forbidden_organization_override = server
+            .post(&list_path)
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "service_id": format!("override-service-{suffix}"),
+                "service_secret": "OverrideService#123",
+                "name": "Override service",
+                "organization_id": organization_b.id,
+                "allowed_scopes": ["read"],
+                "allowed_audiences": ["admin-backend"]
+            }))
+            .await;
+        assert_eq!(
+            forbidden_organization_override.status_code(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let registered = server
+            .post(&list_path)
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "DelegatedService#123",
+                "name": "Delegated service",
+                "allowed_scopes": ["read"],
+                "allowed_audiences": ["admin-backend"],
+                "integration_type": "job"
+            }))
+            .await;
+        registered.assert_status_ok();
+        let registered: serde_json::Value = registered.json();
+        assert_eq!(registered["data"]["scope_kind"], "organization");
+        assert_eq!(registered["data"]["organization_id"], organization_a.id);
+        assert_eq!(registered["data"]["introspection_allowed"], false);
+
+        let service_principal = db::get_principal_by_ref(&pool, "service", &service_id)
+            .await
+            .expect("Failed to load delegated service principal")
+            .expect("Delegated service principal should exist");
+        assert!(db::get_active_organization_membership(
+            &pool,
+            &organization_a.id,
+            &service_principal.id,
+        )
+        .await
+        .expect("Failed to load delegated service membership")
+        .is_some());
+
+        let service_path = format!("{list_path}/{service_id}");
+        let updated = server
+            .put(&service_path)
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "name": "Delegated service updated",
+                "allowed_scopes": ["read", "write"],
+                "allowed_audiences": ["admin-backend"]
+            }))
+            .await;
+        updated.assert_status_ok();
+        let read_back = server
+            .get(&service_path)
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        read_back.assert_status_ok();
+        let read_back: serde_json::Value = read_back.json();
+        assert_eq!(read_back["data"]["name"], "Delegated service updated");
+        assert_eq!(read_back["data"]["introspection_allowed"], false);
+
+        let rotated = server
+            .post(&format!("{service_path}/rotate-secret"))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({}))
+            .await;
+        rotated.assert_status_ok();
+        let rotated: serde_json::Value = rotated.json();
+        let rotated_secret = rotated["data"]["new_secret"]
+            .as_str()
+            .expect("Generated delegated secret should be returned once")
+            .to_string();
+        let service_token = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": rotated_secret,
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        service_token.assert_status_ok();
+        let service_token = service_token.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Delegated service should mint a token")
+            .to_string();
+        let claims = Keys::from_config(&test_config())
+            .expect("Test keys should load")
+            .decode_service_token(&service_token)
+            .expect("Delegated service token should decode");
+        assert_eq!(
+            claims.organization_id.as_deref(),
+            Some(organization_a.id.as_str())
+        );
+
+        let cross_organization = server
+            .post(&format!("/v1/organizations/{}/services", organization_b.id))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "service_id": format!("forbidden-service-{suffix}"),
+                "service_secret": "ForbiddenService#123",
+                "name": "Forbidden service",
+                "allowed_scopes": ["read"],
+                "allowed_audiences": ["admin-backend"]
+            }))
+            .await;
+        assert_eq!(cross_organization.status_code(), StatusCode::FORBIDDEN);
+
+        let other_service = format!("other-service-{suffix}");
+        db::create_service_client(
+            &pool,
+            db::CreateServiceClientParams {
+                service_id: &other_service,
+                service_secret: "OtherService#123",
+                name: "Other tenant service",
+                description: None,
+                organization_id: Some(&organization_b.id),
+                allowed_scopes: &["read".to_string()],
+                allowed_audiences: &["admin-backend".to_string()],
+                integration_type: "job",
+                introspection_allowed: false,
+                token_ttl_seconds: None,
+                owner: None,
+                contact: None,
+            },
+        )
+        .await
+        .expect("Failed to create other organization service");
+        let hidden_other_service = server
+            .get(&format!("{list_path}/{other_service}"))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        assert_eq!(hidden_other_service.status_code(), StatusCode::NOT_FOUND);
+
+        let events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_logs
+             WHERE event_type IN (
+                'organization.service.created',
+                'organization.service.updated',
+                'organization.service.secret_rotated'
+             )
+               AND detail LIKE $1",
+        )
+        .bind(format!("%service_id={service_id}%"))
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to inspect delegated service audit logs");
+        assert_eq!(events, 3, "Delegated service changes must be audited");
+    }
+
     /// Exercises the signed organization context across check, batch-check, effective
     /// permissions, and resource-tree while the live tenant state changes underneath it.
     #[tokio::test]

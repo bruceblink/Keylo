@@ -114,7 +114,7 @@
 
 验收：跨组织 check、batch-check、resource-tree、client 管理、identity source 管理和 refresh 都有拒绝测试；external_customer 绑定 platform/global role 会失败；internal_employee 的无授权客户访问会失败；平台管理员的跨组织操作必须显式调用、最小授权和审计。
 
-当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销、组织停用、organization-scoped refresh session、organization-scoped service Token，以及带目标组织、operation、原因和实时撤销的 customer-support 访问；OIDC client、identity source、device 与 API key 仍属于后续未完成项。
+当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销、组织停用、organization-scoped refresh session、organization-scoped service Token、organization owner/admin 限定本组织的 service client 管理，以及带目标组织、operation、原因和实时撤销的 customer-support 访问；OIDC client、identity source、device 与 API key 仍属于后续未完成项。
 
 ### 3.4 非人类主体与 API_KEY 认证
 

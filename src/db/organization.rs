@@ -241,6 +241,26 @@ async fn lock_organization_manager_context(
     })
 }
 
+/// Locks one live owner/admin context for a delegated write owned by another module.
+///
+/// Callers keep the returned transaction open until their own write commits, so
+/// a concurrent membership suspension or organization disable cannot authorize
+/// a machine-identity change from a stale route-level check.
+pub(crate) async fn lock_active_organization_manager(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: &str,
+    actor_principal_id: &str,
+) -> Result<()> {
+    lock_organization_manager_context(
+        transaction,
+        organization_id,
+        actor_principal_id,
+        actor_principal_id,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Creates a tenant boundary with a generated stable identifier.
 pub async fn create_organization(
     pool: &PgPool,

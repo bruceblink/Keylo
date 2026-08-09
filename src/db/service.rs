@@ -104,22 +104,75 @@ pub async fn create_service_client(
         }
         None => None,
     };
+    let mut transaction = pool.begin().await?;
+    if let Some(organization_id) = organization_id {
+        lock_active_service_client_organization(&mut transaction, organization_id).await?;
+    }
+    insert_service_client(&mut transaction, params, organization_id, &secret_hash).await?;
+    transaction.commit().await?;
+
+    Ok(())
+}
+
+/// Creates a service after locking the delegated owner's live membership.
+///
+/// The route-level authorization check is useful for early rejection, while
+/// this transaction-level check closes the race where the manager is suspended
+/// between that check and the service/principal/membership inserts.
+pub async fn create_service_client_as_organization_manager(
+    pool: &PgPool,
+    organization_id: &str,
+    actor_principal_id: &str,
+    params: CreateServiceClientParams<'_>,
+) -> Result<()> {
+    if params.organization_id.map(str::trim) != Some(organization_id) {
+        anyhow::bail!("organization_service_client_scope_invalid");
+    }
+    let secret_hash = hash(params.service_secret, DEFAULT_COST)?;
+    let mut transaction = pool.begin().await?;
+    crate::db::organization::lock_active_organization_manager(
+        &mut transaction,
+        organization_id,
+        actor_principal_id,
+    )
+    .await?;
+    insert_service_client(
+        &mut transaction,
+        params,
+        Some(organization_id),
+        &secret_hash,
+    )
+    .await?;
+    transaction.commit().await?;
+
+    Ok(())
+}
+
+/// Inserts the service client, its Principal, and its optional organization membership.
+///
+/// The caller owns the transaction and is responsible for locking the relevant
+/// organization and manager context before calling this write-only helper.
+async fn insert_service_client(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    params: CreateServiceClientParams<'_>,
+    organization_id: Option<&str>,
+    secret_hash: &str,
+) -> Result<()> {
     let scope_kind = if organization_id.is_some() {
         SERVICE_CLIENT_SCOPE_ORGANIZATION
     } else {
         SERVICE_CLIENT_SCOPE_PLATFORM
     };
-    let scopes: Vec<&str> = params.allowed_scopes.iter().map(|s| s.as_str()).collect();
+    let scopes: Vec<&str> = params
+        .allowed_scopes
+        .iter()
+        .map(|scope| scope.as_str())
+        .collect();
     let audiences: Vec<&str> = params
         .allowed_audiences
         .iter()
-        .map(|s| s.as_str())
+        .map(|audience| audience.as_str())
         .collect();
-
-    let mut transaction = pool.begin().await?;
-    if let Some(organization_id) = organization_id {
-        lock_active_service_client_organization(&mut transaction, organization_id).await?;
-    }
 
     sqlx::query(
         r#"
@@ -131,7 +184,7 @@ pub async fn create_service_client(
         "#,
     )
     .bind(params.service_id)
-    .bind(&secret_hash)
+    .bind(secret_hash)
     .bind(params.name)
     .bind(params.description)
     .bind(organization_id)
@@ -143,7 +196,7 @@ pub async fn create_service_client(
     .bind(params.token_ttl_seconds)
     .bind(params.owner)
     .bind(params.contact)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
 
     let principal = sqlx::query(
@@ -162,7 +215,7 @@ pub async fn create_service_client(
     .bind(format!("service:{}", params.service_id))
     .bind(params.service_id)
     .bind(params.name)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     let principal_id: String = principal.get("id");
 
@@ -180,11 +233,9 @@ pub async fn create_service_client(
         )
         .bind(organization_id)
         .bind(&principal_id)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     }
-
-    transaction.commit().await?;
 
     Ok(())
 }
@@ -267,23 +318,35 @@ pub async fn get_service_client(pool: &PgPool, service_id: &str) -> Result<Optio
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|r| ServiceInfo {
-        service_id: r.get("service_id"),
-        name: r.get("name"),
-        description: r.get("description"),
-        scope_kind: r.get("scope_kind"),
-        organization_id: r.get("organization_id"),
-        allowed_scopes: r.get("allowed_scopes"),
-        allowed_audiences: r.get("allowed_audiences"),
-        active: r.get("active"),
-        integration_type: r.get("integration_type"),
-        introspection_allowed: r.get("introspection_allowed"),
-        token_ttl_seconds: r.get("token_ttl_seconds"),
-        owner: r.get("owner"),
-        contact: r.get("contact"),
-        created_at: r.get("created_at"),
-        updated_at: r.get("updated_at"),
-    }))
+    Ok(row.map(service_info_from_row))
+}
+
+/// Reads one service only when it belongs to the requested organization.
+///
+/// The organization filter belongs in the database query so a caller cannot
+/// turn a globally unique service id into a cross-tenant read.
+pub async fn get_service_client_in_organization(
+    pool: &PgPool,
+    organization_id: &str,
+    service_id: &str,
+) -> Result<Option<ServiceInfo>> {
+    let row = sqlx::query(
+        "SELECT service_id, name, description, scope_kind, organization_id, allowed_scopes,
+                allowed_audiences, active, integration_type, introspection_allowed,
+                token_ttl_seconds, owner, contact,
+                extract(epoch from created_at)::bigint as created_at,
+                extract(epoch from updated_at)::bigint as updated_at
+         FROM service_clients
+         WHERE service_id = $1
+           AND organization_id = $2
+           AND scope_kind = 'organization'",
+    )
+    .bind(service_id)
+    .bind(organization_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(service_info_from_row))
 }
 
 /// 列出所有服务客户端
@@ -300,26 +363,30 @@ pub async fn list_service_clients(pool: &PgPool) -> Result<Vec<ServiceInfo>> {
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| ServiceInfo {
-            service_id: r.get("service_id"),
-            name: r.get("name"),
-            description: r.get("description"),
-            scope_kind: r.get("scope_kind"),
-            organization_id: r.get("organization_id"),
-            allowed_scopes: r.get("allowed_scopes"),
-            allowed_audiences: r.get("allowed_audiences"),
-            active: r.get("active"),
-            integration_type: r.get("integration_type"),
-            introspection_allowed: r.get("introspection_allowed"),
-            token_ttl_seconds: r.get("token_ttl_seconds"),
-            owner: r.get("owner"),
-            contact: r.get("contact"),
-            created_at: r.get("created_at"),
-            updated_at: r.get("updated_at"),
-        })
-        .collect())
+    Ok(rows.into_iter().map(service_info_from_row).collect())
+}
+
+/// Lists the service clients whose immutable scope is exactly one organization.
+pub async fn list_service_clients_in_organization(
+    pool: &PgPool,
+    organization_id: &str,
+) -> Result<Vec<ServiceInfo>> {
+    let rows = sqlx::query(
+        "SELECT service_id, name, description, scope_kind, organization_id, allowed_scopes,
+                allowed_audiences, active, integration_type, introspection_allowed,
+                token_ttl_seconds, owner, contact,
+                extract(epoch from created_at)::bigint as created_at,
+                extract(epoch from updated_at)::bigint as updated_at
+         FROM service_clients
+         WHERE organization_id = $1
+           AND scope_kind = 'organization'
+         ORDER BY created_at DESC, service_id",
+    )
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(service_info_from_row).collect())
 }
 
 /// 更新服务客户端信息
@@ -366,6 +433,66 @@ pub async fn update_service_client(
     if result.rows_affected() > 0 {
         let _ = crate::db::ensure_service_principal(pool, params.service_id).await?;
     }
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Updates a service only after locking the delegated manager's live context.
+///
+/// A missing row covers both unknown service ids and ids owned by a different
+/// organization, so callers can return the same non-disclosing result.
+pub async fn update_service_client_as_organization_manager(
+    pool: &PgPool,
+    organization_id: &str,
+    actor_principal_id: &str,
+    params: UpdateServiceClientParams<'_>,
+) -> Result<bool> {
+    let scopes: Option<Vec<&str>> = params
+        .allowed_scopes
+        .map(|values| values.iter().map(|value| value.as_str()).collect());
+    let audiences: Option<Vec<&str>> = params
+        .allowed_audiences
+        .map(|values| values.iter().map(|value| value.as_str()).collect());
+
+    let mut transaction = pool.begin().await?;
+    crate::db::organization::lock_active_organization_manager(
+        &mut transaction,
+        organization_id,
+        actor_principal_id,
+    )
+    .await?;
+    let result = sqlx::query(
+        "UPDATE service_clients
+         SET name = COALESCE($3, name),
+             description = COALESCE($4, description),
+             allowed_scopes = COALESCE($5, allowed_scopes),
+             allowed_audiences = COALESCE($6, allowed_audiences),
+             active = COALESCE($7, active),
+             integration_type = COALESCE($8, integration_type),
+             introspection_allowed = COALESCE($9, introspection_allowed),
+             token_ttl_seconds = COALESCE($10, token_ttl_seconds),
+             owner = COALESCE($11, owner),
+             contact = COALESCE($12, contact),
+             updated_at = NOW()
+         WHERE service_id = $1
+           AND organization_id = $2
+           AND scope_kind = 'organization'",
+    )
+    .bind(params.service_id)
+    .bind(organization_id)
+    .bind(params.name)
+    .bind(params.description)
+    .bind(scopes)
+    .bind(audiences)
+    .bind(params.active)
+    .bind(params.integration_type)
+    .bind(params.introspection_allowed)
+    .bind(params.token_ttl_seconds)
+    .bind(params.owner)
+    .bind(params.contact)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -478,7 +605,63 @@ pub async fn rotate_service_secret(
     Ok(result.rows_affected() > 0)
 }
 
+/// Rotates a secret only after the organization owner/admin is locked as active.
+pub async fn rotate_service_secret_as_organization_manager(
+    pool: &PgPool,
+    organization_id: &str,
+    actor_principal_id: &str,
+    service_id: &str,
+    new_secret: &str,
+) -> Result<bool> {
+    let new_hash = hash(new_secret, DEFAULT_COST)?;
+    let mut transaction = pool.begin().await?;
+    crate::db::organization::lock_active_organization_manager(
+        &mut transaction,
+        organization_id,
+        actor_principal_id,
+    )
+    .await?;
+    let result = sqlx::query(
+        "UPDATE service_clients
+         SET secret_hash = $3,
+             updated_at = NOW()
+         WHERE service_id = $1
+           AND organization_id = $2
+           AND scope_kind = 'organization'
+           AND active = TRUE",
+    )
+    .bind(service_id)
+    .bind(organization_id)
+    .bind(&new_hash)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// 生成随机服务密钥
 pub fn generate_service_secret() -> String {
     Uuid::new_v4().to_string().replace('-', "")
+}
+
+/// Converts a service-client result row into the metadata safe for API output.
+fn service_info_from_row(row: sqlx::postgres::PgRow) -> ServiceInfo {
+    ServiceInfo {
+        service_id: row.get("service_id"),
+        name: row.get("name"),
+        description: row.get("description"),
+        scope_kind: row.get("scope_kind"),
+        organization_id: row.get("organization_id"),
+        allowed_scopes: row.get("allowed_scopes"),
+        allowed_audiences: row.get("allowed_audiences"),
+        active: row.get("active"),
+        integration_type: row.get("integration_type"),
+        introspection_allowed: row.get("introspection_allowed"),
+        token_ttl_seconds: row.get("token_ttl_seconds"),
+        owner: row.get("owner"),
+        contact: row.get("contact"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
 }

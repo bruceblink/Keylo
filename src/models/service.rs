@@ -182,6 +182,25 @@ pub struct RegisterServiceRequest {
     pub contact: Option<String>,
 }
 
+/// Registration payload for an owner/admin creating a service in its active organization.
+///
+/// The route path supplies the organization boundary, so this payload
+/// deliberately has no `organization_id` field for callers to override.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterOrganizationServiceRequest {
+    pub service_id: String,
+    pub service_secret: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub allowed_scopes: Vec<String>,
+    pub allowed_audiences: Vec<String>,
+    pub integration_type: Option<String>,
+    pub token_ttl_seconds: Option<i64>,
+    pub owner: Option<String>,
+    pub contact: Option<String>,
+}
+
 /// 更新服务配置的请求（管理接口）
 #[derive(Debug, Deserialize)]
 pub struct UpdateServiceRequest {
@@ -192,6 +211,24 @@ pub struct UpdateServiceRequest {
     pub active: Option<bool>,
     pub integration_type: Option<String>,
     pub introspection_allowed: Option<bool>,
+    pub token_ttl_seconds: Option<i64>,
+    pub owner: Option<String>,
+    pub contact: Option<String>,
+}
+
+/// Mutable metadata accepted from an organization owner/admin.
+///
+/// Scope and introspection capability are intentionally absent: tenant service
+/// clients have an immutable organization boundary and cannot inspect tokens.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateOrganizationServiceRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub allowed_scopes: Option<Vec<String>>,
+    pub allowed_audiences: Option<Vec<String>>,
+    pub active: Option<bool>,
+    pub integration_type: Option<String>,
     pub token_ttl_seconds: Option<i64>,
     pub owner: Option<String>,
     pub contact: Option<String>,

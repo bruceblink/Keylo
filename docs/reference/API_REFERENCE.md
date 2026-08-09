@@ -446,7 +446,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 `resource-tree` 的 `type` 支持 `menu`、`button`、`api`、`service`、`data_scope`。用户通常消费 `menu/button/data_scope`，服务通常消费 `api/service`。
 
-access token 带有 `organization_id` 时，这两个端点会实时确认该 Principal 仍是该组织的 active member，随后只解释该组织的 `organization_role_bindings` 和该组织资源；成员被移除、暂停或组织被停用后，旧 token 不会继续获得组织权限。没有组织上下文的 access token 与现有 `service_access` 只解释 platform role 和 platform resource。服务 token 尚不携带组织上下文，组织级机器身份将在 API key 功能中单独交付。
+access token 或 service_access token 带有 `organization_id` 时，这两个端点会实时确认该 Principal 仍是该组织的 active member，随后只解释该组织的 `organization_role_bindings` 和该组织资源；成员被移除、暂停或组织被停用后，旧 token 不会继续获得组织权限。没有组织上下文的 access token 与 service_access 只解释 platform role 和 platform resource。API key 与独立 device Principal 仍属于后续机器身份功能。
 
 ### 7.2 统一授权检查
 
@@ -626,8 +626,15 @@ access token 带有 `organization_id` 时，这两个端点会实时确认该 Pr
 | GET | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles` | 查询组织角色绑定 |
 | POST | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles` | `{ "role_id": "..." }`，只接受 organization-scoped role |
 | DELETE | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles/{role_id}` | 幂等撤销组织角色绑定 |
+| GET | `/v1/organizations/{organization_id}/services` | 查询当前组织的 service client |
+| POST | `/v1/organizations/{organization_id}/services` | 创建当前组织的 service client |
+| GET | `/v1/organizations/{organization_id}/services/{service_id}` | 查询当前组织的 service client |
+| PUT | `/v1/organizations/{organization_id}/services/{service_id}` | 更新当前组织 service 的可变元数据 |
+| POST | `/v1/organizations/{organization_id}/services/{service_id}/rotate-secret` | 轮换当前组织 service secret |
 
-`organization_role_bindings` 只在持有相同 signed organization context、且组织与 membership 均为 active 时参与组织作用域的授权决策；它们不会转化为通用 platform 权限。跨组织、停用组织、非 active membership 和平台角色绑定均失败关闭。成功写操作会分别写入 `organization.membership.invited`、`organization.membership.updated`、`organization.membership.joined`、`organization.role_binding.assigned` 或 `organization.role_binding.revoked` 审计事件。
+组织 service 创建请求与平台服务注册使用相同的 `service_id`、`service_secret`、`name`、`allowed_scopes`、`allowed_audiences`、`integration_type`、`token_ttl_seconds`、`owner` 和 `contact` 字段，但不接受 `organization_id` 或 `introspection_allowed`。组织范围只来自路径和签名 access token 的相同 active organization context；创建时会原子写入 service Principal 与 active membership。更新同样不接受 scope 或 introspection 字段，组织 service 永远不能调用内省端点。轮换请求可选 `{ "new_secret": "..." }`；省略时服务器只在该次响应的 `data.new_secret` 返回新值。
+
+`organization_role_bindings` 只在持有相同 signed organization context、且组织与 membership 均为 active 时参与组织作用域的授权决策；它们不会转化为通用 platform 权限。跨组织、停用组织、非 active membership 和平台角色绑定均失败关闭。成功写操作会分别写入 `organization.membership.invited`、`organization.membership.updated`、`organization.membership.joined`、`organization.role_binding.assigned`、`organization.role_binding.revoked`、`organization.service.created`、`organization.service.updated` 或 `organization.service.secret_rotated` 审计事件。
 
 ### 7.7 受限 Customer Support 访问
 
@@ -878,7 +885,7 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 - `allowed_audiences` 可使用 `*` 通配；`allowed_scopes` 不允许使用 `*`。
 - `token_ttl_seconds` 必须大于 0，且不能超过 `REFRESH_TOKEN_EXPIRY_SECONDS`。
 
-`GET /v1/admin/services/{service_id}` 与列表接口会返回上述服务元数据，以及不可变的 `scope_kind`（`platform` 或 `organization`）和可选 `organization_id`，但不会返回密钥或密钥 hash。`PUT` 不接受也不能变更 scope；需要变更组织边界时必须注册新的 service client 和凭证。
+`GET /v1/admin/services/{service_id}` 与列表接口会返回上述服务元数据，以及不可变的 `scope_kind`（`platform` 或 `organization`）和可选 `organization_id`，但不会返回密钥或密钥 hash。`PUT` 不接受也不能变更 scope；需要变更组织边界时必须注册新的 service client 和凭证。customer organization 的 owner/admin 应使用上一节的 `/v1/organizations/{organization_id}/services` 路由管理自己的 organization-scoped service，不能通过平台管理路由获得跨组织能力。
 
 `POST /v1/admin/services/{service_id}/rotate-secret`：
 
