@@ -440,7 +440,7 @@ curl http://127.0.0.1:2345/metrics
 ### 使用 GitHub Container Registry 镜像
 
 ```bash
-docker pull ghcr.io/bruceblink/keylo:v2.0.0
+docker pull ghcr.io/bruceblink/keylo:v2.1.0
 ```
 
 ### 运行容器
@@ -453,7 +453,7 @@ docker run --rm -p 2345:2345 \
   -e REDIS_HOST="redis" \
   -e REDIS_PASSWORD_ENC_FILE="/run/secrets/.redis_password.enc" \
   -e REDIS_PASSWORD_KEY_FILE="/run/secrets/.redis_password.key" \
-  ghcr.io/bruceblink/keylo:v2.0.0
+  ghcr.io/bruceblink/keylo:v2.1.0
 ```
 
 ### 本地构建镜像
