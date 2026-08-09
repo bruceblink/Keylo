@@ -2,7 +2,9 @@ use anyhow::Result;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::models::{AuthorizationAuditLog, Permission, Principal, Role};
+use crate::models::{
+    AuthorizationAuditLog, Permission, Principal, ResolvedResourcePermissionTarget, Role,
+};
 
 fn principal_id(principal_type: &str, ref_id: &str) -> String {
     format!("{}-{}", principal_type, ref_id)
@@ -330,6 +332,50 @@ pub async fn get_principal_roles(pool: &PgPool, principal_id: &str) -> Result<Ve
     .await?)
 }
 
+/// Lists roles that are effective only inside one live organization context.
+///
+/// The lifecycle predicates are repeated in the authorization query so a
+/// membership or organization disabled after token issuance fails closed.
+pub async fn get_principal_organization_roles(
+    pool: &PgPool,
+    principal_id: &str,
+    organization_id: &str,
+) -> Result<Vec<Role>> {
+    Ok(sqlx::query_as::<_, Role>(
+        r#"
+        SELECT r.id, r.name, r.description, r.assignable_to, r.system, r.version, r.created_at, r.updated_at
+        FROM roles r
+        INNER JOIN organization_role_bindings binding
+            ON binding.role_id = r.id AND binding.scope = r.scope
+        INNER JOIN organization_memberships membership
+            ON membership.organization_id = binding.organization_id
+           AND membership.principal_id = binding.principal_id
+        INNER JOIN organizations organization ON organization.id = binding.organization_id
+        INNER JOIN principals principal ON principal.id = binding.principal_id
+        LEFT JOIN users u ON principal.principal_type = 'user' AND u.id = principal.ref_id
+        WHERE binding.principal_id = $1
+          AND binding.organization_id = $2
+          AND r.scope = 'organization'
+          AND organization.status = 'active'
+          AND membership.status = 'active'
+          AND principal.active = TRUE
+          AND (
+              principal.principal_type <> 'user'
+              OR (
+                  u.active = TRUE
+                  AND u.user_class IN ('internal_employee', 'external_customer')
+                  AND (u.user_class <> 'external_customer' OR organization.kind = 'customer')
+              )
+          )
+        ORDER BY r.name
+        "#,
+    )
+    .bind(principal_id)
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn get_principal_permissions(
     pool: &PgPool,
     principal_id: &str,
@@ -350,6 +396,50 @@ pub async fn get_principal_permissions(
         "#,
     )
     .bind(principal_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Lists permissions supplied by organization-scoped role bindings in one
+/// active organization. Platform roles never participate in this query.
+pub async fn get_principal_organization_permissions(
+    pool: &PgPool,
+    principal_id: &str,
+    organization_id: &str,
+) -> Result<Vec<Permission>> {
+    Ok(sqlx::query_as::<_, Permission>(
+        r#"
+        SELECT DISTINCT p.id, p.name, p.description, p.version, p.created_at, p.updated_at
+        FROM permissions p
+        INNER JOIN role_permissions rp ON rp.permission_id = p.id
+        INNER JOIN roles r ON r.id = rp.role_id
+        INNER JOIN organization_role_bindings binding
+            ON binding.role_id = r.id AND binding.scope = r.scope
+        INNER JOIN organization_memberships membership
+            ON membership.organization_id = binding.organization_id
+           AND membership.principal_id = binding.principal_id
+        INNER JOIN organizations organization ON organization.id = binding.organization_id
+        INNER JOIN principals principal ON principal.id = binding.principal_id
+        LEFT JOIN users u ON principal.principal_type = 'user' AND u.id = principal.ref_id
+        WHERE binding.principal_id = $1
+          AND binding.organization_id = $2
+          AND r.scope = 'organization'
+          AND organization.status = 'active'
+          AND membership.status = 'active'
+          AND principal.active = TRUE
+          AND (
+              principal.principal_type <> 'user'
+              OR (
+                  u.active = TRUE
+                  AND u.user_class IN ('internal_employee', 'external_customer')
+                  AND (u.user_class <> 'external_customer' OR organization.kind = 'customer')
+              )
+          )
+        ORDER BY p.name
+        "#,
+    )
+    .bind(principal_id)
+    .bind(organization_id)
     .fetch_all(pool)
     .await?)
 }
@@ -383,6 +473,63 @@ pub async fn principal_has_permission(
     Ok(row.is_some())
 }
 
+/// Checks one permission against live organization-scoped role bindings.
+/// Platform bindings are intentionally excluded even for internal employees.
+pub async fn principal_has_organization_permission(
+    pool: &PgPool,
+    principal_id: &str,
+    organization_id: &str,
+    permission_name: &str,
+) -> Result<bool> {
+    let row = sqlx::query(
+        r#"
+        SELECT 1
+        FROM organization_role_bindings binding
+        INNER JOIN roles r ON r.id = binding.role_id AND r.scope = binding.scope
+        INNER JOIN organization_memberships membership
+            ON membership.organization_id = binding.organization_id
+           AND membership.principal_id = binding.principal_id
+        INNER JOIN organizations organization ON organization.id = binding.organization_id
+        INNER JOIN principals principal ON principal.id = binding.principal_id
+        LEFT JOIN users u ON principal.principal_type = 'user' AND u.id = principal.ref_id
+        INNER JOIN role_permissions rp ON rp.role_id = binding.role_id
+        INNER JOIN permissions p ON p.id = rp.permission_id
+        WHERE binding.principal_id = $1
+          AND binding.organization_id = $2
+          AND binding.scope = 'organization'
+          AND organization.status = 'active'
+          AND membership.status = 'active'
+          AND principal.active = TRUE
+          AND (
+              principal.principal_type <> 'user'
+              OR (
+                  u.active = TRUE
+                  AND u.user_class IN ('internal_employee', 'external_customer')
+                  AND (u.user_class <> 'external_customer' OR organization.kind = 'customer')
+              )
+          )
+          AND (p.name = $3 OR p.name = '*:*:*')
+        LIMIT 1
+        "#,
+    )
+    .bind(principal_id)
+    .bind(organization_id)
+    .bind(permission_name)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.is_some())
+}
+
+/// Checks whether one live organization role grants the wildcard permission.
+pub async fn principal_has_organization_wildcard_permission(
+    pool: &PgPool,
+    principal_id: &str,
+    organization_id: &str,
+) -> Result<bool> {
+    principal_has_organization_permission(pool, principal_id, organization_id, "*:*:*").await
+}
+
 pub async fn principal_has_wildcard_permission(pool: &PgPool, principal_id: &str) -> Result<bool> {
     let row = sqlx::query(
         r#"
@@ -412,14 +559,31 @@ pub async fn permission_for_resource(
     app: &str,
     resource_type: &str,
     resource_code: &str,
-) -> Result<Option<(String, String)>> {
+    organization_id: Option<&str>,
+) -> Result<Option<ResolvedResourcePermissionTarget>> {
     let row = sqlx::query(
         r#"
-        SELECT r.id, p.name
-        FROM resources r
+        WITH candidate_resource AS (
+            SELECT r.id, r.organization_id
+            FROM resources r
+            WHERE r.app = $1
+              AND r.resource_type = $2
+              AND r.code = $3
+              AND r.active = TRUE
+              AND (
+                  ($4::TEXT IS NULL AND r.organization_id IS NULL)
+                  OR (
+                      $4::TEXT IS NOT NULL
+                      AND (r.organization_id = $4 OR r.organization_id IS NULL)
+                  )
+              )
+            ORDER BY CASE WHEN r.organization_id = $4 THEN 0 ELSE 1 END
+            LIMIT 1
+        )
+        SELECT r.id, r.organization_id, p.name
+        FROM candidate_resource r
         INNER JOIN resource_permissions rp ON rp.resource_id = r.id
         INNER JOIN permissions p ON p.id = rp.permission_id
-        WHERE r.app = $1 AND r.resource_type = $2 AND r.code = $3 AND r.active = TRUE
         ORDER BY p.name
         LIMIT 1
         "#,
@@ -427,10 +591,15 @@ pub async fn permission_for_resource(
     .bind(app)
     .bind(resource_type)
     .bind(resource_code)
+    .bind(organization_id)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|row| (row.get("name"), row.get("id"))))
+    Ok(row.map(|row| ResolvedResourcePermissionTarget {
+        permission_name: row.get("name"),
+        resource_id: row.get("id"),
+        organization_id: row.get("organization_id"),
+    }))
 }
 
 pub async fn create_authorization_audit_log(
@@ -441,14 +610,38 @@ pub async fn create_authorization_audit_log(
     resource_id: Option<&str>,
     detail: Option<&str>,
 ) -> Result<()> {
+    create_authorization_audit_log_in_organization(
+        pool,
+        None,
+        principal_id,
+        decision,
+        permission_name,
+        resource_id,
+        detail,
+    )
+    .await
+}
+
+/// Records the signed tenant context for a decision without making it a
+/// foreign key, so an audit row remains useful after an organization is archived.
+pub async fn create_authorization_audit_log_in_organization(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    principal_id: Option<&str>,
+    decision: &str,
+    permission_name: Option<&str>,
+    resource_id: Option<&str>,
+    detail: Option<&str>,
+) -> Result<()> {
     sqlx::query(
         r#"
         INSERT INTO authorization_audit_logs
-            (id, principal_id, decision, permission_name, resource_id, detail)
-        VALUES ($1, $2, $3, $4, $5, $6)
+            (id, organization_id, principal_id, decision, permission_name, resource_id, detail)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#,
     )
     .bind(Uuid::new_v4().to_string())
+    .bind(organization_id)
     .bind(principal_id)
     .bind(decision)
     .bind(permission_name)
@@ -470,18 +663,48 @@ pub async fn list_authorization_audit_logs(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<AuthorizationAuditLog>> {
+    list_authorization_audit_logs_in_organization(
+        pool,
+        None,
+        principal_id,
+        decision,
+        permission_name,
+        resource_id,
+        limit,
+        offset,
+    )
+    .await
+}
+
+/// Lists decision audits with an optional exact organization filter for
+/// tenant-scoped investigations. Omitting the filter preserves platform admin
+/// visibility across all scopes. The independent filters intentionally mirror
+/// the public list query, so callers can keep every database predicate exact.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_authorization_audit_logs_in_organization(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    principal_id: Option<&str>,
+    decision: Option<&str>,
+    permission_name: Option<&str>,
+    resource_id: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AuthorizationAuditLog>> {
     let logs = sqlx::query_as::<_, AuthorizationAuditLog>(
         r#"
-        SELECT id, principal_id, decision, permission_name, resource_id, detail, created_at
+        SELECT id, organization_id, principal_id, decision, permission_name, resource_id, detail, created_at
         FROM authorization_audit_logs
-        WHERE ($1::TEXT IS NULL OR principal_id = $1)
-          AND ($2::TEXT IS NULL OR decision = $2)
-          AND ($3::TEXT IS NULL OR permission_name = $3)
-          AND ($4::TEXT IS NULL OR resource_id = $4)
+        WHERE ($1::TEXT IS NULL OR organization_id = $1)
+          AND ($2::TEXT IS NULL OR principal_id = $2)
+          AND ($3::TEXT IS NULL OR decision = $3)
+          AND ($4::TEXT IS NULL OR permission_name = $4)
+          AND ($5::TEXT IS NULL OR resource_id = $5)
         ORDER BY created_at DESC, id DESC
-        LIMIT $5 OFFSET $6
+        LIMIT $6 OFFSET $7
         "#,
     )
+    .bind(organization_id)
     .bind(principal_id)
     .bind(decision)
     .bind(permission_name)

@@ -79,7 +79,7 @@
 仍待完成：
 
 - [x] 将 user_class 纳入 provision 与角色作用域校验；external_customer 不能获得 platform/global role，类别本身不直接授予权限；普通/批量/Principal/provision 写入、权限读取、资源树、管理 Token 与 introspection 均按 live user class 和 role scope 失败关闭。身份源映射仍需在后续接入切片中显式声明允许创建的 user_class。
-- [x] 为组织 owner/admin 提供限定本组织的邀请、加入、成员管理和组织角色绑定 API；在授权引擎接入前，不得把 organization_role_bindings 解释为已经生效的角色。
+- [x] 为组织 owner/admin 提供限定本组织的邀请、加入、成员管理和组织角色绑定 API；组织角色仅在相同 signed active organization context 的授权决策中生效，绝不提升为 platform 权限。
 - 将人类与机器主体分开建模：`user` 继续使用 `user_class`，`service` 保持现有服务 Principal，新增 `device` 作为设备/边缘代理/无人值守任务的机器 Principal；机器主体没有 user_class、密码登录、浏览器会话或人类 MFA 要求。
 - 新增 MachineCredential/API key 记录：principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by、allowed_scopes、allowed_audiences；原始 key 只在创建或轮换响应中显示一次。
 - 为用户、OIDC client、service client、identity source、resource、refresh session 和授权审计逐项定义 organization_id 归属；当前这些既有对象仍为 platform-scoped，不能仅加 nullable 列而不同时完成查询过滤、唯一约束和授权路径。
@@ -101,15 +101,18 @@
 
 ### 3.3 组织作用域 RBAC 与授权决策
 
-- 将现有角色绑定扩展为 global/platform 与 organization scope；平台角色和组织角色分开校验。
-- 资源和权限检查必须同时解析 authenticated principal、active organization context、membership status、组织角色绑定和资源 organization_id。
-- organization_id 不一致、组织不存在、组织已停用、成员非 active 或资源属于其他组织时默认拒绝，并且不能通过错误差异泄露租户存在性。
-- external_customer 只能绑定 organization scope；internal_employee 的平台角色和内部组织角色分离，customer-support 访问必须限定目标组织、操作和审计原因。
-- 组织服务账号和客户端明确标记 platform-scoped 或 organization-scoped；组织级服务 Token 只能访问所属组织。
-- external_customer 组织管理员创建的 service/device Principal 与 API key 只能属于本组织；internal_employee 的平台级机器身份不得因内部类别自动访问客户组织。
-- JWT 只携带当前组织上下文和稳定主体信息，不携带所有组织的完整权限集合；切换组织要重新签发上下文。
+- [x] 将现有角色绑定扩展为 global/platform 与 organization scope；平台角色和组织角色分开校验。
+- [x] 资源和权限检查同时解析 authenticated principal、active organization context、membership status、组织角色绑定和资源 organization_id。
+- [x] check、batch-check 与 resource-tree 对 organization_id 不一致、组织不存在或停用、成员非 active、资源属于其他组织时默认拒绝，并保持普通 deny/forbidden 边界，避免通过错误差异泄露租户存在性。
+- [x] external_customer 只能绑定 organization scope；internal_employee 的平台角色和内部组织角色分离，类别本身不授予客户组织访问。
+- [ ] customer-support 访问必须限定目标组织、操作和审计原因。
+- [ ] 组织服务账号和客户端明确标记 platform-scoped 或 organization-scoped；组织级服务 Token 只能访问所属组织。
+- [ ] external_customer 组织管理员创建的 service/device Principal 与 API key 只能属于本组织；internal_employee 的平台级机器身份不得因内部类别自动访问客户组织。
+- [x] JWT 只携带当前组织上下文和稳定主体信息，不携带所有组织的完整权限集合；切换组织要重新签发上下文。
 
 验收：跨组织 check、batch-check、resource-tree、client 管理、identity source 管理和 refresh 都有拒绝测试；external_customer 绑定 platform/global role 会失败；internal_employee 的无授权客户访问会失败；平台管理员的跨组织操作必须显式调用、最小授权和审计。
+
+当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销和组织停用；client、identity source、refresh 与组织级机器身份仍属于后续未完成项。
 
 ### 3.4 非人类主体与 API_KEY 认证
 

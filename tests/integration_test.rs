@@ -2800,6 +2800,346 @@ mod tests {
         assert_eq!(owner_principal.principal_type, "user");
     }
 
+    /// Exercises the signed organization context across check, batch-check, effective
+    /// permissions, and resource-tree while the live tenant state changes underneath it.
+    #[tokio::test]
+    async fn test_organization_authorization_is_live_and_cross_tenant_safe() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let app = format!("tenant-auth-{suffix}");
+
+        let organization_a = db::create_organization(
+            &pool,
+            &format!("tenant-auth-a-{suffix}"),
+            "Tenant authorization A",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create organization A");
+        let organization_b = db::create_organization(
+            &pool,
+            &format!("tenant-auth-b-{suffix}"),
+            "Tenant authorization B",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create organization B");
+        let user = db::create_user(
+            &pool,
+            &format!("tenant-auth-user-{suffix}"),
+            &format!("tenant-auth-user-{suffix}@example.test"),
+            Some("TenantAuthUser#123"),
+        )
+        .await
+        .expect("Failed to create tenant authorization user");
+        let principal = db::get_principal_by_ref(&pool, "user", &user.id)
+            .await
+            .expect("Failed to load tenant authorization principal")
+            .expect("Tenant authorization principal should exist");
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &principal.id,
+            "active",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to activate organization A membership");
+
+        let permission = db::create_permission(
+            &pool,
+            &format!("tenant:document:read:{suffix}"),
+            Some("Read one tenant's documents"),
+        )
+        .await
+        .expect("Failed to create tenant permission");
+        let organization_role = db::create_organization_role(
+            &pool,
+            &format!("tenant-reader-{suffix}"),
+            Some("Tenant document reader"),
+            "user",
+        )
+        .await
+        .expect("Failed to create tenant role");
+        db::assign_permission_to_role(&pool, &organization_role.id, &permission.id)
+            .await
+            .expect("Failed to bind tenant permission");
+        db::assign_organization_role(
+            &pool,
+            &organization_a.id,
+            &principal.id,
+            &organization_role.id,
+            Some("integration-test"),
+        )
+        .await
+        .expect("Failed to bind organization role");
+
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let resource_a = server
+            .post("/v1/admin/resources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "organization_id": organization_a.id,
+                "app": app,
+                "resource_type": "menu",
+                "code": "shared",
+                "name": "Organization A resource",
+                "permission_ids": [permission.id]
+            }))
+            .await;
+        resource_a.assert_status_ok();
+        let resource_a_body: serde_json::Value = resource_a.json();
+        assert_eq!(
+            resource_a_body["data"]["organization_id"],
+            organization_a.id
+        );
+
+        for (code, name) in [
+            ("shared", "Organization B shared resource"),
+            ("only-b", "Organization B private resource"),
+        ] {
+            let resource_b = server
+                .post("/v1/admin/resources")
+                .add_header("Authorization", format!("Bearer {admin_token}"))
+                .json(&json!({
+                    "organization_id": organization_b.id,
+                    "app": app,
+                    "resource_type": "menu",
+                    "code": code,
+                    "name": name,
+                    "permission_ids": [permission.id]
+                }))
+                .await;
+            resource_b.assert_status_ok();
+        }
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": user.username,
+                "client_secret": "TenantAuthUser#123"
+            }))
+            .await;
+        login.assert_status_ok();
+        let platform_token = login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let organization_context = server
+            .post("/v1/auth/organization-context")
+            .add_header("Authorization", format!("Bearer {platform_token}"))
+            .json(&json!({"organization_id": organization_a.id}))
+            .await;
+        organization_context.assert_status_ok();
+        let organization_token = organization_context.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let direct_check = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({"permission": permission.name}))
+            .await;
+        direct_check.assert_status_ok();
+        assert_eq!(
+            direct_check.json::<serde_json::Value>()["data"]["allowed"],
+            true
+        );
+        let organization_audits = db::list_authorization_audit_logs_in_organization(
+            &pool,
+            Some(&organization_a.id),
+            Some(&principal.id),
+            Some("allow"),
+            Some(&permission.name),
+            None,
+            10,
+            0,
+        )
+        .await
+        .expect("Failed to query tenant authorization audit");
+        assert!(organization_audits
+            .iter()
+            .any(|audit| { audit.organization_id.as_deref() == Some(organization_a.id.as_str()) }));
+        let audit_api = server
+            .get(&format!(
+                "/v1/admin/authorization-audit-logs?organization_id={}",
+                organization_a.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        audit_api.assert_status_ok();
+        let audit_api_body: serde_json::Value = audit_api.json();
+        let audit_rows = audit_api_body["data"].as_array().unwrap();
+        assert!(!audit_rows.is_empty());
+        assert!(audit_rows
+            .iter()
+            .all(|audit| audit["organization_id"] == organization_a.id));
+
+        let resource_check = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "app": app,
+                "resource_type": "menu",
+                "resource_code": "shared"
+            }))
+            .await;
+        resource_check.assert_status_ok();
+        assert_eq!(
+            resource_check.json::<serde_json::Value>()["data"]["allowed"],
+            true
+        );
+
+        let batch = server
+            .post("/v1/authorize/batch-check")
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "checks": [
+                    {"permission": permission.name},
+                    {
+                        "app": app,
+                        "resource_type": "menu",
+                        "resource_code": "only-b"
+                    }
+                ]
+            }))
+            .await;
+        batch.assert_status_ok();
+        let batch_body: serde_json::Value = batch.json();
+        assert_eq!(batch_body["data"]["results"][0]["allowed"], true);
+        assert_eq!(batch_body["data"]["results"][1]["allowed"], false);
+        assert_eq!(
+            batch_body["data"]["results"][1]["reason"],
+            "permission_not_resolved"
+        );
+
+        let effective = server
+            .get("/v1/principals/me/effective-permissions")
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        effective.assert_status_ok();
+        let effective_body: serde_json::Value = effective.json();
+        assert!(effective_body["data"]["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|role| role["id"] == organization_role.id));
+        assert!(effective_body["data"]["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate["id"] == permission.id));
+
+        let tree = server
+            .get(&format!(
+                "/v1/principals/me/resource-tree?app={app}&type=menu"
+            ))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        tree.assert_status_ok();
+        let tree_body: serde_json::Value = tree.json();
+        let nodes = tree_body["data"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0]["resource"]["code"], "shared");
+        assert_eq!(nodes[0]["resource"]["organization_id"], organization_a.id);
+
+        let platform_check = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {platform_token}"))
+            .json(&json!({"permission": permission.name}))
+            .await;
+        platform_check.assert_status_ok();
+        assert_eq!(
+            platform_check.json::<serde_json::Value>()["data"]["allowed"],
+            false
+        );
+
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &principal.id,
+            "suspended",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to suspend tenant membership");
+        let stale_context = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({"permission": permission.name}))
+            .await;
+        assert_eq!(stale_context.status_code(), StatusCode::FORBIDDEN);
+
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &principal.id,
+            "active",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to reactivate tenant membership");
+        sqlx::query(
+            "DELETE FROM organization_role_bindings WHERE organization_id = $1 AND principal_id = $2 AND role_id = $3",
+        )
+        .bind(&organization_a.id)
+        .bind(&principal.id)
+        .bind(&organization_role.id)
+        .execute(&pool)
+        .await
+        .expect("Failed to revoke tenant role binding");
+        let revoked_binding = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({"permission": permission.name}))
+            .await;
+        revoked_binding.assert_status_ok();
+        assert_eq!(
+            revoked_binding.json::<serde_json::Value>()["data"]["allowed"],
+            false
+        );
+
+        db::assign_organization_role(
+            &pool,
+            &organization_a.id,
+            &principal.id,
+            &organization_role.id,
+            Some("integration-test"),
+        )
+        .await
+        .expect("Failed to restore tenant role binding");
+        db::set_organization_status(&pool, &organization_a.id, "disabled")
+            .await
+            .expect("Failed to disable tenant organization")
+            .expect("Tenant organization should exist");
+        let disabled_organization = server
+            .get(&format!(
+                "/v1/principals/me/resource-tree?app={app}&type=menu"
+            ))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        assert_eq!(disabled_organization.status_code(), StatusCode::FORBIDDEN);
+    }
+
     #[tokio::test]
     async fn test_external_customer_with_admin_claims_cannot_access_platform_organizations() {
         let Some(pool) = setup_organization_test_pool().await else {

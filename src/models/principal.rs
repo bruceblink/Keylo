@@ -25,6 +25,7 @@ pub struct PrincipalListQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct AuthorizationAuditLogListQuery {
+    pub organization_id: Option<String>,
     pub principal_id: Option<String>,
     pub decision: Option<String>,
     pub permission_name: Option<String>,
@@ -41,6 +42,7 @@ pub struct CleanupAuthorizationAuditLogsRequest {
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct AuthorizationAuditLog {
     pub id: String,
+    pub organization_id: Option<String>,
     pub principal_id: Option<String>,
     pub decision: String,
     pub permission_name: Option<String>,
@@ -54,6 +56,18 @@ pub struct PrincipalEffectivePermissionsResponse {
     pub principal: Principal,
     pub roles: Vec<crate::models::Role>,
     pub permissions: Vec<crate::models::Permission>,
+}
+
+/// Permission and tenant ownership resolved from one concrete resource target.
+///
+/// A `None` organization identifies a platform resource. Callers must still
+/// compare a tenant organization with the signed token context before checking
+/// any role binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedResourcePermissionTarget {
+    pub permission_name: String,
+    pub resource_id: String,
+    pub organization_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

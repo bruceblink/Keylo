@@ -114,8 +114,9 @@ async fn list_authorization_audit_logs_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let logs = crate::db::list_authorization_audit_logs(
+    let logs = crate::db::list_authorization_audit_logs_in_organization(
         db,
+        query.organization_id.as_deref(),
         query.principal_id.as_deref(),
         query.decision.as_deref(),
         query.permission_name.as_deref(),

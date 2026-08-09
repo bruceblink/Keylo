@@ -14,10 +14,60 @@ use crate::{
     models::{
         AuthorizeBatchCheckRequest, AuthorizeBatchCheckResponse, AuthorizeCheckRequest,
         AuthorizeCheckResponse, Claims, Principal, PrincipalEffectivePermissionsResponse,
-        ResourceTreeQuery,
+        ResolvedResourcePermissionTarget, ResourceTreeQuery,
     },
     state::AppState,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AuthorizationTargetKind {
+    Permission,
+    Resource { organization_id: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedAuthorizationTarget {
+    permission_name: Option<String>,
+    resource_id: Option<String>,
+    kind: AuthorizationTargetKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AuthorizationRoleScope {
+    Platform,
+    Organization(String),
+    CrossOrganization,
+}
+
+impl AuthorizationTargetKind {
+    /// Selects the only role scope allowed for the authenticated target.
+    ///
+    /// Direct permission checks follow the signed organization context. A
+    /// concrete platform resource remains platform-scoped even when an
+    /// internal employee carries a live organization context; a tenant
+    /// resource must match that context exactly.
+    fn role_scope(&self, organization_id: Option<&str>) -> AuthorizationRoleScope {
+        match self {
+            Self::Permission => organization_id
+                .map_or(AuthorizationRoleScope::Platform, |organization_id| {
+                    AuthorizationRoleScope::Organization(organization_id.to_string())
+                }),
+            Self::Resource {
+                organization_id: Some(resource_organization_id),
+            } => match organization_id {
+                Some(context_organization_id)
+                    if context_organization_id == resource_organization_id =>
+                {
+                    AuthorizationRoleScope::Organization(resource_organization_id.clone())
+                }
+                _ => AuthorizationRoleScope::CrossOrganization,
+            },
+            Self::Resource {
+                organization_id: None,
+            } => AuthorizationRoleScope::Platform,
+        }
+    }
+}
 
 pub fn authorization_routes() -> Router<AppState> {
     Router::new()
@@ -125,15 +175,56 @@ async fn resolve_access_principal(
     Ok(principal)
 }
 
+/// Re-checks the organization claim against current lifecycle state.
+///
+/// Access tokens intentionally carry only the selected organization, so every
+/// authorization endpoint performs this live membership check before reading
+/// organization-scoped roles. A stale or revoked context is one generic
+/// forbidden result rather than a tenant-existence hint.
+async fn resolve_authorization_context(
+    db: &sqlx::PgPool,
+    principal: &Principal,
+    claims: Option<&Claims>,
+) -> Result<Option<String>, AuthError> {
+    let Some(organization_id) = claims.and_then(|claims| claims.organization_id.as_deref()) else {
+        return Ok(None);
+    };
+
+    let membership =
+        crate::db::get_active_organization_membership(db, organization_id, &principal.id)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    if membership.is_none() {
+        let _ = crate::db::create_authorization_audit_log_in_organization(
+            db,
+            Some(organization_id),
+            Some(&principal.id),
+            "deny",
+            None,
+            None,
+            Some("reason=organization_context_inactive"),
+        )
+        .await;
+        return Err(AuthError::Forbidden);
+    }
+
+    Ok(Some(organization_id.to_string()))
+}
+
 /// Resolves an authorization target into its permission and optional concrete resource ID for auditing.
 async fn resolve_permission_target(
     db: &sqlx::PgPool,
     request: &AuthorizeCheckRequest,
-) -> Result<(Option<String>, Option<String>), AuthError> {
+    organization_id: Option<&str>,
+) -> Result<ResolvedAuthorizationTarget, AuthError> {
     if let Some(permission) = request.permission.as_deref() {
         let permission = permission.trim();
         if !permission.is_empty() {
-            return Ok((Some(permission.to_string()), None));
+            return Ok(ResolvedAuthorizationTarget {
+                permission_name: Some(permission.to_string()),
+                resource_id: None,
+                kind: AuthorizationTargetKind::Permission,
+            });
         }
     }
 
@@ -143,17 +234,39 @@ async fn resolve_permission_target(
         request.resource_code.as_deref(),
     ) {
         (Some(app), Some(resource_type), Some(resource_code)) => {
-            crate::db::permission_for_resource(db, app, resource_type, resource_code)
-                .await
-                .map(|target| match target {
-                    Some((permission_name, resource_id)) => {
-                        (Some(permission_name), Some(resource_id))
-                    }
-                    None => (None, None),
-                })
-                .map_err(|e| AuthError::DatabaseError(e.to_string()))
+            crate::db::permission_for_resource(
+                db,
+                app,
+                resource_type,
+                resource_code,
+                organization_id,
+            )
+            .await
+            .map(|target| match target {
+                Some(ResolvedResourcePermissionTarget {
+                    permission_name,
+                    resource_id,
+                    organization_id,
+                }) => ResolvedAuthorizationTarget {
+                    permission_name: Some(permission_name),
+                    resource_id: Some(resource_id),
+                    kind: AuthorizationTargetKind::Resource { organization_id },
+                },
+                None => ResolvedAuthorizationTarget {
+                    permission_name: None,
+                    resource_id: None,
+                    kind: AuthorizationTargetKind::Resource {
+                        organization_id: None,
+                    },
+                },
+            })
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))
         }
-        _ => Ok((None, None)),
+        _ => Ok(ResolvedAuthorizationTarget {
+            permission_name: None,
+            resource_id: None,
+            kind: AuthorizationTargetKind::Permission,
+        }),
     }
 }
 
@@ -161,33 +274,71 @@ async fn check_one(
     db: &sqlx::PgPool,
     principal: &Principal,
     request: &AuthorizeCheckRequest,
+    organization_id: Option<&str>,
 ) -> Result<AuthorizeCheckResponse, AuthError> {
-    let (permission_name, resource_id) = resolve_permission_target(db, request).await?;
-    let (allowed, reason) = match permission_name.as_deref() {
-        Some(permission) => {
-            let allowed = crate::db::principal_has_permission(db, &principal.id, permission)
-                .await
+    let target = resolve_permission_target(db, request, organization_id).await?;
+    let role_scope = target.kind.role_scope(organization_id);
+    let scope_mismatch = matches!(role_scope, AuthorizationRoleScope::CrossOrganization);
+    let exposed_permission = if scope_mismatch {
+        None
+    } else {
+        target.permission_name.as_deref()
+    };
+    let exposed_resource_id = if scope_mismatch {
+        None
+    } else {
+        target.resource_id.as_deref()
+    };
+    let (allowed, reason) = if scope_mismatch {
+        (false, "permission_not_resolved")
+    } else {
+        match target.permission_name.as_deref() {
+            Some(permission) => {
+                let allowed = match &role_scope {
+                    AuthorizationRoleScope::Platform => {
+                        crate::db::principal_has_permission(db, &principal.id, permission).await
+                    }
+                    AuthorizationRoleScope::Organization(organization_id) => {
+                        crate::db::principal_has_organization_permission(
+                            db,
+                            &principal.id,
+                            organization_id,
+                            permission,
+                        )
+                        .await
+                    }
+                    AuthorizationRoleScope::CrossOrganization => unreachable!(),
+                }
                 .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-            (
-                allowed,
-                if allowed {
-                    "permission_granted"
-                } else {
-                    "permission_not_bound"
-                },
-            )
+                (
+                    allowed,
+                    if allowed {
+                        "permission_granted"
+                    } else {
+                        "permission_not_bound"
+                    },
+                )
+            }
+            None => (false, "permission_not_resolved"),
         }
-        None => (false, "permission_not_resolved"),
     };
     let decision = if allowed { "allow" } else { "deny" };
 
-    let _ = crate::db::create_authorization_audit_log(
+    let _ = crate::db::create_authorization_audit_log_in_organization(
         db,
+        organization_id,
         Some(&principal.id),
         decision,
-        permission_name.as_deref(),
-        resource_id.as_deref(),
-        Some(&format!("reason={reason}")),
+        exposed_permission,
+        exposed_resource_id,
+        Some(&format!(
+            "reason={reason},scope={}",
+            match role_scope {
+                AuthorizationRoleScope::Platform => "platform",
+                AuthorizationRoleScope::Organization(_) => "organization",
+                AuthorizationRoleScope::CrossOrganization => "cross_organization",
+            }
+        )),
     )
     .await;
 
@@ -196,7 +347,7 @@ async fn check_one(
         decision: decision.to_string(),
         reason: reason.to_string(),
         principal_id: principal.id.clone(),
-        matched_permission: permission_name,
+        matched_permission: exposed_permission.map(ToOwned::to_owned),
     })
 }
 
@@ -206,12 +357,13 @@ async fn authorize_check(
     Json(payload): Json<AuthorizeCheckRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     payload.validate().map_err(AuthError::InvalidRequest)?;
-    let (principal, _) = principal_from_bearer(&state, bearer.token()).await?;
+    let (principal, claims) = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let result = check_one(db, &principal, &payload).await?;
+    let organization_id = resolve_authorization_context(db, &principal, claims.as_ref()).await?;
+    let result = check_one(db, &principal, &payload, organization_id.as_deref()).await?;
 
     Ok(Json(json!({
         "success": true,
@@ -225,14 +377,15 @@ async fn authorize_batch_check(
     Json(payload): Json<AuthorizeBatchCheckRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     payload.validate().map_err(AuthError::InvalidRequest)?;
-    let (principal, _) = principal_from_bearer(&state, bearer.token()).await?;
+    let (principal, claims) = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let organization_id = resolve_authorization_context(db, &principal, claims.as_ref()).await?;
     let mut results = Vec::with_capacity(payload.checks.len());
     for check in &payload.checks {
-        results.push(check_one(db, &principal, check).await?);
+        results.push(check_one(db, &principal, check, organization_id.as_deref()).await?);
     }
 
     Ok(Json(json!({
@@ -245,17 +398,27 @@ async fn my_effective_permissions(
     State(state): State<AppState>,
     TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    let (principal, _) = principal_from_bearer(&state, bearer.token()).await?;
+    let (principal, claims) = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let roles = crate::db::get_principal_roles(db, &principal.id)
-        .await
-        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-    let permissions = crate::db::get_principal_permissions(db, &principal.id)
-        .await
-        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    let organization_id = resolve_authorization_context(db, &principal, claims.as_ref()).await?;
+    let roles = match organization_id.as_deref() {
+        Some(organization_id) => {
+            crate::db::get_principal_organization_roles(db, &principal.id, organization_id).await
+        }
+        None => crate::db::get_principal_roles(db, &principal.id).await,
+    }
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    let permissions = match organization_id.as_deref() {
+        Some(organization_id) => {
+            crate::db::get_principal_organization_permissions(db, &principal.id, organization_id)
+                .await
+        }
+        None => crate::db::get_principal_permissions(db, &principal.id).await,
+    }
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
     Ok(Json(json!({
         "success": true,
@@ -272,14 +435,16 @@ async fn my_resource_tree(
     TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
     Query(query): Query<ResourceTreeQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    let (principal, _) = principal_from_bearer(&state, bearer.token()).await?;
+    let (principal, claims) = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let tree = crate::db::authorized_resources_for_principal(
+    let organization_id = resolve_authorization_context(db, &principal, claims.as_ref()).await?;
+    let tree = crate::db::authorized_resources_for_principal_in_organization(
         db,
         &principal.id,
+        organization_id.as_deref(),
         &query.app,
         &query.resource_type,
     )
@@ -290,4 +455,57 @@ async fn my_resource_tree(
         "success": true,
         "data": tree
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_permission_uses_live_organization_context() {
+        assert_eq!(
+            AuthorizationTargetKind::Permission.role_scope(Some("org-a")),
+            AuthorizationRoleScope::Organization("org-a".to_string())
+        );
+        assert_eq!(
+            AuthorizationTargetKind::Permission.role_scope(None),
+            AuthorizationRoleScope::Platform
+        );
+    }
+
+    #[test]
+    fn resource_scope_rejects_cross_organization_access() {
+        assert_eq!(
+            AuthorizationTargetKind::Resource {
+                organization_id: Some("org-a".to_string()),
+            }
+            .role_scope(Some("org-a")),
+            AuthorizationRoleScope::Organization("org-a".to_string())
+        );
+        assert_eq!(
+            AuthorizationTargetKind::Resource {
+                organization_id: Some("org-a".to_string()),
+            }
+            .role_scope(Some("org-b")),
+            AuthorizationRoleScope::CrossOrganization
+        );
+        assert_eq!(
+            AuthorizationTargetKind::Resource {
+                organization_id: Some("org-a".to_string()),
+            }
+            .role_scope(None),
+            AuthorizationRoleScope::CrossOrganization
+        );
+    }
+
+    #[test]
+    fn platform_resources_remain_platform_scoped() {
+        assert_eq!(
+            AuthorizationTargetKind::Resource {
+                organization_id: None,
+            }
+            .role_scope(Some("org-a")),
+            AuthorizationRoleScope::Platform
+        );
+    }
 }

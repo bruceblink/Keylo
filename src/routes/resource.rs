@@ -54,8 +54,19 @@ async fn list_resources_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let resources = crate::db::list_resources(
+    let organization_id = query
+        .organization_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if query.organization_id.is_some() && organization_id.is_none() {
+        return Err(AuthError::InvalidRequest(
+            "organization_id must not be blank".to_string(),
+        ));
+    }
+    let resources = crate::db::list_resources_for_admin(
         db,
+        organization_id,
         query.app.as_deref(),
         query.resource_type.as_deref(),
         query.active,
@@ -86,9 +97,21 @@ async fn create_resource_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let organization_id = payload
+        .organization_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if payload.organization_id.is_some() && organization_id.is_none() {
+        return Err(AuthError::InvalidRequest(
+            "organization_id must not be blank".to_string(),
+        ));
+    }
     let permission_ids = payload.permission_ids.unwrap_or_default();
-    let resource = crate::db::create_resource(
+    let resource = crate::db::create_resource_in_organization(
         db,
+        organization_id.as_deref(),
         crate::db::CreateResourceParams {
             app: payload.app.trim(),
             resource_type: payload.resource_type.trim(),
@@ -108,8 +131,12 @@ async fn create_resource_handler(
         "resource.created",
         Some(&claims.sub),
         Some(&format!(
-            "resource_id={}, app={}, type={}, code={}",
-            resource.id, resource.app, resource.resource_type, resource.code
+            "resource_id={}, organization_id={}, app={}, type={}, code={}",
+            resource.id,
+            resource.organization_id.as_deref().unwrap_or("platform"),
+            resource.app,
+            resource.resource_type,
+            resource.code
         )),
     )
     .await
@@ -189,8 +216,9 @@ async fn update_resource_handler(
         "resource.updated",
         Some(&claims.sub),
         Some(&format!(
-            "resource_id={}, version={}{}",
+            "resource_id={}, organization_id={}, version={}{}",
             resource.id,
+            resource.organization_id.as_deref().unwrap_or("platform"),
             resource.version,
             audit_reason_suffix(change_reason),
         )),
@@ -283,8 +311,12 @@ async fn revert_resource_change_handler(
         "resource.reverted",
         Some(&claims.sub),
         Some(&format!(
-            "resource_id={}, reverted_change_version={}, version={}, reason={}",
-            resource.id, history_version, resource.version, change_reason
+            "resource_id={}, organization_id={}, reverted_change_version={}, version={}, reason={}",
+            resource.id,
+            resource.organization_id.as_deref().unwrap_or("platform"),
+            history_version,
+            resource.version,
+            change_reason
         )),
     )
     .await
@@ -306,6 +338,10 @@ async fn assign_resource_permission_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let resource = crate::db::get_resource_by_id(db, &resource_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or(AuthError::NotFound)?;
     crate::db::assign_permission_to_resource(db, &resource_id, &payload.permission_id)
         .await
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
@@ -314,8 +350,9 @@ async fn assign_resource_permission_handler(
         "resource.permission_assigned",
         Some(&claims.sub),
         Some(&format!(
-            "resource_id={}, permission_id={}{}",
+            "resource_id={}, organization_id={}, permission_id={}{}",
             resource_id,
+            resource.organization_id.as_deref().unwrap_or("platform"),
             payload.permission_id,
             audit_reason_suffix(payload.change_reason.as_deref()),
         )),
@@ -348,6 +385,10 @@ async fn revoke_resource_permission_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let resource = crate::db::get_resource_by_id(db, &resource_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or(AuthError::NotFound)?;
     let revoked = crate::db::revoke_permission_from_resource(db, &resource_id, &permission_id)
         .await
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
@@ -359,8 +400,9 @@ async fn revoke_resource_permission_handler(
         "resource.permission_revoked",
         Some(&claims.sub),
         Some(&format!(
-            "resource_id={}, permission_id={}{}",
+            "resource_id={}, organization_id={}, permission_id={}{}",
             resource_id,
+            resource.organization_id.as_deref().unwrap_or("platform"),
             permission_id,
             audit_reason_suffix(payload.change_reason.as_deref()),
         )),

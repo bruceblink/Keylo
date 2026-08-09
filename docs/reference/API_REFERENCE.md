@@ -444,6 +444,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 `resource-tree` 的 `type` 支持 `menu`、`button`、`api`、`service`、`data_scope`。用户通常消费 `menu/button/data_scope`，服务通常消费 `api/service`。
 
+access token 带有 `organization_id` 时，这两个端点会实时确认该 Principal 仍是该组织的 active member，随后只解释该组织的 `organization_role_bindings` 和该组织资源；成员被移除、暂停或组织被停用后，旧 token 不会继续获得组织权限。没有组织上下文的 access token 与现有 `service_access` 只解释 platform role 和 platform resource。服务 token 尚不携带组织上下文，组织级机器身份将在 API key 功能中单独交付。
+
 ### 7.2 统一授权检查
 
 | 方法 | 路径 | 鉴权 | 说明 |
@@ -471,6 +473,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 每个检查必须二选一：提供非空 `permission`，或同时提供非空 `app`、`resource_type`、`resource_code`。混用两种目标、空权限或不完整资源坐标返回 `invalid_request`，不会被静默降级为拒绝。
 
+授权上下文只来自签名 token，不能由请求头或请求体覆盖。直接 permission 检查在带 `organization_id` 的 access token 下只读取当前组织的 active membership 与 organization role；按资源坐标检查会先解析资源归属，tenant resource 必须属于当前组织，platform resource 只接受 platform role。未知、跨组织、已停用或不可见的资源统一返回普通 deny，不暴露其他组织是否存在。batch-check 对整批请求只解析一次相同的 live context。
+
 响应：
 
 ```json
@@ -497,7 +501,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/v1/admin/principals?principal_type=&active=&limit=&offset=` | Principal 列表 |
-| GET | `/v1/admin/authorization-audit-logs?principal_id=&decision=&permission_name=&resource_id=&limit=&offset=` | 授权决策审计日志；`decision` 可筛选 `allow` 或 `deny` |
+| GET | `/v1/admin/authorization-audit-logs?organization_id=&principal_id=&decision=&permission_name=&resource_id=&limit=&offset=` | 授权决策审计日志；organization_id 为精确组织过滤，`decision` 可筛选 `allow` 或 `deny` |
 | POST | `/v1/admin/authorization-audit-logs/cleanup` | 清理超过保留期的授权审计日志，体为 `{ "retention_days": 30 }` |
 | GET | `/v1/admin/principals/{principal_id}` | Principal 详情 |
 | GET | `/v1/admin/principals/{principal_id}/roles` | Principal 角色 |
@@ -534,7 +538,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/admin/resources?app=&type=&active=` | 资源列表 |
+| GET | `/v1/admin/resources?organization_id=&app=&type=&active=` | 资源列表；提供 organization_id 时只返回该组织资源 |
 | POST | `/v1/admin/resources` | 创建或更新资源 |
 | PUT | `/v1/admin/resources/{resource_id}` | 更新资源可变字段；必须提供 `expected_version`，冲突返回 `409` |
 | GET | `/v1/admin/resources/{resource_id}/changes?limit=&offset=` | 资源更新版本、操作者、原因及前后快照 |
@@ -547,6 +551,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 ```json
 {
+  "organization_id": "organization-id-or-null",
   "app": "keystone",
   "resource_type": "menu",
   "code": "system:user",
@@ -568,13 +573,13 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 }
 ```
 
-`metadata` 可选，用于保存资源服务自己的展示或路由元数据。Keystone 菜单迁移时可以在这里保存 `router_name`、`path`、`component`、`meta` 等字段，再由 Keystone BFF 或前端映射为原 `RouterDTO`。
+`organization_id` 省略或为 `null` 时创建 platform resource；提供有效 ID 时创建该组织的 resource。同一 `app/type/code` 可以在不同组织复用，但父子资源必须位于同一 scope。`metadata` 可选，用于保存资源服务自己的展示或路由元数据。Keystone 菜单迁移时可以在这里保存 `router_name`、`path`、`component`、`meta` 等字段，再由 Keystone BFF 或前端映射为原 `RouterDTO`。
 
-资源通过 `resource_permissions` 绑定到权限点。`/v1/principals/me/resource-tree` 只返回当前 Principal 通过角色权限可见的资源节点，并包含必要祖先节点。若 Principal 拥有 `*:*:*` 权限，则返回指定 `app` 和 `type` 下的全部 active 资源。资源树响应会保留 `metadata`。
+资源通过 `resource_permissions` 绑定到权限点。`/v1/principals/me/resource-tree` 只返回当前 Principal 在当前授权 scope 内通过角色权限可见的资源节点，并包含必要祖先节点。若 Principal 在该 scope 拥有 `*:*:*` 权限，则返回指定 `app` 和 `type` 下的全部 active 资源。资源树响应会保留 `metadata`，并返回资源的 `organization_id`。
 
 ### 7.5 平台组织与成员状态管理
 
-> 这些是平台管理员接口，不是组织 owner/admin 自服务接口。组织角色绑定仍未进入通用授权决策；因此这些端点不能被解释为已经完成租户资源隔离。
+> 这些是平台管理员接口，不是组织 owner/admin 自服务接口。平台管理员的跨组织操作必须显式携带目标组织 ID；组织资源与组织角色绑定不会被当作 platform 权限。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -620,7 +625,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | POST | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles` | `{ "role_id": "..." }`，只接受 organization-scoped role |
 | DELETE | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles/{role_id}` | 幂等撤销组织角色绑定 |
 
-`organization_role_bindings` 在当前版本只作为显式绑定存储，不会自动转化为通用平台权限；跨组织、停用组织、非 active membership 和平台角色绑定均失败关闭。成功写操作会分别写入 `organization.membership.invited`、`organization.membership.updated`、`organization.membership.joined`、`organization.role_binding.assigned` 或 `organization.role_binding.revoked` 审计事件。
+`organization_role_bindings` 只在持有相同 signed organization context、且组织与 membership 均为 active 时参与组织作用域的授权决策；它们不会转化为通用 platform 权限。跨组织、停用组织、非 active membership 和平台角色绑定均失败关闭。成功写操作会分别写入 `organization.membership.invited`、`organization.membership.updated`、`organization.membership.joined`、`organization.role_binding.assigned` 或 `organization.role_binding.revoked` 审计事件。
 
 ### 7.7 Refresh Session 与会话策略
 

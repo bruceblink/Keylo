@@ -889,8 +889,8 @@ pub async fn assign_organization_role(
 }
 
 /// Stores an organization-scoped role binding after the caller passes the
-/// separate membership-management check. The binding is not read by general
-/// authorization until the organization authorization engine is introduced.
+/// separate membership-management check. Live authorization reads this binding
+/// only inside the same active organization context, never as a platform grant.
 pub async fn assign_organization_role_as_manager(
     pool: &PgPool,
     organization_id: &str,

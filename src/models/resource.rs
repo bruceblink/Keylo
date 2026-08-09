@@ -4,6 +4,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Resource {
     pub id: String,
+    pub organization_id: Option<String>,
     pub app: String,
     pub resource_type: String,
     pub code: String,
@@ -20,6 +21,7 @@ pub struct Resource {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateResourceRequest {
+    pub organization_id: Option<String>,
     pub app: String,
     pub resource_type: String,
     pub code: String,
@@ -62,6 +64,7 @@ pub struct RevertResourceChangeRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct ResourceListQuery {
+    pub organization_id: Option<String>,
     pub app: Option<String>,
     #[serde(rename = "type")]
     pub resource_type: Option<String>,

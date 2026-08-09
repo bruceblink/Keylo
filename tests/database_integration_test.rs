@@ -337,6 +337,127 @@ mod database_tests {
         .is_err());
     }
 
+    /// Verifies the database constraints that keep tenant resource identities
+    /// reusable across organizations but never allow a cross-scope tree edge.
+    #[tokio::test]
+    async fn test_organization_resources_are_isolated_by_scope() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_organization_resources_are_isolated_by_scope: {msg}");
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization_a = db::create_organization(
+            &pool,
+            &format!("resource-a-{suffix}"),
+            "Resource organization A",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create organization A");
+        let organization_b = db::create_organization(
+            &pool,
+            &format!("resource-b-{suffix}"),
+            "Resource organization B",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create organization B");
+        let code = format!("shared-resource-{suffix}");
+        let platform_resource = db::create_resource(
+            &pool,
+            db::CreateResourceParams {
+                app: "scope-test",
+                resource_type: "menu",
+                code: &code,
+                name: "Platform resource",
+                parent_id: None,
+                display_order: 0,
+                description: None,
+                metadata: None,
+                permission_ids: &[],
+            },
+        )
+        .await
+        .expect("Failed to create platform resource");
+        let organization_a_resource = db::create_resource_in_organization(
+            &pool,
+            Some(&organization_a.id),
+            db::CreateResourceParams {
+                app: "scope-test",
+                resource_type: "menu",
+                code: &code,
+                name: "Organization A resource",
+                parent_id: None,
+                display_order: 0,
+                description: None,
+                metadata: None,
+                permission_ids: &[],
+            },
+        )
+        .await
+        .expect("Failed to create organization A resource");
+        let organization_b_resource = db::create_resource_in_organization(
+            &pool,
+            Some(&organization_b.id),
+            db::CreateResourceParams {
+                app: "scope-test",
+                resource_type: "menu",
+                code: &code,
+                name: "Organization B resource",
+                parent_id: None,
+                display_order: 0,
+                description: None,
+                metadata: None,
+                permission_ids: &[],
+            },
+        )
+        .await
+        .expect("Failed to create organization B resource");
+        assert_eq!(platform_resource.organization_id, None);
+        assert_eq!(
+            organization_a_resource.organization_id.as_deref(),
+            Some(organization_a.id.as_str())
+        );
+        assert_eq!(
+            organization_b_resource.organization_id.as_deref(),
+            Some(organization_b.id.as_str())
+        );
+
+        let tenant_resources = db::list_resources_for_admin(
+            &pool,
+            Some(&organization_a.id),
+            Some("scope-test"),
+            Some("menu"),
+            None,
+        )
+        .await
+        .expect("Failed to list organization A resources");
+        assert_eq!(tenant_resources.len(), 1);
+        assert_eq!(tenant_resources[0].id, organization_a_resource.id);
+
+        let cross_scope_child = db::create_resource_in_organization(
+            &pool,
+            Some(&organization_a.id),
+            db::CreateResourceParams {
+                app: "scope-test",
+                resource_type: "menu",
+                code: &format!("cross-scope-child-{suffix}"),
+                name: "Cross scope child",
+                parent_id: Some(&platform_resource.id),
+                display_order: 0,
+                description: None,
+                metadata: None,
+                permission_ids: &[],
+            },
+        )
+        .await;
+        assert!(cross_scope_child.is_err());
+    }
+
     #[tokio::test]
     async fn test_platform_roles_require_internal_employee_and_fail_closed_for_legacy_bindings() {
         let _guard = DB_TEST_LOCK.lock().await;
