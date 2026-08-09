@@ -3485,6 +3485,19 @@ mod tests {
         let members_body: serde_json::Value = members.json();
         assert_eq!(members_body["data"].as_array().unwrap().len(), 1);
 
+        let members_page = server
+            .get(&format!(
+                "/v1/admin/organizations/{organization_id}/memberships?limit=1&offset=0"
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        members_page.assert_status_ok();
+        let members_page_body: serde_json::Value = members_page.json();
+        assert_eq!(members_page_body["pagination"]["limit"], 1);
+        assert_eq!(members_page_body["pagination"]["offset"], 0);
+        assert_eq!(members_page_body["pagination"]["has_more"], false);
+        assert!(members_page_body["pagination"]["next_offset"].is_null());
+
         let internal = server
             .post("/v1/admin/organizations")
             .add_header("Authorization", format!("Bearer {admin_token}"))

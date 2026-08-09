@@ -353,12 +353,14 @@ async fn list_memberships_handler(
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .ok_or(AuthError::NotFound)?;
-    let memberships = crate::db::list_organization_memberships(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (memberships, has_more) = crate::db::list_organization_memberships_page(
         db,
         &organization_id,
         query.status.as_deref(),
-        query.limit.unwrap_or(50),
-        query.offset.unwrap_or(0),
+        limit,
+        offset,
     )
     .await
     .map_err(map_organization_error)?;
@@ -366,6 +368,12 @@ async fn list_memberships_handler(
     Ok(Json(json!({
         "success": true,
         "data": memberships,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 

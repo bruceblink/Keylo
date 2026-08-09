@@ -622,21 +622,22 @@ pub async fn get_organization_membership(
     .await?)
 }
 
-/// Lists memberships for one organization while keeping pagination bounded.
-pub async fn list_organization_memberships(
+/// List one organization's memberships and report whether another page exists.
+pub async fn list_organization_memberships_page(
     pool: &PgPool,
     organization_id: &str,
     status: Option<&str>,
     limit: i64,
     offset: i64,
-) -> Result<Vec<OrganizationMembership>> {
+) -> Result<(Vec<OrganizationMembership>, bool)> {
     if let Some(status) = status {
         if !is_valid_membership_status(status) {
             anyhow::bail!("invalid_organization_membership_status");
         }
     }
 
-    Ok(sqlx::query_as::<_, OrganizationMembership>(
+    let limit = limit.clamp(1, 200);
+    let mut memberships = sqlx::query_as::<_, OrganizationMembership>(
         r#"
         SELECT organization_id, principal_id, status, joined_at, invited_by,
                management_role, updated_at
@@ -649,10 +650,27 @@ pub async fn list_organization_memberships(
     )
     .bind(organization_id)
     .bind(status)
-    .bind(limit.clamp(1, 200))
+    .bind(limit + 1)
     .bind(offset.max(0))
     .fetch_all(pool)
-    .await?)
+    .await?;
+    let has_more = memberships.len() > limit as usize;
+    memberships.truncate(limit as usize);
+    Ok((memberships, has_more))
+}
+
+pub async fn list_organization_memberships(
+    pool: &PgPool,
+    organization_id: &str,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<OrganizationMembership>> {
+    Ok(
+        list_organization_memberships_page(pool, organization_id, status, limit, offset)
+            .await?
+            .0,
+    )
 }
 
 /// Invites or updates a member on behalf of an active organization owner/admin.
