@@ -71,17 +71,17 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 
 ## 3. 当前代码能力基线
 
-下表按 2026-08-09 的源码、迁移和测试核对，不把历史发布说明当作现状。
+下表按 2026-08-10 的源码、迁移和测试核对，不把历史发布说明当作现状。
 
 | 领域 | 当前代码能力 | 仍然存在的边界 |
 | --- | --- | --- |
-| 标准 OIDC | Discovery、Authorization Code、PKCE、state、nonce、ID Token、UserInfo、consent、浏览器会话、退出、confidential/public client 和 secret rotation | 只发布 authorization_code；没有 Dynamic Client Registration、OIDC token revocation、Device/CIBA/PAR/DPoP |
+| 标准 OIDC | Discovery、Authorization Code、PKCE、state、nonce、ID Token、UserInfo、consent、浏览器会话、退出、confidential/public client 和 secret rotation；relying party client 支持显式 platform/organization scope | 只发布 authorization_code；组织 client 需要 owner/admin 的 active organization context；没有 Dynamic Client Registration、OIDC token revocation、Device/CIBA/PAR/DPoP |
 | 本地账户 | 注册、密码登录、密码复杂度、限流、登录锁定、用户/管理员密码修改或重置、email_verified 状态 | 没有 SMTP 或其他邮件投递；验证邮箱目前由可信上游或完成近期 MFA 的管理员触发；没有用户自助 forgot-password 邮件流程 |
 | MFA | TOTP enrollment、近期验证、恢复码、敏感管理操作的 step-up 和审计 | 没有 WebAuthn/Passkey；不把 TOTP 自动扩展成任意认证流编排 |
 | 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、显式 user class/fixed organization 策略、邮箱变化记录、启停和会话撤销 | identity source 的 ldap 类型目前只是注册元数据，不包含 LDAP bind、同步、组映射或故障切换 |
-| 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`；service/device Principal 都可绑定多个 API key，显式为 platform 或单一 organization scope，组织调用每次实时重验组织与 membership | API key 只开放给明确声明的授权检查 API；OIDC client 的组织归属仍未实现 |
+| 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`；service/device Principal 都可绑定多个 API key，显式为 platform 或单一 organization scope，组织调用每次实时重验组织与 membership | API key 只开放给明确声明的授权检查 API；不支持把 API key 作为人类 Bearer Token |
 | 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | platform 与 organization 角色按 signed active context 分开决策，资源按 organization_id 过滤；组、composite role 和细粒度 delegated admin 仍未实现 |
-| SaaS 组织基础 | `organizations`、`user_class`、成员关系、组织角色绑定、资源、refresh session、service client、identity source 和 device/API key scope 已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织；平台与组织成员管理 API 已可用 | organization role binding 只在同一 signed active context 中参与授权；OIDC client 尚未成为隔离客户对象 |
+| SaaS 组织基础 | `organizations`、`user_class`、成员关系、组织角色绑定、资源、refresh session、OIDC client、service client、identity source 和 device/API key scope 已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织；平台与组织成员管理 API 已可用 | organization role binding 和 organization OIDC client 管理只在同一 signed active context 中生效 |
 | Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | 人类密码登录可显式建立 organization-scoped refresh session，生命周期会撤销该 scope；JWKS 当前只包含一把活动公钥，没有新旧 key 并行的无感轮换 |
 | 运行和首启 | PostgreSQL SQLx migrations、Redis 生产就绪校验、healthz/readyz、固定基数 metrics、审计清理、密文配置、setup wizard | 尚未承诺多实例一致性、outbox/webhook、OpenTelemetry 或跨区域恢复 |
 | 管理体验 | API-first 的用户、客户端、服务、身份源、Principal、RBAC、资源和审计接口；setup wizard 只做首启诊断 | 没有 Admin Console、Account Console、主题系统或管理 CLI |
@@ -97,6 +97,7 @@ Principal 是 Keylo 的统一安全主体。人类用户、服务/设备机器�
 | Principal | `user`、`service`、`device`、`client` 的统一身份；device 以 immutable platform/organization scope 记录 | subject 稳定进入 JWT sub；禁用主体默认拒绝 |
 | User class | user Principal 的账户类别 | 当前至少为 internal_employee、external_customer；类别只约束入驻和可分配作用域，不直接授予权限 |
 | Machine credential | 绑定到 service/device Principal 的 service secret 或 API key | 凭证不等于权限；API key 只用于机器调用，必须经过状态、组织、scope/audience 和 RBAC 校验 |
+| OIDC client | 标准 relying party 的 client registration；显式为 platform 或单一 organization scope | organization scope 在创建时固定，owner/admin 只能通过同组织 active context 管理；scope 不可迁移 |
 | Role | 可绑定给适用类型 Principal 的权限集合 | `scope=platform` 角色用于全局能力；`scope=organization` 角色只能经 organization membership binding 生效；assignable_to 限制绑定对象；系统角色不可被普通操作破坏 |
 | Permission | 对外稳定的业务权限点 | 推荐命名为 {app}:{resource}:{action}，例如 keystone:system:user:list |
 | Resource | 菜单、按钮、API、服务能力或数据范围的统一表达 | 资源树用于展示和预检，不替代服务端最终授权 |
@@ -115,6 +116,7 @@ allowed_scopes 和 allowed_audiences 继续约束服务 Token 的签发边界；
 | --- | --- | --- |
 | access | 用户、管理客户端或资源服务访问 API | 校验签名、issuer、audience、时效和 token_type |
 | refresh | 换取新 access token | 仅安全保存；每次使用原子轮换，重放撤销所属会话；organization-scoped token 还必须匹配 session 记录和实时 active membership |
+| OIDC ID/access | 标准 relying party 的身份和 UserInfo 访问 | organization client 的 token 只携带当前 `organization_id`；授权码兑换和 UserInfo 实时重验 client、用户 Principal、组织和 membership |
 | service_access | 服务间访问 | 先满足 scope/audience 白名单，再由服务 Principal 的 RBAC 判定能力 |
 | api_key | 机器/设备直接调用显式支持的 API | 使用 `X-API-Key` 传递；服务端只保存 hash 和可查找的 key id/prefix，检查 active、过期、组织、scope/audience、RBAC 和限流；不创建 refresh session |
 
@@ -137,7 +139,7 @@ Spring、Node、Go、Rust 样例与授权决策契约见 [第三方系统与服�
 
 Organization 是 SaaS 租户边界，但不是新的认证协议或 Realm 层级。Keylo 先采用单部署、多组织、共享运行时的模型；所有组织拥有的数据和关系必须显式带 organization_id，平台级对象才允许为空。
 
-当前实现状态（2026-08-10）：组织、用户类别、成员关系、组织角色绑定、资源、refresh session、service client 和 device/API key scope 已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台角色写入统一校验 `user_class` 与 role scope：external_customer 不能通过 user、Principal、provision 或批量接口获得 platform/global role，organization role 只能进入同组织的 organization_role_bindings；对 user Principal 的授予和撤销同步维护两张角色关系表。历史脏绑定在同步、权限、资源树、管理 Token 和 introspection 读取侧默认失败关闭，并会阻止将该账户提升为 internal_employee，直到管理员显式清理绑定。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。授权 check、batch-check、effective-permissions 与 resource-tree 每次都重验 signed active organization context、组织状态和 membership，并分别解释 platform role 或同组织 role binding；相同资源坐标可以由多个组织复用，跨组织资源保持普通 deny/forbidden 边界。人类密码登录提供 organization_id 时会创建相同 scope 的 refresh session，刷新时再次校验 scope 和 live membership，组织停用/归档或成员失效会原子撤销该 scope。service client 与 device 现在都明确存储 platform 或 organization scope；组织范围 device 创建会原子建立 active membership，API key 只保存 bcrypt hash，固定继承机器 Principal 的 scope，支持重叠轮换和显式撤销。`X-API-Key` 只在 `/v1/authorize/check` 与 `/v1/authorize/batch-check` 解析，且每次实时重验 key、scope/audience、Principal、组织、membership 和 RBAC；它不进入人类认证或 refresh 流程。拥有 signed active context 的 organization owner/admin 可以列出、创建、读取、更新和轮换本组织 service/device 与 API key；这些写操作要求近期 MFA，并且查询和写入都使用组织过滤。internal_employee 的 customer-support 访问现通过固定受限角色、目标 customer 组织、read operation、人工原因与短期无 refresh token 的 context grant；每次读取和 introspection 都重新校验 grant、角色、人员和组织状态，并写入结构化审计。identity source 已落地显式 `allowed_user_class` 与 `none/fixed` 组织策略、active organization 校验、JIT membership 和 scoped session；OIDC client 的 tenant 归属仍未实现，不能把 OIDC client 当作已隔离的客户对象。
+当前实现状态（2026-08-10）：组织、用户类别、成员关系、组织角色绑定、资源、refresh session、OIDC client、service client 和 device/API key scope 已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台角色写入统一校验 `user_class` 与 role scope：external_customer 不能通过 user、Principal、provision 或批量接口获得 platform/global role，organization role 只能进入同组织的 organization_role_bindings；对 user Principal 的授予和撤销同步维护两张角色关系表。历史脏绑定在同步、权限、资源树、管理 Token 和 introspection 读取侧默认失败关闭，并会阻止将该账户提升为 internal_employee，直到管理员显式清理绑定。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。授权 check、batch-check、effective-permissions 与 resource-tree 每次都重验 signed active organization context、组织状态和 membership，并分别解释 platform role 或同组织 role binding；相同资源坐标可以由多个组织复用，跨组织资源保持普通 deny/forbidden 边界。人类密码登录提供 organization_id 时会创建相同 scope 的 refresh session，刷新时再次校验 scope 和 live membership，组织停用/归档或成员失效会原子撤销该 scope。service client、OIDC client 与 device 现在都明确存储 platform 或 organization scope；组织范围 device 创建会原子建立 active membership，API key 只保存 bcrypt hash，固定继承机器 Principal 的 scope，支持重叠轮换和显式撤销。`X-API-Key` 只在 `/v1/authorize/check` 与 `/v1/authorize/batch-check` 解析，且每次实时重验 key、scope/audience、Principal、组织、membership 和 RBAC；它不进入人类认证或 refresh 流程。拥有 signed active context 的 organization owner/admin 可以列出、创建、读取、更新和轮换本组织 OIDC client、service/device 与 API key；这些写操作要求近期 MFA，并且查询和写入都使用组织过滤。OIDC authorization code、Token 和 UserInfo 会实时校验 client active、组织 active、用户 Principal active 与 membership active；组织停用或成员变为 pending/suspended/removed 时，未兑换授权码被原子撤销，旧 OIDC access token 不能继续通过 UserInfo。internal_employee 的 customer-support 访问现通过固定受限角色、目标 customer 组织、read operation、人工原因与短期无 refresh token 的 context grant；每次读取和 introspection 都重新校验 grant、角色、人员和组织状态，并写入结构化审计。identity source 已落地显式 `allowed_user_class` 与 `none/fixed` 组织策略、active organization 校验、JIT membership 和 scoped session。
 
 用户至少分为两类：
 
