@@ -25,6 +25,14 @@ use crate::{
 #[derive(Debug, Deserialize)]
 struct MachineScopeQuery {
     organization_id: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MachinePaginationQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 /// Mounts platform-admin machine identity and API-key lifecycle endpoints.
@@ -234,10 +242,22 @@ async fn list_platform_devices_handler(
 ) -> Result<Json<serde_json::Value>, AuthError> {
     let db = require_db(&state)?;
     let organization_id = normalize_organization_id(query.organization_id)?;
-    let devices = machine_db::list_devices_in_scope(db, organization_id.as_deref())
-        .await
-        .map_err(map_machine_error)?;
-    Ok(Json(json!({ "success": true, "data": devices })))
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (devices, has_more) =
+        machine_db::list_devices_in_scope_page(db, organization_id.as_deref(), limit, offset)
+            .await
+            .map_err(map_machine_error)?;
+    Ok(Json(json!({
+        "success": true,
+        "data": devices,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn create_platform_device_handler(
@@ -333,14 +353,27 @@ async fn list_platform_api_keys_handler(
     let db = require_db(&state)?;
     let organization_id = normalize_organization_id(query.organization_id)?;
     require_machine_scope(db, &principal_id, organization_id.as_deref()).await?;
-    let credentials = machine_db::list_machine_credentials_in_scope(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (credentials, has_more) = machine_db::list_machine_credentials_in_scope_page(
         db,
         &principal_id,
         organization_id.as_deref(),
+        limit,
+        offset,
     )
     .await
     .map_err(map_machine_error)?;
-    Ok(Json(json!({ "success": true, "data": credentials })))
+    Ok(Json(json!({
+        "success": true,
+        "data": credentials,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn create_platform_api_key_handler(
@@ -426,12 +459,16 @@ async fn list_organization_devices_handler(
     claims: Claims,
     State(state): State<AppState>,
     Path(organization_id): Path<String>,
+    Query(query): Query<MachinePaginationQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     let actor = organization::require_delegated_manager(&state, &claims, &organization_id).await?;
     let db = require_db(&state)?;
-    let devices = machine_db::list_devices_in_scope(db, Some(&organization_id))
-        .await
-        .map_err(map_delegated_machine_error)?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (devices, has_more) =
+        machine_db::list_devices_in_scope_page(db, Some(&organization_id), limit, offset)
+            .await
+            .map_err(map_delegated_machine_error)?;
     audit_machine_event(
         db,
         "machine.device.listed",
@@ -439,7 +476,16 @@ async fn list_organization_devices_handler(
         format!("organization_id={organization_id},count={}", devices.len()),
     )
     .await;
-    Ok(Json(json!({ "success": true, "data": devices })))
+    Ok(Json(json!({
+        "success": true,
+        "data": devices,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn get_organization_device_handler(
@@ -552,14 +598,31 @@ async fn list_organization_api_keys_handler(
     claims: Claims,
     State(state): State<AppState>,
     Path((organization_id, principal_id)): Path<(String, String)>,
+    Query(query): Query<MachinePaginationQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     organization::require_delegated_manager(&state, &claims, &organization_id).await?;
     let db = require_db(&state)?;
-    let credentials =
-        machine_db::list_machine_credentials_in_scope(db, &principal_id, Some(&organization_id))
-            .await
-            .map_err(map_delegated_machine_error)?;
-    Ok(Json(json!({ "success": true, "data": credentials })))
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (credentials, has_more) = machine_db::list_machine_credentials_in_scope_page(
+        db,
+        &principal_id,
+        Some(&organization_id),
+        limit,
+        offset,
+    )
+    .await
+    .map_err(map_delegated_machine_error)?;
+    Ok(Json(json!({
+        "success": true,
+        "data": credentials,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn create_organization_api_key_handler(

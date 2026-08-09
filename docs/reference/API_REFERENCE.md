@@ -671,11 +671,11 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 | GET | `/v1/organizations/{organization_id}/services/{service_id}` | 查询当前组织的 service client |
 | PUT | `/v1/organizations/{organization_id}/services/{service_id}` | 更新当前组织 service 的可变元数据 |
 | POST | `/v1/organizations/{organization_id}/services/{service_id}/rotate-secret` | 轮换当前组织 service secret |
-| GET | `/v1/organizations/{organization_id}/devices` | 查询当前组织的 device Principal |
+| GET | `/v1/organizations/{organization_id}/devices?limit=&offset=` | 查询当前组织的 device Principal；返回 `has_more/next_offset` |
 | POST | `/v1/organizations/{organization_id}/devices` | 创建当前组织 device；scope 只从路径和 signed context 派生 |
 | GET | `/v1/organizations/{organization_id}/devices/{device_id}` | 查询当前组织 device |
 | PUT | `/v1/organizations/{organization_id}/devices/{device_id}` | 更新 device display_name 或 active，不能迁移 scope |
-| GET | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys` | 查询当前组织 machine Principal 的安全元数据 |
+| GET | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys?limit=&offset=` | 查询当前组织 machine Principal 的安全元数据；返回 `has_more/next_offset` |
 | POST | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys` | 创建当前组织 service/device 的 API key |
 | POST | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys/{key_id}/rotate` | 创建 replacement key，允许短暂重叠 |
 | DELETE | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys/{key_id}` | 请求体 `{ "reason": "..." }`，撤销一把 key |

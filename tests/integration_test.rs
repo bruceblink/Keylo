@@ -4059,6 +4059,27 @@ mod tests {
         assert!(delegated_key.json::<serde_json::Value>()["data"]["api_key"]
             .as_str()
             .is_some());
+        let delegated_devices = server
+            .get(&format!("{device_path}?limit=1&offset=0"))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        delegated_devices.assert_status_ok();
+        let delegated_devices: serde_json::Value = delegated_devices.json();
+        assert_eq!(delegated_devices["pagination"]["limit"], 1);
+        assert_eq!(delegated_devices["pagination"]["offset"], 0);
+        assert_eq!(delegated_devices["pagination"]["has_more"], false);
+        let delegated_keys = server
+            .get(&format!(
+                "/v1/organizations/{}/principals/{}/api-keys?limit=1&offset=0",
+                organization_a.id, delegated_device_principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        delegated_keys.assert_status_ok();
+        let delegated_keys: serde_json::Value = delegated_keys.json();
+        assert_eq!(delegated_keys["pagination"]["limit"], 1);
+        assert_eq!(delegated_keys["pagination"]["offset"], 0);
+        assert_eq!(delegated_keys["pagination"]["has_more"], false);
         let cross_organization_device = server
             .post(&format!("/v1/organizations/{}/devices", organization_b.id))
             .add_header("Authorization", format!("Bearer {organization_token}"))
@@ -4879,13 +4900,19 @@ mod tests {
         assert!(created["data"].get("secret_hash").is_none());
 
         let listed = server
-            .get(&format!("{key_path}?organization_id={}", organization_a.id))
+            .get(&format!(
+                "{key_path}?organization_id={}&limit=1&offset=0",
+                organization_a.id
+            ))
             .add_header("Authorization", format!("Bearer {admin_token}"))
             .await;
         listed.assert_status_ok();
         let listed: serde_json::Value = listed.json();
         assert_eq!(listed["data"].as_array().map(Vec::len), Some(1));
         assert!(listed["data"][0].get("api_key").is_none());
+        assert_eq!(listed["pagination"]["limit"], 1);
+        assert_eq!(listed["pagination"]["offset"], 0);
+        assert_eq!(listed["pagination"]["has_more"], false);
 
         let direct_check = server
             .post("/v1/authorize/check")

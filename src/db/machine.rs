@@ -125,6 +125,41 @@ pub async fn list_devices_in_scope(
     Ok(rows)
 }
 
+/// Return a bounded device page for one exact persisted machine scope.
+pub async fn list_devices_in_scope_page(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<DeviceInfo>, bool)> {
+    let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
+    let rows = sqlx::query_as::<_, DeviceInfo>(
+        r#"
+        SELECT principal.id AS principal_id,
+               principal.ref_id AS device_id,
+               principal.display_name,
+               principal.active,
+               device_scope.scope_kind,
+               device_scope.organization_id,
+               principal.created_at,
+               principal.updated_at
+        FROM device_principal_scopes AS device_scope
+        INNER JOIN principals AS principal ON principal.id = device_scope.principal_id
+        WHERE device_scope.organization_id IS NOT DISTINCT FROM $1::TEXT
+        ORDER BY principal.created_at DESC, principal.id
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(organization_id)
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let has_more = rows.len() > limit as usize;
+    Ok((rows.into_iter().take(limit as usize).collect(), has_more))
+}
+
 /// Reads a device only when its immutable scope matches the requested boundary.
 pub async fn get_device_in_scope(
     pool: &PgPool,
@@ -256,6 +291,38 @@ pub async fn list_machine_credentials_in_scope(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Return a bounded API-key metadata page for one fixed machine scope.
+pub async fn list_machine_credentials_in_scope_page(
+    pool: &PgPool,
+    principal_id: &str,
+    organization_id: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<MachineCredentialInfo>, bool)> {
+    let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
+    let rows = sqlx::query_as::<_, MachineCredentialInfo>(
+        r#"
+        SELECT key_id, prefix, principal_id, organization_id, status, expires_at,
+               last_used_at, created_by_principal_id, allowed_scopes, allowed_audiences,
+               created_at, updated_at
+        FROM machine_credentials
+        WHERE principal_id = $1
+          AND organization_id IS NOT DISTINCT FROM $2::TEXT
+        ORDER BY created_at DESC, key_id
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(principal_id)
+    .bind(organization_id)
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let has_more = rows.len() > limit as usize;
+    Ok((rows.into_iter().take(limit as usize).collect(), has_more))
 }
 
 /// Rotates by creating a new active key and leaving the old key usable for overlap.
