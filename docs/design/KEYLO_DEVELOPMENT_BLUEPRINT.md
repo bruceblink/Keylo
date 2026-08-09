@@ -156,7 +156,7 @@ User class 不是 RBAC 权限。它只参与注册、身份源映射、组织成
 
 | Machine principal | 使用场景 | 凭证与作用域 |
 | --- | --- | --- |
-| service | 后台服务、网关、定时任务和服务间调用 | 兼容现有 `service_id + service_secret -> service_access`；后续可绑定一个或多个 API key；可为 platform-scoped 或 organization-scoped |
+| service | 后台服务、网关、定时任务和服务间调用 | 兼容现有 `service_id + service_secret -> service_access`；可绑定一个或多个 API key；可为 platform-scoped 或 organization-scoped |
 | device | 设备、边缘代理或无人值守客户端 | 以 API key 为主，单个 key 只绑定一个 device Principal 和一个不可变组织上下文；不因设备类型获得额外权限 |
 
 核心对象和规则：

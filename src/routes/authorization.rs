@@ -183,6 +183,29 @@ async fn principal_from_api_key(
     state: &AppState,
     raw_api_key: &str,
 ) -> Result<AuthorizationIdentity, AuthError> {
+    // Limit the whole API-key authentication surface before bcrypt verification.
+    // This protects the dependency boundary even when every submitted key is
+    // unknown or malformed and therefore cannot identify a per-key bucket.
+    let global_bucket = "machine-api-key:authorization-global";
+    if !state
+        .allow_auth_request(
+            global_bucket,
+            state.config.auth_rate_limit_window_seconds,
+            state.config.auth_global_rate_limit_max_requests,
+        )
+        .await
+    {
+        if let Some(db) = state.db.as_deref() {
+            let _ = crate::db::create_audit_log(
+                db,
+                "machine.api_key.rate_limited",
+                None,
+                Some("route=authorization,phase=credential"),
+            )
+            .await;
+        }
+        return Err(AuthError::TooManyRequests);
+    }
     let db = state.db.as_deref().ok_or_else(|| {
         AuthError::DatabaseError("Database required for API key authentication".to_string())
     })?;
@@ -207,12 +230,10 @@ async fn principal_from_api_key(
 
     let credential_bucket = format!("machine-api-key:{}", context.credential.key_id);
     if !state
-        .allow_auth_request_pair(
+        .allow_auth_request(
             &credential_bucket,
-            state.config.auth_rate_limit_max_requests,
-            "machine-api-key:authorization-global",
-            state.config.auth_global_rate_limit_max_requests,
             state.config.auth_rate_limit_window_seconds,
+            state.config.auth_rate_limit_max_requests,
         )
         .await
     {

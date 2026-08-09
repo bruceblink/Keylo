@@ -4523,6 +4523,30 @@ mod tests {
         assert!(audited >= 5, "Machine lifecycle and use must be audited");
     }
 
+    /// Unknown API keys must hit the global limiter before expensive verification.
+    #[tokio::test]
+    async fn test_machine_api_key_unknown_attempts_are_globally_rate_limited() {
+        let mut config = test_config();
+        config.auth_global_rate_limit_max_requests = 1;
+        config.auth_rate_limit_max_requests = 1;
+        let server = setup_test_server_with_config(config).await;
+        let unknown_key = "keylo.00000000000000000000000000000000.11111111111111111111111111111111";
+
+        let first = server
+            .post("/v1/authorize/check")
+            .add_header("X-API-Key", unknown_key)
+            .json(&json!({"permission": "unknown:permission"}))
+            .await;
+        assert_eq!(first.status_code(), StatusCode::UNAUTHORIZED);
+
+        let second = server
+            .post("/v1/authorize/check")
+            .add_header("X-API-Key", unknown_key)
+            .json(&json!({"permission": "unknown:permission"}))
+            .await;
+        assert_eq!(second.status_code(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
     /// Verifies that a password login can create a tenant-scoped refresh session
     /// and that organization or membership lifecycle changes revoke only that
     /// tenant session while preserving the user's platform session.

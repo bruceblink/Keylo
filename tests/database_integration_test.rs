@@ -851,6 +851,82 @@ mod database_tests {
             db::MachineCredentialVerification::Invalid
         ));
 
+        let expired = db::create_machine_credential(
+            &pool,
+            db::CreateMachineCredentialParams {
+                principal_id: &device.principal_id,
+                organization_id: Some(&organization_a.id),
+                created_by_principal_id: None,
+                expires_at: Some(chrono::Utc::now().naive_utc() - chrono::Duration::seconds(1)),
+                allowed_scopes: &scopes,
+                allowed_audiences: &audiences,
+            },
+        )
+        .await
+        .expect("Failed to create expired API key fixture");
+        assert!(matches!(
+            db::verify_machine_credential(
+                &pool,
+                &expired.api_key,
+                keylo::models::MACHINE_AUTHORIZATION_SCOPE,
+                keylo::models::MACHINE_AUTHORIZATION_AUDIENCE,
+            )
+            .await
+            .expect("Expired credential verification should complete"),
+            db::MachineCredentialVerification::Invalid
+        ));
+
+        let service_id = format!("machine-service-{suffix}");
+        db::create_service_client(
+            &pool,
+            db::CreateServiceClientParams {
+                service_id: &service_id,
+                service_secret: "MachineService#123",
+                name: "Machine API key service",
+                description: None,
+                organization_id: Some(&organization_a.id),
+                allowed_scopes: &scopes,
+                allowed_audiences: &audiences,
+                integration_type: "job",
+                introspection_allowed: true,
+                token_ttl_seconds: None,
+                owner: None,
+                contact: None,
+            },
+        )
+        .await
+        .expect("Failed to create service API key fixture");
+        let service_principal = db::get_principal_by_ref(&pool, "service", &service_id)
+            .await
+            .expect("Failed to load service API key Principal")
+            .expect("Service API key Principal should exist");
+        let service_key = db::create_machine_credential(
+            &pool,
+            db::CreateMachineCredentialParams {
+                principal_id: &service_principal.id,
+                organization_id: Some(&organization_a.id),
+                created_by_principal_id: None,
+                expires_at: None,
+                allowed_scopes: &scopes,
+                allowed_audiences: &audiences,
+            },
+        )
+        .await
+        .expect("Failed to create service API key");
+        let db::MachineCredentialVerification::Authorized(service_context) =
+            db::verify_machine_credential(
+                &pool,
+                &service_key.api_key,
+                keylo::models::MACHINE_AUTHORIZATION_SCOPE,
+                keylo::models::MACHINE_AUTHORIZATION_AUDIENCE,
+            )
+            .await
+            .expect("Service API key verification should complete")
+        else {
+            panic!("Active service API key should verify");
+        };
+        assert_eq!(service_context.principal.principal_type, "service");
+
         assert!(db::create_machine_credential(
             &pool,
             db::CreateMachineCredentialParams {

@@ -119,17 +119,17 @@
 
 ### 3.4 非人类主体与 API_KEY 认证
 
-- 固化机器调用边界：现有 `service_id + service_secret` 继续用于换取短期 `service_access`；新增 API key 作为直接机器 API 凭证，不要求登录，不创建 refresh session，也不进入人类 `/v1/auth/*` 流程。
-- API key 的规范传递方式为 `X-API-Key: <raw-key>`；拒绝 URL 查询参数、日志回显和把 API key 当作 `Authorization: Bearer`。资源服务只有显式声明支持 machine credential 的路由才接受它。
-- 设计并实现机器凭证管理 API（创建、列表元数据、轮换、撤销、过期和主体/组织停用联动）；建议以 `key_id/prefix` 定位，服务端只保存不可逆 hash，创建/轮换时返回一次原始 key。
-- 在 API 契约阶段冻结机器凭证管理端点（例如 `POST /v1/admin/principals/{principal_id}/api-keys`、元数据列表、`rotate` 和撤销端点）；实现前先补充 API_REFERENCE，未落地前不得把这些路径写入当前已发布接口清单。
-- API key 解析后必须得到唯一 service/device Principal，并依次校验 key 状态、组织归属、scope/audience、Principal active、组织 membership 和 RBAC；跨组织、过期、撤销、禁用和未知 key 默认返回统一的未授权结果。
-- 机器 key 不支持组织切换；MachineCredential 的 organization_id 是唯一授权上下文，任何请求头或 URL 中的组织标识都只能用于资源匹配，不能覆盖凭证归属。
-- 允许多个 key 短暂重叠以支持无停机轮换，但旧 key 不能继续刷新或换取超出原范围的权限；key 泄露、轮换、撤销、最后使用时间和调用结果写入审计，审计不得包含原始 key。
-- 为下游扇出保留 API key 换取短期 `service_access` 的可选路径；保持现有 service token 的 audience/scope 白名单和服务 RBAC，不把长生命周期 API key 传播给下游服务。
-- 明确 OAuth 2.0 Device Authorization Grant 不是本功能；它只在未来需要“人类绑定受限设备”时单独排期。
+- [x] 固化机器调用边界：现有 `service_id + service_secret` 继续用于换取短期 `service_access`；API key 作为直接机器 API 凭证，不要求登录、不创建 refresh session，也不进入人类 `/v1/auth/*` 流程。
+- [x] API key 的规范传递方式为 `X-API-Key: <raw-key>`；拒绝 URL 查询参数、日志回显和把 API key 当作 `Authorization: Bearer`。资源服务只有显式声明支持 machine credential 的授权检查路由才接受它。
+- [x] 实现机器凭证管理 API（创建、列表元数据、轮换、撤销、过期和主体/组织停用联动）；以 `key_id/prefix` 定位，服务端只保存 bcrypt hash，创建/轮换时返回一次原始 key。
+- [x] 在 API 契约阶段冻结机器凭证管理端点，并在实现同一阶段补充 API_REFERENCE；平台和组织管理员路径均明确写入作用域约束。
+- [x] API key 解析后必须得到唯一 service/device Principal，并依次校验 key 状态、组织归属、scope/audience、Principal active、组织 membership 和 RBAC；跨组织、过期、撤销、禁用和未知 key 默认返回统一的未授权结果。
+- [x] 机器 key 不支持组织切换；MachineCredential 的 organization_id 是唯一授权上下文，任何请求头、URL 或请求体中的组织标识都不能覆盖凭证归属。
+- [x] 允许多个 key 短暂重叠以支持无停机轮换，旧 key 不会被自动扩大权限；key 泄露、轮换、撤销、最后使用时间、认证失败和调用结果写入审计，审计不得包含原始 key。
+- [x] 保留现有 `service_id + service_secret -> service_access` 作为下游扇出路径；API key 继续只用于显式授权检查，不把长生命周期 API key 传播给下游服务。
+- [x] 明确 OAuth 2.0 Device Authorization Grant 不是本功能；它只在未来需要“人类绑定受限设备”时单独排期。
 
-验收：直接携带有效 API key 的机器请求可以访问已声明的组织 API；人类登录接口、未声明的路由、错误 audience/scope、跨组织资源、停用 Principal、过期/撤销 key 和 Keylo 依赖不可用时均默认拒绝；创建响应只出现一次原始 key；轮换期间新旧 key 的边界、审计和限流可验证。
+验收（已使用真实 PostgreSQL）：直接携带有效 API key 的机器请求可以访问已声明的组织 API；人类登录接口、未声明的路由、错误 audience/scope、跨组织资源、停用 Principal、过期/撤销 key、未知 key 和 Keylo 依赖不可用时均默认拒绝；创建响应只出现一次原始 key；轮换期间新旧 key 的边界、审计和认证前/按 key 限流均可验证。
 
 ### 3.5 组织隔离测试与运行门槛
 
