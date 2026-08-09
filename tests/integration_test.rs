@@ -345,6 +345,247 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_organization_oidc_client_is_scoped_and_live() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization_a = db::create_organization(
+            &pool,
+            &format!("oidc-http-a-{suffix}"),
+            "OIDC HTTP organization A",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create organization A");
+        let organization_b = db::create_organization(
+            &pool,
+            &format!("oidc-http-b-{suffix}"),
+            "OIDC HTTP organization B",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create organization B");
+        let username = format!("oidc-http-owner-{suffix}");
+        let password = "OidcHttpOwner#123";
+        let owner = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some(password),
+        )
+        .await
+        .expect("Failed to create organization OIDC owner");
+        let owner_principal = db::get_principal_by_ref(&pool, "user", &owner.id)
+            .await
+            .expect("Failed to load organization OIDC owner principal")
+            .expect("Organization OIDC owner principal should exist");
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &owner_principal.id,
+            "active",
+            None,
+            Some(keylo::models::ORGANIZATION_MANAGEMENT_ROLE_OWNER),
+        )
+        .await
+        .expect("Failed to create organization OIDC owner membership");
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({"client_id": username, "client_secret": password}))
+            .await;
+        login.assert_status_ok();
+        let platform_token = login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Owner platform token should exist")
+            .to_string();
+        let context = server
+            .post("/v1/auth/organization-context")
+            .add_header("Authorization", format!("Bearer {platform_token}"))
+            .json(&json!({"organization_id": organization_a.id}))
+            .await;
+        context.assert_status_ok();
+        let organization_token = context.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Owner organization token should exist")
+            .to_string();
+
+        let client_id = format!("oidc-http-client-{suffix}");
+        let client_path = format!("/v1/organizations/{}/oidc/clients", organization_a.id);
+        let override_request = server
+            .post(&client_path)
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "client_id": format!("oidc-http-override-{suffix}"),
+                "client_secret": "OidcOverrideSecret#123",
+                "name": "Invalid organization override",
+                "client_type": "confidential",
+                "redirect_uris": ["https://client.example.test/callback"],
+                "organization_id": organization_b.id
+            }))
+            .await;
+        assert_eq!(
+            override_request.status_code(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        let created = server
+            .post(&client_path)
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "client_id": client_id,
+                "client_secret": "OidcOrganizationSecret#123",
+                "name": "Organization OIDC client",
+                "client_type": "confidential",
+                "redirect_uris": ["https://client.example.test/callback"]
+            }))
+            .await;
+        created.assert_status_ok();
+        let created_body: serde_json::Value = created.json();
+        assert_eq!(created_body["data"]["scope_kind"], "organization");
+        assert_eq!(created_body["data"]["organization_id"], organization_a.id);
+
+        let cross_org = server
+            .get(&format!(
+                "/v1/organizations/{}/oidc/clients",
+                organization_b.id
+            ))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        assert_eq!(cross_org.status_code(), StatusCode::FORBIDDEN);
+
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Platform admin token should exist")
+            .to_string();
+        let platform_clients = server
+            .get("/v1/admin/oidc/clients")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        platform_clients.assert_status_ok();
+        let platform_clients: serde_json::Value = platform_clients.json();
+        assert!(!platform_clients["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|client| client["client_id"] == client_id));
+
+        let verifier = "organization-oidc-verifier-012345678901234567890123456789012345678901";
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(verifier.as_bytes()));
+        let redirect_uri = "https://client.example.test/callback";
+        let authorization_fields = format!(
+            "response_type=code&client_id={}&redirect_uri={}&scope=openid%20profile&state=oidc-state&nonce=oidc-nonce&code_challenge={}&code_challenge_method=S256",
+            urlencoding::encode(&client_id),
+            urlencoding::encode(redirect_uri),
+            urlencoding::encode(&challenge),
+        );
+        let login_response = server
+            .post("/v1/oidc/login")
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .bytes(Bytes::from(format!(
+                "{authorization_fields}&username={}&password={}",
+                urlencoding::encode(&username),
+                urlencoding::encode(password),
+            )))
+            .await;
+        login_response.assert_status_ok();
+        let cookie = login_response
+            .header("set-cookie")
+            .to_str()
+            .expect("OIDC login should set a browser cookie")
+            .split(';')
+            .next()
+            .expect("OIDC cookie should contain a value")
+            .to_string();
+        let consent_response = server
+            .post("/v1/oidc/consent")
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .add_header("Cookie", cookie)
+            .bytes(Bytes::from(format!(
+                "{authorization_fields}&decision=approve"
+            )))
+            .await;
+        assert_eq!(consent_response.status_code(), StatusCode::SEE_OTHER);
+        let location = consent_response
+            .header("location")
+            .to_str()
+            .expect("OIDC consent should redirect to the client")
+            .to_string();
+        let code = url::Url::parse(&location)
+            .expect("OIDC redirect should be a valid URL")
+            .query_pairs()
+            .find(|(key, _)| key == "code")
+            .expect("OIDC redirect should contain an authorization code")
+            .1
+            .into_owned();
+        let token_response = server
+            .post("/v1/oidc/token")
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .bytes(Bytes::from(format!(
+                "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&client_secret={}&code_verifier={}",
+                urlencoding::encode(&code),
+                urlencoding::encode(redirect_uri),
+                urlencoding::encode(&client_id),
+                urlencoding::encode("OidcOrganizationSecret#123"),
+                urlencoding::encode(verifier),
+            )))
+            .await;
+        token_response.assert_status_ok();
+        let token_body: serde_json::Value = token_response.json();
+        let access_token = token_body["access_token"]
+            .as_str()
+            .expect("Organization OIDC access token should exist")
+            .to_string();
+        let claims = Keys::from_config(&test_config())
+            .expect("Test keys should load")
+            .decode_oidc_access_token(&access_token, &test_config().oidc_issuer())
+            .expect("Organization OIDC access token should decode");
+        assert_eq!(
+            claims.organization_id.as_deref(),
+            Some(organization_a.id.as_str())
+        );
+        let userinfo = server
+            .get("/v1/oidc/userinfo")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        userinfo.assert_status_ok();
+        assert_eq!(
+            userinfo.json::<serde_json::Value>()["organization_id"],
+            organization_a.id
+        );
+
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &owner_principal.id,
+            "suspended",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to suspend OIDC owner membership");
+        let stale_userinfo = server
+            .get("/v1/oidc/userinfo")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        assert_eq!(stale_userinfo.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_health_check() {
         let server = setup_test_server().await;
 
@@ -635,6 +876,7 @@ mod tests {
             &code,
             &keylo::models::OidcAuthorizationCode {
                 client_id: client_id.clone(),
+                organization_id: None,
                 user_id: user.id.clone(),
                 redirect_uri: "https://client.example.test/callback".to_string(),
                 scopes: vec!["openid".to_string()],
@@ -676,6 +918,7 @@ mod tests {
             &code_after_reconfigure,
             &keylo::models::OidcAuthorizationCode {
                 client_id: client_id.clone(),
+                organization_id: None,
                 user_id: user.id,
                 redirect_uri: "https://client.example.test/new-callback".to_string(),
                 scopes: vec!["openid".to_string()],

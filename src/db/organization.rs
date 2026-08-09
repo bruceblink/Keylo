@@ -436,6 +436,14 @@ pub async fn set_organization_status(
         .bind(revoke_reason)
         .execute(&mut *transaction)
         .await?;
+        // Pending OIDC codes are tenant-bound grants, so discard them with the
+        // organization transition instead of leaving a stale browser flow.
+        sqlx::query(
+            "DELETE FROM oidc_authorization_codes WHERE organization_id = $1 AND consumed_at IS NULL",
+        )
+        .bind(organization_id)
+        .execute(&mut *transaction)
+        .await?;
     }
     transaction.commit().await?;
 
@@ -560,6 +568,23 @@ pub async fn upsert_organization_membership(
         .bind(organization_id)
         .bind(principal_id)
         .bind(revoke_reason)
+        .execute(&mut *transaction)
+        .await?;
+        // The same membership transition invalidates any pending OIDC grant
+        // for this user, preventing a suspended invite from being exchanged.
+        sqlx::query(
+            r#"
+            DELETE FROM oidc_authorization_codes AS auth_code
+            USING principals AS principal
+            WHERE auth_code.organization_id = $1
+              AND auth_code.consumed_at IS NULL
+              AND principal.principal_type = 'user'
+              AND principal.ref_id = auth_code.user_id
+              AND principal.id = $2
+            "#,
+        )
+        .bind(organization_id)
+        .bind(principal_id)
         .execute(&mut *transaction)
         .await?;
     }

@@ -4,6 +4,9 @@ use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use url::Url;
 
+pub const OIDC_CLIENT_SCOPE_PLATFORM: &str = "platform";
+pub const OIDC_CLIENT_SCOPE_ORGANIZATION: &str = "organization";
+
 /// A registered relying party that will later use Keylo's OIDC authorization endpoints.
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct OidcClient {
@@ -16,11 +19,14 @@ pub struct OidcClient {
     pub grant_types: Vec<String>,
     pub scopes: Vec<String>,
     pub active: bool,
+    pub scope_kind: String,
+    pub organization_id: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateOidcClientRequest {
     pub client_id: String,
     pub client_secret: Option<String>,
@@ -33,6 +39,7 @@ pub struct CreateOidcClientRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateOidcClientRequest {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -46,6 +53,7 @@ pub struct UpdateOidcClientRequest {
 #[derive(Debug, Clone)]
 pub struct OidcAuthorizationCode {
     pub client_id: String,
+    pub organization_id: Option<String>,
     pub user_id: String,
     pub redirect_uri: String,
     pub scopes: Vec<String>,
@@ -120,6 +128,8 @@ pub struct OidcIdTokenClaims {
     pub iat: i64,
     pub nonce: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
@@ -137,6 +147,8 @@ pub struct OidcAccessTokenClaims {
     pub jti: String,
     pub scope: String,
     pub token_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
 }
 
 /// Validate an authorization request against the registered client before any login UI is shown.
@@ -417,6 +429,8 @@ mod tests {
             grant_types: vec!["authorization_code".to_string()],
             scopes: vec!["openid".to_string(), "profile".to_string()],
             active: true,
+            scope_kind: OIDC_CLIENT_SCOPE_PLATFORM.to_string(),
+            organization_id: None,
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: chrono::Utc::now().naive_utc(),
         };

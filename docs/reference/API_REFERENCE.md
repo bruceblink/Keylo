@@ -71,7 +71,7 @@
 
 配置中的 `issuer` 仍是 JWT 的 `JWT_ISSUER`；当设置 `OIDC_PUBLIC_ISSUER` 时，JWKS、Token、内省和文档 URL 使用该公开 origin，避免把容器监听地址暴露给接入方。
 
-`/.well-known/openid-configuration` 是标准 OIDC Discovery 地址，当前公布 Authorization Code + PKCE（S256）、query response mode、RS256 JWKS 与 `openid`、`profile`、`email` scope。Discovery 同时声明可返回的 `sub`、`name`、`email`、`email_verified` claims，客户端应只依赖所请求 scope 可获得的字段。OIDC issuer 由 `OIDC_PUBLIC_ISSUER` 决定；默认使用 HTTPS，不能使用 Keylo 的内部监听地址。完全隔离的内网可设置 `ALLOW_INSECURE_INTERNAL_HTTP=true` 使用 HTTP origin，但必须确保 IdP、Keylo 和浏览器客户端均在受控网络内，且任何 issuer、Discovery、授权端点和回调均不暴露到不受信任网络。
+`/.well-known/openid-configuration` 是标准 OIDC Discovery 地址，当前公布 Authorization Code + PKCE（S256）、query response mode、RS256 JWKS 与 `openid`、`profile`、`email` scope。Discovery 同时声明可返回的 `sub`、`name`、`email`、`email_verified`、`organization_id` claims，客户端应只依赖所请求 scope 可获得的字段。OIDC issuer 由 `OIDC_PUBLIC_ISSUER` 决定；默认使用 HTTPS，不能使用 Keylo 的内部监听地址。完全隔离的内网可设置 `ALLOW_INSECURE_INTERNAL_HTTP=true` 使用 HTTP origin，但必须确保 IdP、Keylo 和浏览器客户端均在受控网络内，且任何 issuer、Discovery、授权端点和回调均不暴露到不受信任网络。
 
 OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1/oidc/consent`、`POST /v1/oidc/logout`、`POST /v1/oidc/token`、`GET /v1/oidc/userinfo`。授权码有效期为 5 分钟，且只能原子消费一次。`/v1/oidc/login` 使用 `application/x-www-form-urlencoded` 提交用户名、密码及原授权请求参数，成功后创建 `HttpOnly; Secure; SameSite=Lax` 浏览器会话。仅当 OIDC Provider 配置为 `ALLOW_INSECURE_INTERNAL_HTTP=true` 且 issuer 实际为 HTTP 时，Cookie 才去除 `Secure`，并受内网 HTTP 边界限制。登录后或已有会话访问 `/v1/oidc/authorize` 会显示客户端和 scope，必须通过同站点的 `/v1/oidc/consent` 明确确认才会重定向至已登记的 redirect URI 并签发 code；拒绝不会签发 code。`POST /v1/oidc/logout` 撤销该浏览器 OIDC session 并清除 cookie，不影响 API refresh session。UserInfo 只接受 OIDC access token；始终返回 `sub`，仅在被授予 `profile` 或 `email` scope 时返回对应 profile/email claims。
 
@@ -93,6 +93,18 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | POST | `/v1/admin/oidc/clients` | 注册 OIDC 客户端 |
 | PUT | `/v1/admin/oidc/clients/{client_id}` | 更新客户端元数据或启用状态 |
 | POST | `/v1/admin/oidc/clients/{client_id}/rotate-secret` | 轮换 confidential client secret |
+
+组织 owner/admin 使用 signed active organization context 管理本组织 OIDC client。以下路径不会接受请求体中的 `organization_id`，且所有写操作要求近期 MFA；跨组织路径、非 active membership 和停用组织统一拒绝：
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | `/v1/organizations/{organization_id}/oidc/clients` | 查询当前组织的 OIDC client |
+| POST | `/v1/organizations/{organization_id}/oidc/clients` | 创建 organization-scoped OIDC client |
+| GET | `/v1/organizations/{organization_id}/oidc/clients/{client_id}` | 查询当前组织的指定 client |
+| PUT | `/v1/organizations/{organization_id}/oidc/clients/{client_id}` | 更新当前组织 client 元数据或启用状态 |
+| POST | `/v1/organizations/{organization_id}/oidc/clients/{client_id}/rotate-secret` | 轮换当前组织 confidential client secret |
+
+平台管理列表仅返回显式 `scope_kind=platform` 的 client；organization client 的 `scope_kind` 和 `organization_id` 在创建时由路径和 live membership 派生，作用域不可迁移。organization client 签发的 ID/access token 与 UserInfo 会带当前 `organization_id`，授权码创建、兑换和 UserInfo 每次都会实时校验组织 active、用户 Principal active 及 membership active。组织停用、归档或成员变为 pending、suspended、removed 时，未兑换的组织授权码会被原子撤销，旧 access token 不能继续通过 UserInfo。
 
 当前仅接受 `authorization_code` grant。`public` 客户端不能登记 secret；`confidential` 客户端必须提供至少 16 个字符的 secret，服务端仅保存 bcrypt hash。redirect URI 必须为 HTTPS；开发期仅允许精确的 `127.0.0.1` 或 `[::1]` 回环地址使用 HTTP。所有回调不得携带 URL 凭据或 fragment，`127.0.0.1.example.com` 等前缀相似域名不视为回环地址。
 

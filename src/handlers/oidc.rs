@@ -18,7 +18,7 @@ use crate::{
         CreateOidcClientRequest, OidcAccessTokenClaims, OidcAuthorizationCode,
         OidcAuthorizeRequest, OidcBrowserSession, OidcClient, OidcConsentRequest,
         OidcIdTokenClaims, OidcLoginRequest, OidcTokenRequest, OidcTokenResponse,
-        RotateClientSecretRequest, UpdateOidcClientRequest,
+        RotateClientSecretRequest, UpdateOidcClientRequest, OIDC_CLIENT_SCOPE_ORGANIZATION,
     },
     state::AppState,
 };
@@ -180,6 +180,18 @@ pub async fn list_clients(
     Ok(Json(json!({"success": true, "data": clients})))
 }
 
+/// Return only a platform-scoped client from the platform administration surface.
+pub async fn get_client(
+    State(state): State<AppState>,
+    Path(client_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let client = crate::db::get_platform_oidc_client(database(&state)?, &client_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+        .ok_or(AuthError::NotFound)?;
+    Ok(Json(json!({"success": true, "data": client})))
+}
+
 /// Update metadata only; client type and secrets remain immutable until explicit rotation is added.
 pub async fn update_client(
     claims: Claims,
@@ -229,6 +241,205 @@ pub async fn rotate_client_secret(
     ))
 }
 
+fn map_delegated_oidc_error(error: anyhow::Error) -> AuthError {
+    let message = error.to_string();
+    match message.as_str() {
+        "organization_oidc_client_context_inactive"
+        | "organization_not_found"
+        | "organization_not_active"
+        | "organization_manager_principal_not_found"
+        | "organization_manager_membership_not_found"
+        | "organization_manager_membership_not_active"
+        | "organization_manager_principal_inactive"
+        | "organization_manager_requires_user_principal"
+        | "organization_manager_user_not_found"
+        | "organization_manager_user_class_invalid"
+        | "organization_manager_role_required" => AuthError::Forbidden,
+        _ if is_unique_violation(error.as_ref()) => {
+            AuthError::Conflict("OIDC client_id already exists".to_string())
+        }
+        _ => AuthError::DatabaseError(message),
+    }
+}
+
+/// Record tenant client administration without allowing audit availability to change an idempotent result.
+async fn audit_organization_oidc_event(
+    db: &sqlx::PgPool,
+    event_type: &str,
+    actor: &str,
+    organization_id: &str,
+    client_id: &str,
+) {
+    if let Err(error) = crate::db::create_audit_log(
+        db,
+        event_type,
+        Some(actor),
+        Some(&format!(
+            "organization_id={organization_id}, client_id={client_id}"
+        )),
+    )
+    .await
+    {
+        tracing::warn!(event_type, error = %error, "Failed to audit organization OIDC client operation");
+    }
+}
+
+/// List clients after matching the signed tenant context and live owner/admin membership.
+pub async fn list_organization_clients(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    crate::routes::organization::require_delegated_manager(&state, &claims, &organization_id)
+        .await?;
+    let clients = crate::db::list_oidc_clients_in_organization(database(&state)?, &organization_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    Ok(Json(json!({"success": true, "data": clients})))
+}
+
+/// Register a client in the path organization; the request body cannot select another scope.
+pub async fn create_organization_client(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    Json(request): Json<CreateOidcClientRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let actor =
+        crate::routes::organization::require_delegated_manager(&state, &claims, &organization_id)
+            .await?;
+    crate::routes::organization::require_delegated_mfa(&state, &claims).await?;
+    validate_oidc_client_registration(&request).map_err(AuthError::InvalidRequest)?;
+    let db = database(&state)?;
+    let client = crate::db::create_oidc_client_as_organization_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        &request,
+    )
+    .await
+    .map_err(map_delegated_oidc_error)?;
+    if client.scope_kind != OIDC_CLIENT_SCOPE_ORGANIZATION
+        || client.organization_id.as_deref() != Some(organization_id.as_str())
+    {
+        return Err(AuthError::DatabaseError(
+            "OIDC client was persisted outside the requested organization".to_string(),
+        ));
+    }
+    audit_organization_oidc_event(
+        db,
+        "organization.oidc_client.created",
+        &claims.sub,
+        &organization_id,
+        &client.client_id,
+    )
+    .await;
+    Ok(Json(json!({"success": true, "data": client})))
+}
+
+/// Read only a client stored in the caller's active organization.
+pub async fn get_organization_client(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, client_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    crate::routes::organization::require_delegated_manager(&state, &claims, &organization_id)
+        .await?;
+    let client =
+        crate::db::get_oidc_client_in_organization(database(&state)?, &organization_id, &client_id)
+            .await
+            .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+            .ok_or(AuthError::NotFound)?;
+    Ok(Json(json!({"success": true, "data": client})))
+}
+
+/// Update mutable tenant client metadata while preserving its persisted organization scope.
+pub async fn update_organization_client(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, client_id)): Path<(String, String)>,
+    Json(request): Json<UpdateOidcClientRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if let Some(redirect_uris) = &request.redirect_uris {
+        validate_redirect_uris(redirect_uris).map_err(AuthError::InvalidRequest)?;
+    }
+    if let Some(grant_types) = &request.grant_types {
+        validate_grant_types(grant_types).map_err(AuthError::InvalidRequest)?;
+    }
+    if let Some(scopes) = &request.scopes {
+        validate_oidc_scopes(scopes).map_err(AuthError::InvalidRequest)?;
+    }
+    let actor =
+        crate::routes::organization::require_delegated_manager(&state, &claims, &organization_id)
+            .await?;
+    crate::routes::organization::require_delegated_mfa(&state, &claims).await?;
+    let db = database(&state)?;
+    let client = crate::db::update_oidc_client_as_organization_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        &client_id,
+        &request,
+        Some(&claims.sub),
+    )
+    .await
+    .map_err(map_delegated_oidc_error)?
+    .ok_or(AuthError::NotFound)?;
+    audit_organization_oidc_event(
+        db,
+        "organization.oidc_client.updated",
+        &claims.sub,
+        &organization_id,
+        &client_id,
+    )
+    .await;
+    Ok(Json(json!({"success": true, "data": client})))
+}
+
+/// Rotate an organization client secret after live manager and MFA checks.
+pub async fn rotate_organization_client_secret(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, client_id)): Path<(String, String)>,
+    Json(request): Json<RotateClientSecretRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let new_secret = request
+        .new_secret
+        .as_deref()
+        .filter(|secret| secret.trim().len() >= 16)
+        .ok_or_else(|| {
+            AuthError::InvalidRequest("new_secret must contain at least 16 characters".to_string())
+        })?;
+    let actor =
+        crate::routes::organization::require_delegated_manager(&state, &claims, &organization_id)
+            .await?;
+    crate::routes::organization::require_delegated_mfa(&state, &claims).await?;
+    let db = database(&state)?;
+    let rotated = crate::db::rotate_oidc_client_secret_as_organization_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        &client_id,
+        new_secret,
+    )
+    .await
+    .map_err(map_delegated_oidc_error)?;
+    if !rotated {
+        return Err(AuthError::NotFound);
+    }
+    audit_organization_oidc_event(
+        db,
+        "organization.oidc_client.secret_rotated",
+        &claims.sub,
+        &organization_id,
+        &client_id,
+    )
+    .await;
+    Ok(Json(
+        json!({"success": true, "message": "OIDC client secret rotated"}),
+    ))
+}
+
 /// Publish only OIDC capabilities that relying parties can use today.
 pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value> {
     let base_url = state.config.oidc_issuer();
@@ -247,7 +458,7 @@ pub async fn discovery(State(state): State<AppState>) -> Json<serde_json::Value>
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": ["S256"],
         "scopes_supported": ["openid", "profile", "email"],
-        "claims_supported": ["sub", "name", "email", "email_verified"]
+        "claims_supported": ["sub", "name", "email", "email_verified", "organization_id"]
     }))
 }
 
@@ -272,7 +483,19 @@ pub async fn userinfo(
     {
         return Err(AuthError::InvalidToken);
     }
-    let user = crate::db::user::get_user_by_id(database(&state)?, &claims.sub)
+    let db = database(&state)?;
+    if !crate::db::oidc_client_user_context_is_active(
+        db,
+        &claims.aud,
+        &claims.sub,
+        claims.organization_id.as_deref(),
+    )
+    .await
+    .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    {
+        return Err(AuthError::InvalidToken);
+    }
+    let user = crate::db::user::get_user_by_id(db, &claims.sub)
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .filter(|user| user.active)
@@ -284,6 +507,9 @@ pub async fn userinfo(
             .any(|value| value == scope)
     };
     let mut response = json!({"sub": user.id});
+    if let Some(organization_id) = claims.organization_id {
+        response["organization_id"] = json!(organization_id);
+    }
     if has_scope("profile") {
         response["name"] = json!(user.username);
     }
@@ -426,6 +652,12 @@ async fn validated_authorization_client(
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .ok_or(AuthError::NotFound)?;
     validate_authorization_request(&client, request).map_err(AuthError::InvalidRequest)?;
+    if !crate::db::oidc_client_context_is_active(database(state)?, &client.client_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    {
+        return Err(AuthError::NotFound);
+    }
     Ok(client)
 }
 
@@ -441,12 +673,24 @@ async fn authorize_for_user(
         .ok_or(AuthError::NotFound)?;
     let scopes =
         validate_authorization_request(&client, request).map_err(AuthError::InvalidRequest)?;
+    if !crate::db::oidc_client_user_context_is_active(
+        db,
+        &client.client_id,
+        &user_id,
+        client.organization_id.as_deref(),
+    )
+    .await
+    .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    {
+        return Err(AuthError::Forbidden);
+    }
     let code = Uuid::new_v4().simple().to_string();
     crate::db::create_authorization_code(
         db,
         &code,
         &OidcAuthorizationCode {
             client_id: request.client_id.clone(),
+            organization_id: client.organization_id.clone(),
             user_id,
             redirect_uri: request.redirect_uri.clone(),
             scopes,
@@ -500,6 +744,17 @@ pub async fn login(
     if !verify(&request.password, password_hash).unwrap_or(false) {
         return Err(AuthError::WrongCredentials);
     }
+    if !crate::db::oidc_client_user_context_is_active(
+        db,
+        &client.client_id,
+        &user.id,
+        client.organization_id.as_deref(),
+    )
+    .await
+    .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    {
+        return Err(AuthError::WrongCredentials);
+    }
     let raw_session = Uuid::new_v4().simple().to_string();
     crate::db::create_browser_session(
         db,
@@ -537,7 +792,18 @@ pub async fn consent(
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
         .ok_or(AuthError::Unauthorized)?;
-    validated_authorization_client(&state, &request.authorization).await?;
+    let client = validated_authorization_client(&state, &request.authorization).await?;
+    if !crate::db::oidc_client_user_context_is_active(
+        database(&state)?,
+        &client.client_id,
+        &session.user_id,
+        client.organization_id.as_deref(),
+    )
+    .await
+    .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    {
+        return Err(AuthError::Forbidden);
+    }
     let event_type = match request.decision.as_str() {
         "approve" => "oidc.authorization.approved",
         "deny" => "oidc.authorization.denied",
@@ -623,21 +889,21 @@ pub async fn token(
     }
     let (client_id, client_secret) = token_client_credentials(&headers, &request)?;
     let db = database(&state)?;
-    let Some((client_type, secret_hash, active)) =
-        crate::db::get_oidc_client_secret_hash(db, &client_id)
-            .await
-            .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    let Some(client_context) = crate::db::get_oidc_client_secret_hash(db, &client_id)
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
     else {
         return Err(AuthError::Unauthorized.into());
     };
-    if !active
-        || (client_type == "confidential"
+    if !client_context.active
+        || (client_context.client_type == "confidential"
             && !client_secret.as_deref().is_some_and(|secret| {
-                secret_hash
+                client_context
+                    .client_secret_hash
                     .as_deref()
                     .is_some_and(|hash| verify(secret, hash).unwrap_or(false))
             }))
-        || (client_type == "public" && client_secret.is_some())
+        || (client_context.client_type == "public" && client_secret.is_some())
     {
         return Err(AuthError::Unauthorized.into());
     }
@@ -648,6 +914,7 @@ pub async fn token(
             OidcProtocolError::invalid_grant("authorization code is invalid or expired")
         })?;
     if authorization.client_id != client_id
+        || authorization.organization_id != client_context.organization_id
         || authorization.redirect_uri != request.redirect_uri
         || !verify_pkce_s256(&request.code_verifier, &authorization.code_challenge)
     {
@@ -655,15 +922,15 @@ pub async fn token(
             "authorization code binding or PKCE verification failed",
         ));
     }
-    if crate::db::consume_authorization_code(db, &request.code)
-        .await
-        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
-        .is_none()
-    {
-        return Err(OidcProtocolError::invalid_grant(
-            "authorization code has already been consumed",
-        ));
-    }
+    let authorization = crate::db::consume_authorization_code_for_client(
+        db,
+        &request.code,
+        &client_id,
+        client_context.organization_id.as_deref(),
+    )
+    .await
+    .map_err(|error| AuthError::DatabaseError(error.to_string()))?
+    .ok_or_else(|| OidcProtocolError::invalid_grant("authorization code is no longer active"))?;
     let user = crate::db::user::get_user_by_id(db, &authorization.user_id)
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?
@@ -681,6 +948,7 @@ pub async fn token(
         jti: Uuid::new_v4().to_string(),
         scope: scope.clone(),
         token_type: "Bearer".to_string(),
+        organization_id: authorization.organization_id.clone(),
     })?;
     let id_token = state.jwt_keys.sign_token(&OidcIdTokenClaims {
         iss: state.config.oidc_issuer(),
@@ -689,6 +957,7 @@ pub async fn token(
         exp: expires_at,
         iat: now,
         nonce: authorization.nonce.ok_or(AuthError::InvalidToken)?,
+        organization_id: authorization.organization_id,
         name: authorization
             .scopes
             .iter()
@@ -738,6 +1007,7 @@ mod tests {
             exp: 2,
             iat: 1,
             nonce: "nonce".to_string(),
+            organization_id: None,
             name: None,
             email: Some("alice@example.com".to_string()),
             email_verified: Some(false),

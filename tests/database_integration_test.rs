@@ -1288,6 +1288,7 @@ mod database_tests {
         let code = "authorization-code-value";
         let authorization = keylo::models::OidcAuthorizationCode {
             client_id: client_request.client_id,
+            organization_id: None,
             user_id: user.id.clone(),
             redirect_uri: "https://example.com/callback".to_string(),
             scopes: vec!["openid".to_string()],
@@ -1310,6 +1311,142 @@ mod database_tests {
             .await
             .expect("Failed to check authorization-code replay")
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_organization_oidc_codes_are_revoked_by_lifecycle_changes() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_organization_oidc_codes_are_revoked_by_lifecycle_changes: {msg}"
+                );
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization = db::create_organization(
+            &pool,
+            &format!("oidc-lifecycle-{suffix}"),
+            "OIDC lifecycle test organization",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create OIDC lifecycle organization");
+        let user = db::create_user(
+            &pool,
+            &format!("oidc-lifecycle-user-{suffix}"),
+            &format!("oidc-lifecycle-user-{suffix}@example.test"),
+            Some("OidcLifecycle#123"),
+        )
+        .await
+        .expect("Failed to create OIDC lifecycle user");
+        let principal = db::get_principal_by_ref(&pool, "user", &user.id)
+            .await
+            .expect("Failed to load OIDC lifecycle principal")
+            .expect("OIDC lifecycle principal should exist");
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &principal.id,
+            "active",
+            None,
+            Some(keylo::models::ORGANIZATION_MANAGEMENT_ROLE_OWNER),
+        )
+        .await
+        .expect("Failed to create OIDC lifecycle membership");
+        let client = db::create_oidc_client_as_organization_manager(
+            &pool,
+            &organization.id,
+            &principal.id,
+            &keylo::models::CreateOidcClientRequest {
+                client_id: format!("oidc-lifecycle-client-{suffix}"),
+                client_secret: Some("OidcLifecycleSecret#123".to_string()),
+                name: "OIDC lifecycle client".to_string(),
+                description: None,
+                client_type: "confidential".to_string(),
+                redirect_uris: vec!["https://example.test/callback".to_string()],
+                grant_types: None,
+                scopes: None,
+            },
+        )
+        .await
+        .expect("Failed to create organization OIDC client");
+
+        let disabled_code = format!("oidc-lifecycle-disabled-{suffix}");
+        db::create_authorization_code(
+            &pool,
+            &disabled_code,
+            &keylo::models::OidcAuthorizationCode {
+                client_id: client.client_id.clone(),
+                organization_id: Some(organization.id.clone()),
+                user_id: user.id.clone(),
+                redirect_uri: "https://example.test/callback".to_string(),
+                scopes: vec!["openid".to_string()],
+                nonce: Some("disabled-nonce".to_string()),
+                code_challenge: "a".repeat(43),
+                expires_at: chrono::Utc::now().timestamp() + 300,
+            },
+        )
+        .await
+        .expect("Failed to create organization authorization code");
+        db::set_organization_status(
+            &pool,
+            &organization.id,
+            keylo::models::ORGANIZATION_STATUS_DISABLED,
+        )
+        .await
+        .expect("Failed to disable OIDC lifecycle organization");
+        assert!(
+            db::get_active_authorization_code(&pool, &disabled_code)
+                .await
+                .expect("Failed to load disabled organization code")
+                .is_none(),
+            "organization disable must revoke pending OIDC codes"
+        );
+
+        db::set_organization_status(
+            &pool,
+            &organization.id,
+            keylo::models::ORGANIZATION_STATUS_ACTIVE,
+        )
+        .await
+        .expect("Failed to restore OIDC lifecycle organization");
+        let suspended_code = format!("oidc-lifecycle-suspended-{suffix}");
+        db::create_authorization_code(
+            &pool,
+            &suspended_code,
+            &keylo::models::OidcAuthorizationCode {
+                client_id: client.client_id,
+                organization_id: Some(organization.id.clone()),
+                user_id: user.id,
+                redirect_uri: "https://example.test/callback".to_string(),
+                scopes: vec!["openid".to_string()],
+                nonce: Some("suspended-nonce".to_string()),
+                code_challenge: "b".repeat(43),
+                expires_at: chrono::Utc::now().timestamp() + 300,
+            },
+        )
+        .await
+        .expect("Failed to create second organization authorization code");
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &principal.id,
+            "suspended",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to suspend OIDC lifecycle membership");
+        assert!(
+            db::get_active_authorization_code(&pool, &suspended_code)
+                .await
+                .expect("Failed to load suspended membership code")
+                .is_none(),
+            "suspended membership must revoke pending OIDC codes"
+        );
     }
 
     #[tokio::test]

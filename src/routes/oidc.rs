@@ -1,6 +1,6 @@
 use crate::{handlers::oidc, state::AppState};
 use axum::{
-    routing::{get, post, put},
+    routing::{get, post},
     Router,
 };
 
@@ -12,11 +12,28 @@ pub fn admin_routes() -> Router<AppState> {
         )
         .route(
             "/v1/admin/oidc/clients/{client_id}",
-            put(oidc::update_client),
+            get(oidc::get_client).put(oidc::update_client),
         )
         .route(
             "/v1/admin/oidc/clients/{client_id}/rotate-secret",
             post(oidc::rotate_client_secret),
+        )
+}
+
+/// Tenant owners and administrators manage only clients persisted in their active organization.
+pub fn organization_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/v1/organizations/{organization_id}/oidc/clients",
+            get(oidc::list_organization_clients).post(oidc::create_organization_client),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/oidc/clients/{client_id}",
+            get(oidc::get_organization_client).put(oidc::update_organization_client),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/oidc/clients/{client_id}/rotate-secret",
+            post(oidc::rotate_organization_client_secret),
         )
 }
 
