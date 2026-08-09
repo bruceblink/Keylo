@@ -83,7 +83,7 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 | 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | platform 与 organization 角色按 signed active context 分开决策，资源按 organization_id 过滤；组、composite role 和细粒度 delegated admin 仍未实现 |
 | SaaS 组织基础 | `organizations`、`user_class`、成员关系、组织角色绑定、资源、refresh session、OIDC client、service client、identity source 和 device/API key scope 已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织；平台与组织成员管理 API 已可用 | organization role binding 和 organization OIDC client 管理只在同一 signed active context 中生效 |
 | Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | 人类密码登录可显式建立 organization-scoped refresh session，生命周期会撤销该 scope；JWKS 在 overlap 窗口内同时发布 active 与 passive 公钥 |
-| 运行和首启 | PostgreSQL SQLx migrations、Redis 生产就绪校验、healthz/readyz、固定基数 metrics、审计清理、密文配置、setup wizard | 尚未承诺多实例一致性、outbox/webhook、OpenTelemetry 或跨区域恢复 |
+| 运行和首启 | PostgreSQL SQLx migrations、Redis 生产就绪校验、healthz/readyz、固定基数 metrics、稳定游标审计导出、审计清理、密文配置、setup wizard | 尚未承诺多实例一致性、outbox/webhook、OpenTelemetry 或跨区域恢复 |
 | 管理体验 | API-first 的用户、客户端、服务、身份源、Principal、RBAC、资源和审计接口；setup wizard 只做首启诊断 | 没有 Admin Console、Account Console、主题系统或管理 CLI |
 
 ## 4. 核心技术设计

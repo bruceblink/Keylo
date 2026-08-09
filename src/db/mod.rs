@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::models::{AuditLogExportEntry, AuditLogExportPage};
 use crate::utils::validate_password_complexity;
 use anyhow::Result;
 use bcrypt::{hash, DEFAULT_COST};
@@ -746,6 +747,92 @@ pub async fn list_audit_logs(
             )
         })
         .collect())
+}
+
+/// Export audit events with a stable `(created_at, id)` cursor.
+///
+/// The event id is persisted at write time and is returned to consumers as a
+/// deduplication key, while the cursor keeps retries and concurrent inserts
+/// from changing the meaning of an already delivered page.
+pub async fn list_audit_log_export(
+    pool: &PgPool,
+    limit: i64,
+    event_type: Option<&str>,
+    cursor: Option<&str>,
+) -> Result<AuditLogExportPage> {
+    let (cursor_created_at_micros, cursor_id) = cursor
+        .map(|value| {
+            let (micros, id) = value
+                .rsplit_once(':')
+                .ok_or_else(|| anyhow::anyhow!("invalid audit export cursor"))?;
+            let micros = micros
+                .parse::<i64>()
+                .map_err(|_| anyhow::anyhow!("invalid audit export cursor"))?;
+            if id.is_empty() {
+                return Err(anyhow::anyhow!("invalid audit export cursor"));
+            }
+            Ok((micros, id.to_string()))
+        })
+        .transpose()?
+        .map_or((None, None), |(micros, id)| (Some(micros), Some(id)));
+
+    let rows = sqlx::query(
+        "SELECT id, event_type, actor, detail,
+                extract(epoch from created_at)::bigint as created_at,
+                (extract(epoch from created_at) * 1000000)::bigint as cursor_created_at_micros
+         FROM audit_logs
+         WHERE ($1::text IS NULL OR event_type = $1)
+           AND (
+                $2::bigint IS NULL
+                OR (extract(epoch from created_at) * 1000000)::bigint < $2
+                OR (
+                    (extract(epoch from created_at) * 1000000)::bigint = $2
+                    AND id < $3
+                )
+           )
+         ORDER BY created_at DESC, id DESC
+         LIMIT $4",
+    )
+    .bind(event_type)
+    .bind(cursor_created_at_micros)
+    .bind(cursor_id)
+    .bind(limit + 1)
+    .fetch_all(pool)
+    .await?;
+
+    let has_more = rows.len() > limit as usize;
+    let mut entries = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(|row| AuditLogExportEntry {
+            id: row.get("id"),
+            event_type: row.get("event_type"),
+            actor: row.get("actor"),
+            detail: row.get("detail"),
+            created_at: row.get("created_at"),
+        })
+        .collect::<Vec<_>>();
+
+    let next_cursor = if has_more {
+        let last = entries
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("audit export page unexpectedly empty"))?;
+        let cursor_created_at_micros = sqlx::query_scalar::<_, i64>(
+            "SELECT (extract(epoch from created_at) * 1000000)::bigint
+             FROM audit_logs WHERE id = $1",
+        )
+        .bind(&last.id)
+        .fetch_one(pool)
+        .await?;
+        Some(format!("{cursor_created_at_micros}:{}", last.id))
+    } else {
+        None
+    };
+
+    Ok(AuditLogExportPage {
+        entries: std::mem::take(&mut entries),
+        next_cursor,
+    })
 }
 
 /// 清理旧审计日志

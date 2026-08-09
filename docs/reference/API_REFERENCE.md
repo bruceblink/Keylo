@@ -275,11 +275,19 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | POST | `/v1/admin/blacklist` | 拉黑 token |
 | GET | `/v1/admin/blacklisted-tokens` | 查询黑名单 token |
 | GET | `/v1/admin/audit-logs` | 查询审计日志（`limit/offset`） |
+| GET | `/v1/admin/audit-logs/export` | 稳定游标导出审计日志（管理员） |
 | POST | `/v1/admin/audit-logs/cleanup` | 清理审计日志（按保留天数） |
 | GET | `/v1/admin/clients` | 查询管理客户端 |
 | POST | `/v1/admin/clients` | 创建管理客户端 |
 | PUT | `/v1/admin/clients/{client_id}` | 更新管理客户端 |
 | POST | `/v1/admin/clients/{client_id}/rotate-secret` | 轮换管理客户端密钥 |
+
+`GET /v1/admin/audit-logs/export`：
+
+- 仅接受 admin access token；查询参数为 `event_type`（可选精确过滤）、`limit`（默认 100，范围 1-200）和 `cursor`（上一页返回的游标）。
+- 返回 `data`、`next_cursor` 和 `dedupe_key: "id"`。每条记录的 `id` 是数据库持久化的稳定事件标识，消费方应以它去重并允许重复投递安全重试。
+- 导出按 `created_at DESC, id DESC` 稳定排序；新增日志不会改变已经返回游标之后的页面。无下一页时 `next_cursor` 为 `null`。
+- `detail` 会对 `access_token`、`refresh_token`、`client_secret`、`api_key`、`password`、`recovery_code`、`totp_code` 和 `verifier` 字段进行 `[REDACTED]` 处理，并屏蔽形似 JWT 的值；审计日志不得写入密钥或 Token 原文。
 
 `POST /v1/admin/clients/{client_id}/rotate-secret`：
 

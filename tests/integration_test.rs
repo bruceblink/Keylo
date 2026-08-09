@@ -58,6 +58,7 @@ mod tests {
         reqwest as oidc_reqwest, AuthorizationCode, ClientId, CsrfToken, IssuerUrl, Nonce,
         OAuth2TokenResponse, PkceCodeChallenge, RedirectUrl, Scope,
     };
+    use std::collections::HashSet;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1660,6 +1661,84 @@ mod tests {
                 || audit_response.status_code() == StatusCode::NOT_FOUND
                 || audit_response.status_code() == StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[tokio::test]
+    async fn test_audit_export_is_resumable_and_redacts_sensitive_details() {
+        let server = setup_test_server().await;
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .expect("TEST_DATABASE_URL is required for audit export integration tests");
+        let pool = db::init_db_pool(&database_url).await.unwrap();
+        db::run_migrations(&pool).await.unwrap();
+
+        let event_type = format!("audit.export.test.{}", uuid::Uuid::new_v4());
+        db::create_audit_log(
+            &pool,
+            &event_type,
+            Some("principal:export-admin"),
+            Some("client_secret=super-secret access_token=eyJheader.payload.signature"),
+        )
+        .await
+        .unwrap();
+        sleep(Duration::from_millis(5)).await;
+        db::create_audit_log(
+            &pool,
+            &event_type,
+            Some("principal:export-admin"),
+            Some(r#"{"password":"plain-secret","operation":"read"}"#),
+        )
+        .await
+        .unwrap();
+
+        let login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        login.assert_status_ok();
+        let login_body: serde_json::Value = login.json();
+        let admin_token = login_body["access_token"].as_str().unwrap();
+
+        let first = server
+            .get(&format!(
+                "/v1/admin/audit-logs/export?event_type={event_type}&limit=1"
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        first.assert_status_ok();
+        let first_body: serde_json::Value = first.json();
+        assert_eq!(first_body["dedupe_key"], "id");
+        let first_row = &first_body["data"][0];
+        assert!(first_row["id"].as_str().is_some_and(|id| !id.is_empty()));
+        let first_detail = first_row["detail"].as_str().unwrap();
+        assert!(!first_detail.contains("super-secret"));
+        assert!(!first_detail.contains("plain-secret"));
+        let cursor = first_body["next_cursor"].as_str().unwrap();
+
+        let second = server
+            .get(&format!(
+                "/v1/admin/audit-logs/export?event_type={event_type}&limit=1&cursor={cursor}"
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        second.assert_status_ok();
+        let second_body: serde_json::Value = second.json();
+        let second_row = &second_body["data"][0];
+        assert_ne!(first_row["id"], second_row["id"]);
+        let second_detail = second_row["detail"].as_str().unwrap();
+        assert!(!second_detail.contains("super-secret"));
+        assert!(!second_detail.contains("plain-secret"));
+        assert!(first_detail.contains("[REDACTED]") || second_detail.contains("[REDACTED]"));
+
+        let ids = [
+            first_row["id"].as_str().unwrap(),
+            second_row["id"].as_str().unwrap(),
+        ]
+        .into_iter()
+        .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 2);
     }
 
     #[tokio::test]

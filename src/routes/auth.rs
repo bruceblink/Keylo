@@ -1,8 +1,8 @@
 use crate::handlers::user::{jit_register_user, register_user};
 use crate::handlers::{
     admin_token, auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client,
-    auth_get_audit_logs, auth_get_blacklisted_tokens, auth_introspect, auth_jwks,
-    auth_list_clients, auth_logout, auth_logout_refresh_token, auth_me, auth_refresh,
+    auth_export_audit_logs, auth_get_audit_logs, auth_get_blacklisted_tokens, auth_introspect,
+    auth_jwks, auth_list_clients, auth_logout, auth_logout_refresh_token, auth_me, auth_refresh,
     auth_retire_jwt_key, auth_rollback_jwt_key, auth_rotate_client_secret, auth_rotate_jwt_key,
     auth_select_organization_context, auth_token, auth_update_client, keylo_configuration,
 };
@@ -28,6 +28,7 @@ pub fn admin_router() -> Router<AppState> {
             get(auth_get_blacklisted_tokens),
         )
         .route("/v1/admin/audit-logs", get(auth_get_audit_logs))
+        .route("/v1/admin/audit-logs/export", get(auth_export_audit_logs))
         .route(
             "/v1/admin/audit-logs/cleanup",
             post(auth_cleanup_audit_logs),

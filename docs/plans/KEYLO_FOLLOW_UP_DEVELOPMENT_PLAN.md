@@ -172,11 +172,11 @@
 
 ### 2.1-P1-D 运行可观测性
 
-- 保持固定基数 metrics，补充按功能而不是按用户或 URI 的认证、授权、依赖和 session 指标。
-- 在确认外部消费方前，优先实现一个可验证的 audit export 或 webhook/outbox 方案，不同时引入多个事件平台。
-- 为 PostgreSQL/Redis 连接池、迁移、readiness、key rotation 和审计清理定义容量和失败门槛。
+- [x] 保持固定基数 metrics，补充按功能而不是按用户或 URI 的认证、授权、依赖和 session 指标。
+- [x] 在确认外部消费方前，优先实现一个可验证的 audit export 或 webhook/outbox 方案，不同时引入多个事件平台；当前交付稳定游标的管理员审计导出。
+- [x] 为 PostgreSQL/Redis 连接池、迁移、readiness、key rotation 和审计清理定义容量和失败门槛。
 
-验收：指标不会泄露主体或 Token；审计导出重复投递可检测；依赖故障不会把拒绝转换成成功。
+验收（已完成）：指标不会泄露主体或 Token；审计导出以稳定 `id` 作为去重键并支持游标续传；依赖故障不会把拒绝转换成成功。
 
 ## 5. 需求触发的 2.2+ 扩展
 

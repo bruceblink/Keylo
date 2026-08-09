@@ -124,6 +124,31 @@ pub struct CleanupAuditLogsRequest {
     pub retention_days: Option<i64>,
 }
 
+/// Query parameters for the bounded, resumable audit export surface.
+#[derive(Debug, Deserialize, Default)]
+pub struct AuditLogExportQuery {
+    pub event_type: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// One audit event in an export page. `id` is the stable consumer dedupe key.
+#[derive(Debug, Serialize)]
+pub struct AuditLogExportEntry {
+    pub id: String,
+    pub event_type: String,
+    pub actor: Option<String>,
+    pub detail: Option<String>,
+    pub created_at: i64,
+}
+
+/// A page of audit events and an optional cursor for the next page.
+#[derive(Debug, Serialize)]
+pub struct AuditLogExportPage {
+    pub entries: Vec<AuditLogExportEntry>,
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RotateClientSecretRequest {
     pub new_secret: Option<String>,

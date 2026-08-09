@@ -2,9 +2,9 @@ use crate::db::refresh_session::ConsumeRefreshSessionResult;
 use crate::db::user::get_user_by_username;
 use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
-    AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest,
-    CreateClientRequest, IntrospectTokenRequest, KeyloConfiguration, MeResponse,
-    OrganizationContextRequest, Principal, RefreshTokenRequest, RetireJwtKeyRequest,
+    AuditLogExportQuery, AuthBody, AuthPayload, BlacklistTokenRequest, Claims,
+    CleanupAuditLogsRequest, CreateClientRequest, IntrospectTokenRequest, KeyloConfiguration,
+    MeResponse, OrganizationContextRequest, Principal, RefreshTokenRequest, RetireJwtKeyRequest,
     RotateClientSecretRequest, RotateJwtKeyRequest, TokenIntrospectResponse, UpdateClientRequest,
 };
 use crate::state::AppState;
@@ -18,7 +18,7 @@ use axum_extra::TypedHeader;
 use bcrypt::verify;
 use chrono::Utc;
 use http::request::Parts;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
@@ -31,6 +31,66 @@ fn access_scope(_subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
         vec!["read".into(), "write".into(), "admin".into()]
     } else {
         vec!["read".into(), "write".into()]
+    }
+}
+
+const SENSITIVE_AUDIT_KEYS: &[&str] = &[
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "api_key",
+    "password",
+    "recovery_code",
+    "totp_code",
+    "verifier",
+];
+
+/// Redact credentials from exported details while preserving operational context.
+fn redact_audit_detail(detail: Option<String>) -> Option<String> {
+    detail.map(|value| {
+        if let Ok(mut json_value) = serde_json::from_str::<Value>(&value) {
+            redact_audit_json_value(&mut json_value);
+            return json_value.to_string();
+        }
+
+        value
+            .split_whitespace()
+            .map(|part| {
+                let lower = part.to_ascii_lowercase();
+                let is_sensitive = SENSITIVE_AUDIT_KEYS.iter().any(|key| {
+                    lower.starts_with(&format!("{key}=")) || lower.starts_with(&format!("{key}:"))
+                });
+                if is_sensitive {
+                    part.split_once(['=', ':'])
+                        .map(|(key, _)| format!("{key}=[REDACTED]"))
+                        .unwrap_or_else(|| "[REDACTED]".to_string())
+                } else if part.len() >= 24 && part.matches('.').count() == 2 {
+                    "[REDACTED_TOKEN]".to_string()
+                } else {
+                    part.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
+}
+
+fn redact_audit_json_value(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            for (key, child) in fields.iter_mut() {
+                if SENSITIVE_AUDIT_KEYS
+                    .iter()
+                    .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
+                {
+                    *child = Value::String("[REDACTED]".to_string());
+                } else {
+                    redact_audit_json_value(child);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(redact_audit_json_value),
+        _ => {}
     }
 }
 
@@ -917,6 +977,62 @@ pub async fn auth_get_audit_logs(
             "Database not available".to_string(),
         ))
     }
+}
+
+pub async fn auth_export_audit_logs(
+    State(state): State<AppState>,
+    claims: Claims,
+    Query(params): Query<AuditLogExportQuery>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if !claims.has_scope("admin") {
+        return Err(AuthError::Forbidden);
+    }
+
+    if let Some(cursor) = params.cursor.as_deref() {
+        let (micros, id) = cursor
+            .rsplit_once(':')
+            .ok_or_else(|| AuthError::InvalidRequest("invalid audit export cursor".to_string()))?;
+        if micros.parse::<i64>().is_err() || id.is_empty() {
+            return Err(AuthError::InvalidRequest(
+                "invalid audit export cursor".to_string(),
+            ));
+        }
+    }
+
+    let limit = params.limit.unwrap_or(100).clamp(1, 200);
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
+    let page = crate::db::list_audit_log_export(
+        db,
+        limit,
+        params.event_type.as_deref(),
+        params.cursor.as_deref(),
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Failed to export audit logs".to_string()))?;
+
+    let data = page
+        .entries
+        .into_iter()
+        .map(|entry| {
+            json!({
+                "id": entry.id,
+                "event_type": entry.event_type,
+                "actor": entry.actor,
+                "detail": redact_audit_detail(entry.detail),
+                "created_at": entry.created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(json!({
+        "success": true,
+        "data": data,
+        "next_cursor": page.next_cursor,
+        "dedupe_key": "id"
+    })))
 }
 
 pub async fn auth_cleanup_audit_logs(
