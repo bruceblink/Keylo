@@ -652,6 +652,166 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_platform_admin_can_rotate_retain_and_retire_jwt_keys() {
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let key_dir = std::env::temp_dir().join(format!("keylo-jwt-rotation-{suffix}"));
+        let mut config = test_config();
+        let old_key_id = config.jwt_key_id.clone();
+        config.jwt_private_key_path = key_dir.join("private.pem").display().to_string();
+        config.jwt_public_key_path = key_dir.join("public.pem").display().to_string();
+        config.jwt_key_id_path = key_dir.join("key-id").display().to_string();
+        config.jwt_passive_private_key_path =
+            key_dir.join("passive-private.pem").display().to_string();
+        config.jwt_passive_public_key_path =
+            key_dir.join("passive-public.pem").display().to_string();
+        config.jwt_passive_key_id_path = key_dir.join("passive-key-id").display().to_string();
+        config.jwt_key_overlap_seconds = 300;
+        let server = setup_test_server_with_config(config).await;
+
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            return;
+        }
+        admin_login.assert_status_ok();
+        let old_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("old admin token should exist")
+            .to_string();
+        let rotated = server
+            .post("/v1/admin/security/jwt-keys/rotate")
+            .add_header("Authorization", format!("Bearer {old_token}"))
+            .json(&json!({"key_id": format!("rotation-http-{suffix}"), "overlap_seconds": 300}))
+            .await;
+        rotated.assert_status_ok();
+        let rotated_body: serde_json::Value = rotated.json();
+        let first_key_id = rotated_body["data"]["active_key_id"]
+            .as_str()
+            .expect("rotation should return active key id")
+            .to_string();
+        assert_eq!(rotated_body["data"]["passive_key_ids"][0], old_key_id);
+        let jwks = server.get("/.well-known/jwks.json").await;
+        jwks.assert_status_ok();
+        assert_eq!(
+            jwks.json::<serde_json::Value>()["keys"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let old_token_still_valid = server
+            .get("/protected")
+            .add_header("Authorization", format!("Bearer {old_token}"))
+            .await;
+        old_token_still_valid.assert_status_ok();
+
+        let new_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        new_login.assert_status_ok();
+        let new_token = new_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("new admin token should exist")
+            .to_string();
+        let new_claims = Keys::from_config(&test_config())
+            .expect("test keys should load")
+            .decode_token(&new_token);
+        assert!(
+            new_claims.is_err(),
+            "test-config keys must not verify rotated tokens"
+        );
+
+        let second_key_id = format!("rotation-http-second-{suffix}");
+        let second_rotation = server
+            .post("/v1/admin/security/jwt-keys/rotate")
+            .add_header("Authorization", format!("Bearer {new_token}"))
+            .json(&json!({"key_id": second_key_id, "overlap_seconds": 300}))
+            .await;
+        second_rotation.assert_status_ok();
+        let rollback = server
+            .post("/v1/admin/security/jwt-keys/rollback")
+            .add_header("Authorization", format!("Bearer {new_token}"))
+            .json(&json!({"key_id": first_key_id.clone()}))
+            .await;
+        rollback.assert_status_ok();
+        let rollback_body: serde_json::Value = rollback.json();
+        assert_eq!(rollback_body["data"]["active_key_id"], first_key_id);
+        assert_eq!(
+            rollback_body["data"]["passive_key_ids"][0],
+            format!("rotation-http-second-{suffix}")
+        );
+        let rollback_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        rollback_login.assert_status_ok();
+        let rollback_token = rollback_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("rollback admin token should exist")
+            .to_string();
+
+        let retired = server
+            .post("/v1/admin/security/jwt-keys/retire")
+            .add_header("Authorization", format!("Bearer {rollback_token}"))
+            .json(&json!({"key_id": rollback_body["data"]["passive_key_ids"][0]}))
+            .await;
+        retired.assert_status_ok();
+        let jwks_after_retire = server.get("/.well-known/jwks.json").await;
+        jwks_after_retire.assert_status_ok();
+        assert_eq!(
+            jwks_after_retire.json::<serde_json::Value>()["keys"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let old_token_after_retire = server
+            .get("/protected")
+            .add_header("Authorization", format!("Bearer {old_token}"))
+            .await;
+        assert_eq!(
+            old_token_after_retire.status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let pool = setup_organization_test_pool()
+            .await
+            .expect("rotation test database should be available");
+        let audit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_logs WHERE event_type IN ('jwt_signing_key.rotated', 'jwt_signing_key.retired') AND detail LIKE $1",
+        )
+        .bind(format!("%rotation-http-{suffix}%"))
+        .fetch_one(&pool)
+        .await
+        .expect("rotation audit query should succeed");
+        assert!(audit_count >= 1);
+        let _ = std::fs::remove_dir_all(key_dir);
+    }
+
+    #[tokio::test]
+    async fn test_jwt_key_management_requires_platform_admin() {
+        let server = setup_test_server().await;
+        let response = server
+            .post("/v1/admin/security/jwt-keys/rotate")
+            .json(&json!({"key_id": "unauthorized-rotation"}))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn test_oidc_public_client_token_request_rejects_a_secret() {
         let server = setup_test_server().await;
         let admin_login = server

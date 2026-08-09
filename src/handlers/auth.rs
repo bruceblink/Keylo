@@ -4,8 +4,8 @@ use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
     AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest,
     CreateClientRequest, IntrospectTokenRequest, KeyloConfiguration, MeResponse,
-    OrganizationContextRequest, Principal, RefreshTokenRequest, RotateClientSecretRequest,
-    TokenIntrospectResponse, UpdateClientRequest,
+    OrganizationContextRequest, Principal, RefreshTokenRequest, RetireJwtKeyRequest,
+    RotateClientSecretRequest, RotateJwtKeyRequest, TokenIntrospectResponse, UpdateClientRequest,
 };
 use crate::state::AppState;
 use crate::utils;
@@ -21,7 +21,10 @@ use http::request::Parts;
 use serde_json::json;
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fs;
 use std::net::{IpAddr, SocketAddr};
+use std::path::Path as FsPath;
+use uuid::Uuid;
 
 fn access_scope(_subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
     if is_admin_client {
@@ -1358,6 +1361,217 @@ pub async fn auth_introspect(
 }
 pub async fn auth_jwks(State(state): State<AppState>) -> Json<crate::models::JwksDocument> {
     Json(state.jwt_keys.jwks())
+}
+
+/// Persist a rotated key through a sibling temporary file so readers never see partial PEM data.
+fn persist_rotation_file(path: &str, contents: &str, private_key: bool) -> Result<(), AuthError> {
+    let target = FsPath::new(path);
+    if let Some(parent) = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            AuthError::InternalServerError(format!("failed to create key directory: {error}"))
+        })?;
+    }
+    let temporary = FsPath::new(&format!("{path}.next")).to_path_buf();
+    fs::write(&temporary, contents).map_err(|error| {
+        AuthError::InternalServerError(format!("failed to persist rotated key: {error}"))
+    })?;
+    if private_key {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600)).map_err(
+                |error| {
+                    AuthError::InternalServerError(format!(
+                        "failed to protect rotated private key: {error}"
+                    ))
+                },
+            )?;
+        }
+    }
+    if target.exists() {
+        fs::remove_file(target).map_err(|error| {
+            AuthError::InternalServerError(format!("failed to replace rotated key: {error}"))
+        })?;
+    }
+    fs::rename(&temporary, target).map_err(|error| {
+        AuthError::InternalServerError(format!("failed to activate rotated key: {error}"))
+    })?;
+    Ok(())
+}
+
+/// Remove a retired key file while treating an already absent file as success.
+fn remove_rotation_file(path: &str) -> Result<(), AuthError> {
+    let target = FsPath::new(path);
+    if target.exists() {
+        fs::remove_file(target).map_err(|error| {
+            AuthError::InternalServerError(format!("failed to retire persisted key: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
+/// Record a key lifecycle event without including private key material in the audit detail.
+async fn audit_jwt_key_event(
+    state: &AppState,
+    event_type: &str,
+    actor: &str,
+    detail: &str,
+) -> Result<(), AuthError> {
+    let Some(db) = state.db.as_deref() else {
+        return Err(AuthError::DatabaseError(
+            "Database not available".to_string(),
+        ));
+    };
+    crate::db::create_audit_log(db, event_type, Some(actor), Some(detail))
+        .await
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))
+}
+
+/// Rotate the signing key while retaining the previous private/public pair for rollback.
+pub async fn auth_rotate_jwt_key(
+    claims: Claims,
+    State(state): State<AppState>,
+    Json(request): Json<RotateJwtKeyRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let key_id = request.key_id.unwrap_or_else(|| {
+        format!(
+            "{}-{}",
+            state.jwt_keys.active_key_id(),
+            Uuid::new_v4().simple()
+        )
+    });
+    if key_id.len() > 128
+        || key_id.is_empty()
+        || !key_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(AuthError::InvalidRequest(
+            "key_id must contain only ASCII letters, digits, '.', '_' or '-' and be at most 128 characters"
+                .to_string(),
+        ));
+    }
+    let overlap_seconds = request
+        .overlap_seconds
+        .unwrap_or(state.config.jwt_key_overlap_seconds);
+    if !(1..=2_592_000).contains(&overlap_seconds) {
+        return Err(AuthError::InvalidRequest(
+            "overlap_seconds must be between 1 and 2592000".to_string(),
+        ));
+    }
+    let old_key_id = state.jwt_keys.active_key_id();
+    let (old_private, old_public) = state.jwt_keys.active_key_material();
+    let (new_private, new_public) =
+        crate::config::generate_rsa_key_pair().map_err(AuthError::InternalServerError)?;
+
+    persist_rotation_file(
+        &state.config.jwt_passive_private_key_path,
+        &old_private,
+        true,
+    )?;
+    persist_rotation_file(
+        &state.config.jwt_passive_public_key_path,
+        &old_public,
+        false,
+    )?;
+    persist_rotation_file(&state.config.jwt_passive_key_id_path, &old_key_id, false)?;
+    persist_rotation_file(&state.config.jwt_private_key_path, &new_private, true)?;
+    persist_rotation_file(&state.config.jwt_public_key_path, &new_public, false)?;
+    persist_rotation_file(&state.config.jwt_key_id_path, &key_id, false)?;
+    state
+        .jwt_keys
+        .rotate(&key_id, &new_private, &new_public, overlap_seconds)
+        .map_err(AuthError::InternalServerError)?;
+
+    let detail = format!(
+        "active_key_id={key_id}; passive_key_id={old_key_id}; overlap_seconds={overlap_seconds}"
+    );
+    audit_jwt_key_event(&state, "jwt_signing_key.rotated", &claims.sub, &detail).await?;
+    Ok(Json(json!({
+        "success": true,
+        "data": {
+            "active_key_id": state.jwt_keys.active_key_id(),
+            "passive_key_ids": state.jwt_keys.passive_key_ids(),
+            "overlap_seconds": overlap_seconds
+        }
+    })))
+}
+
+/// Retire a passive key early and remove its persisted verification material.
+pub async fn auth_retire_jwt_key(
+    claims: Claims,
+    State(state): State<AppState>,
+    Json(request): Json<RetireJwtKeyRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    if !state.jwt_keys.retire_passive(&request.key_id) {
+        return Err(AuthError::NotFound);
+    }
+    remove_rotation_file(&state.config.jwt_passive_private_key_path)?;
+    remove_rotation_file(&state.config.jwt_passive_public_key_path)?;
+    remove_rotation_file(&state.config.jwt_passive_key_id_path)?;
+    audit_jwt_key_event(
+        &state,
+        "jwt_signing_key.retired",
+        &claims.sub,
+        &format!("passive_key_id={}", request.key_id),
+    )
+    .await?;
+    Ok(Json(json!({
+        "success": true,
+        "data": {"active_key_id": state.jwt_keys.active_key_id(), "passive_key_ids": state.jwt_keys.passive_key_ids()}
+    })))
+}
+
+/// Roll back to a retained passive key while keeping the current signer in overlap.
+pub async fn auth_rollback_jwt_key(
+    claims: Claims,
+    State(state): State<AppState>,
+    Json(request): Json<RetireJwtKeyRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let (passive_private, passive_public) = state
+        .jwt_keys
+        .passive_key_material(&request.key_id)
+        .ok_or_else(|| {
+            AuthError::Conflict("passive key private material is unavailable".to_string())
+        })?;
+    let (active_private, active_public) = state.jwt_keys.active_key_material();
+    let active_key_id = state.jwt_keys.active_key_id();
+    let overlap_seconds = state.config.jwt_key_overlap_seconds;
+    persist_rotation_file(
+        &state.config.jwt_passive_private_key_path,
+        &active_private,
+        true,
+    )?;
+    persist_rotation_file(
+        &state.config.jwt_passive_public_key_path,
+        &active_public,
+        false,
+    )?;
+    persist_rotation_file(&state.config.jwt_passive_key_id_path, &active_key_id, false)?;
+    persist_rotation_file(&state.config.jwt_private_key_path, &passive_private, true)?;
+    persist_rotation_file(&state.config.jwt_public_key_path, &passive_public, false)?;
+    persist_rotation_file(&state.config.jwt_key_id_path, &request.key_id, false)?;
+    state
+        .jwt_keys
+        .rollback(&request.key_id, overlap_seconds)
+        .map_err(AuthError::InternalServerError)?;
+    audit_jwt_key_event(
+        &state,
+        "jwt_signing_key.rollback",
+        &claims.sub,
+        &format!(
+            "active_key_id={}; passive_key_id={}; overlap_seconds={overlap_seconds}",
+            request.key_id, active_key_id
+        ),
+    )
+    .await?;
+    Ok(Json(json!({
+        "success": true,
+        "data": {"active_key_id": state.jwt_keys.active_key_id(), "passive_key_ids": state.jwt_keys.passive_key_ids()}
+    })))
 }
 
 pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloConfiguration> {

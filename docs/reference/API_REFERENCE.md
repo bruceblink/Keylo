@@ -67,6 +67,16 @@
 | GET | `/.well-known/keylo-configuration` | 否 | Keylo 轻量发现配置 |
 | GET | `/.well-known/jwks.json` | 否 | JWKS 公钥文档 |
 
+平台管理员密钥管理接口（要求 `admin-backend` audience、platform `admin`/`super_admin` 权限；写操作遵循部署的近期 MFA 策略）：
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| POST | `/v1/admin/security/jwt-keys/rotate` | 生成并启用新的 active RSA key，保留旧 key 为 passive |
+| POST | `/v1/admin/security/jwt-keys/rollback` | 将 live passive key 恢复为 active |
+| POST | `/v1/admin/security/jwt-keys/retire` | 提前下线 passive key |
+
+轮换请求体为 `{ "key_id": "keylo-rs256-2", "overlap_seconds": 900 }`，两个字段都可选；回滚和下线请求体为 `{ "key_id": "..." }`。响应会返回 `active_key_id`、`passive_key_ids` 和有效 overlap，不会返回任何私钥。轮换期间 `/.well-known/jwks.json` 同时发布 active 与仍在 overlap 窗口内的 passive 公钥；新 Token 只使用 active `kid`。每次轮换、回滚和下线都会写入对应的 `jwt_signing_key.*` 审计事件。
+
 `/.well-known/keylo-configuration` 用于第三方服务发现 Keylo 的核心接入端点。它不是完整 OIDC discovery 文档，而是 Keylo 面向轻量统一鉴权场景提供的稳定集成契约。
 
 配置中的 `issuer` 仍是 JWT 的 `JWT_ISSUER`；当设置 `OIDC_PUBLIC_ISSUER` 时，JWKS、Token、内省和文档 URL 使用该公开 origin，避免把容器监听地址暴露给接入方。

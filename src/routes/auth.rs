@@ -3,8 +3,8 @@ use crate::handlers::{
     admin_token, auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client,
     auth_get_audit_logs, auth_get_blacklisted_tokens, auth_introspect, auth_jwks,
     auth_list_clients, auth_logout, auth_logout_refresh_token, auth_me, auth_refresh,
-    auth_rotate_client_secret, auth_select_organization_context, auth_token, auth_update_client,
-    keylo_configuration,
+    auth_retire_jwt_key, auth_rollback_jwt_key, auth_rotate_client_secret, auth_rotate_jwt_key,
+    auth_select_organization_context, auth_token, auth_update_client, keylo_configuration,
 };
 use crate::state::AppState;
 use axum::routing::{get, post, put};
@@ -38,6 +38,22 @@ pub fn admin_router() -> Router<AppState> {
         .route(
             "/v1/admin/clients/{client_id}/rotate-secret",
             post(auth_rotate_client_secret),
+        )
+}
+
+pub fn jwt_key_management_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/v1/admin/security/jwt-keys/rotate",
+            post(auth_rotate_jwt_key),
+        )
+        .route(
+            "/v1/admin/security/jwt-keys/retire",
+            post(auth_retire_jwt_key),
+        )
+        .route(
+            "/v1/admin/security/jwt-keys/rollback",
+            post(auth_rollback_jwt_key),
         )
 }
 

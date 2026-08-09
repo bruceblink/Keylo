@@ -48,7 +48,7 @@
 ### 2.1-D 会话、密钥和账户安全
 
 - 保持 refresh session 原子轮换、重放撤销、按主体/客户端撤销、密码修改或重置后的浏览器和 refresh 会话撤销。
-- 将当前单活动 key 扩展为 active/passive JWKS overlap：新 Token 只用 active kid，旧 kid 在明确窗口内只用于验签；提供轮换、下线、回滚和审计语义。
+- [x] 将当前单活动 key 扩展为 active/passive JWKS overlap：新 Token 只用 active kid，旧 kid 在明确窗口内只用于验签；提供轮换、下线、回滚和审计语义。
 - 固化 TOTP、恢复码、敏感管理操作近期 MFA、OAuth state 和 OIDC upstream state 的过期、一次性消费和重放测试。
 - 交付物：密钥轮换 runbook（只描述当前代码已支持的步骤）、安全回归测试、升级和回滚说明。
 

@@ -131,6 +131,26 @@ pub struct RotateClientSecretRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RotateJwtKeyRequest {
+    pub key_id: Option<String>,
+    pub overlap_seconds: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetireJwtKeyRequest {
+    pub key_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JwtKeyRotationResponse {
+    pub active_key_id: String,
+    pub passive_key_ids: Vec<String>,
+    pub overlap_seconds: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateClientRequest {
     pub client_id: String,
     pub client_secret: String,

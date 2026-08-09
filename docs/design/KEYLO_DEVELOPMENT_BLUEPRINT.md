@@ -28,7 +28,7 @@ Keylo 采用“先通用 IAM 和可用性，再以 SaaS 组织隔离为下一条
 | --- | --- | --- |
 | 标准 OIDC/OAuth 和浏览器 SSO | Discovery、Authorization Code + PKCE、UserInfo、consent、浏览器会话、退出和标准错误 | 已实现并有真实 HTTP 测试 |
 | 身份代理和首次登录关联 | OIDC upstream、JIT、稳定 external subject、账号关联/解除关联和上游会话撤销 | OIDC upstream 已实现 |
-| Token、密钥和会话生命周期 | RS256/JWKS、audience 约束、refresh session 原子轮换、重放撤销、按主体撤销、组织作用域撤销和审计 | 已实现；当前是单活动密钥 |
+| Token、密钥和会话生命周期 | RS256/JWKS、audience 约束、refresh session 原子轮换、重放撤销、按主体撤销、组织作用域撤销和审计 | 已实现；JWT 支持 active/passive overlap、轮换、回滚、下线和审计 |
 | 服务账号与 client credentials | 将非人类调用映射到稳定 service Principal、scope/audience 和可撤销凭证；API key 只作为受限的直连便利，不替代 OIDC | 已实现 `service_id + service_secret -> service_access`；直接 API key 仍属于下一条主线 |
 | 最小权限管理 | Principal、角色、权限、资源树、单点/批量授权检查、变更历史和拒绝原因为审计 | 已实现；暂不做任意策略引擎 |
 | 安全默认值 | 精确 redirect URI、PKCE、HTTPS 默认、限流、登录锁定、MFA、密文配置、失败关闭 | 已实现并持续加固 |
@@ -82,7 +82,7 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 | 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`；service/device Principal 都可绑定多个 API key，显式为 platform 或单一 organization scope，组织调用每次实时重验组织与 membership | API key 只开放给明确声明的授权检查 API；不支持把 API key 作为人类 Bearer Token |
 | 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | platform 与 organization 角色按 signed active context 分开决策，资源按 organization_id 过滤；组、composite role 和细粒度 delegated admin 仍未实现 |
 | SaaS 组织基础 | `organizations`、`user_class`、成员关系、组织角色绑定、资源、refresh session、OIDC client、service client、identity source 和 device/API key scope 已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织；平台与组织成员管理 API 已可用 | organization role binding 和 organization OIDC client 管理只在同一 signed active context 中生效 |
-| Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | 人类密码登录可显式建立 organization-scoped refresh session，生命周期会撤销该 scope；JWKS 当前只包含一把活动公钥，没有新旧 key 并行的无感轮换 |
+| Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | 人类密码登录可显式建立 organization-scoped refresh session，生命周期会撤销该 scope；JWKS 在 overlap 窗口内同时发布 active 与 passive 公钥 |
 | 运行和首启 | PostgreSQL SQLx migrations、Redis 生产就绪校验、healthz/readyz、固定基数 metrics、审计清理、密文配置、setup wizard | 尚未承诺多实例一致性、outbox/webhook、OpenTelemetry 或跨区域恢复 |
 | 管理体验 | API-first 的用户、客户端、服务、身份源、Principal、RBAC、资源和审计接口；setup wizard 只做首启诊断 | 没有 Admin Console、Account Console、主题系统或管理 CLI |
 
@@ -122,7 +122,7 @@ allowed_scopes 和 allowed_audiences 继续约束服务 Token 的签发边界；
 
 Refresh Session 是稳定会话索引，支持按 Principal、客户端、组织或单个会话撤销。人类密码登录可显式提供 `organization_id`，服务端仅在 live membership 为 active 时同时把该 scope 写入 access token、refresh token 和 session 记录；组织停用/归档或成员变为 pending、suspended、removed 时，只撤销对应组织 session，平台与其他组织 session 不受影响。会话策略可以是 multi_session、single_user_session 或 single_principal_session；显式接管必须先完成认证。
 
-密钥演进必须保持 issuer 和 kid 契约：当前版本接受一把活动 RSA key，后续 P0 安全工作将引入活动 key 与被动验证 key 的重叠窗口、旧 key 下线和回滚记录；在此之前不把维护窗口式切换描述成无感轮换。
+密钥演进必须保持 issuer 和 kid 契约：新 Token 只使用 active RSA key，旧 key 在配置的 overlap 窗口内作为 passive 验证 key；平台管理员可通过受保护接口执行轮换、回滚和下线，所有操作写入审计记录。维护窗口式切换不再是唯一的轮换方式。
 
 ### 4.3 资源服务接入边界
 

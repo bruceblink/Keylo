@@ -281,6 +281,17 @@ fn protected_routes(app_state: &AppState) -> Router<AppState> {
             )),
         )
         .merge(
+            routes::auth::jwt_key_management_routes()
+                .route_layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    auth::admin_authorization_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    auth::platform_admin_authorization_middleware,
+                )),
+        )
+        .merge(
             routes::oidc::admin_routes()
                 .route_layer(middleware::from_fn_with_state(
                     app_state.clone(),
@@ -531,6 +542,16 @@ wwIDAQAB
             jwt_audiences: vec!["admin-backend".to_string(), "crawler".to_string()],
             jwt_private_key_pem: TEST_JWT_PRIVATE_KEY_PEM.to_string(),
             jwt_public_key_pem: TEST_JWT_PUBLIC_KEY_PEM.to_string(),
+            jwt_private_key_path: "./keys/private.pem".to_string(),
+            jwt_public_key_path: "./keys/public.pem".to_string(),
+            jwt_passive_public_key_pem: None,
+            jwt_passive_private_key_pem: None,
+            jwt_passive_key_id: None,
+            jwt_key_id_path: "./keys/key-id".to_string(),
+            jwt_passive_key_id_path: "./keys/passive-key-id".to_string(),
+            jwt_passive_private_key_path: "./keys/passive-private.pem".to_string(),
+            jwt_passive_public_key_path: "./keys/passive-public.pem".to_string(),
+            jwt_key_overlap_seconds: 300,
             jwt_keys_generated: false,
             database_url: String::new(),
             server_addr: "127.0.0.1".to_string(),

@@ -308,6 +308,14 @@ Cargo.toml           # 项目依赖配置
 | `JWT_PUBLIC_KEY_PATH` | `./keys/public.pem` | RSA 公钥文件路径 |
 | `JWT_PRIVATE_KEY_PEM` | `` | RSA 私钥 PEM 内容，可替代路径 |
 | `JWT_PUBLIC_KEY_PEM` | `` | RSA 公钥 PEM 内容，可替代路径 |
+| `JWT_KEY_ID_PATH` | `./keys/key-id` | 管理轮换时持久化当前 active `kid` 的文件路径 |
+| `JWT_PASSIVE_PRIVATE_KEY_PATH` | `./keys/passive-private.pem` | 回滚用的 passive RSA 私钥文件路径，可选 |
+| `JWT_PASSIVE_PUBLIC_KEY_PATH` | `./keys/passive-public.pem` | overlap 期间发布的 passive RSA 公钥文件路径，可选 |
+| `JWT_PASSIVE_KEY_ID_PATH` | `./keys/passive-key-id` | passive `kid` 文件路径，可选 |
+| `JWT_PASSIVE_PRIVATE_KEY_PEM` | `` | passive 私钥 PEM 内容，可替代路径 |
+| `JWT_PASSIVE_PUBLIC_KEY_PEM` | `` | passive 公钥 PEM 内容，可替代路径 |
+| `JWT_PASSIVE_KEY_ID` | `` | passive `kid`，必须与 passive 公钥一起配置 |
+| `JWT_KEY_OVERLAP_SECONDS` | `300` | 轮换后旧 key 保留为 passive 的秒数，范围 `1..2592000` |
 | `DATABASE_URL` | `` | 数据库连接字符串（数据库模式必填） |
 | `SERVER_ADDR` | `127.0.0.1`（容器镜像为 `0.0.0.0`） | 服务器监听地址 |
 | `SERVER_PORT` | `2345` | 服务器监听端口 |
@@ -351,7 +359,7 @@ HTTP 访问日志默认记录请求者 IP、请求方法、URI、HTTP 版本、�
 
 ## 🔐 JWKS
 
-Keylo 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 暴露公开验签密钥集合。
+Keylo 默认使用 RS256 签发 JWT，并通过 `/.well-known/jwks.json` 暴露 active 与 overlap 期间 live passive 的公开验签密钥集合。平台管理员可通过密钥管理接口执行轮换、回滚和提前下线，完整 runbook 见 [`docs/operations/KEY_ROTATION.md`](docs/operations/KEY_ROTATION.md)。
 
 * 生产环境必须提前生成、挂载并备份固定 RSA 密钥；缺少显式密钥配置时启动会拒绝自动生成
 * 下游系统推荐优先使用 JWKS 做本地验签

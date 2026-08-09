@@ -24,6 +24,11 @@ const DEFAULT_CORS_ALLOWED_ORIGINS: &str =
 const DEFAULT_ADMIN_CLIENT_ID: &str = "cli-admin-root";
 const DEFAULT_JWT_PRIVATE_KEY_PATH: &str = "./keys/private.pem";
 const DEFAULT_JWT_PUBLIC_KEY_PATH: &str = "./keys/public.pem";
+const DEFAULT_JWT_KEY_ID_PATH: &str = "./keys/key-id";
+const DEFAULT_JWT_PASSIVE_PRIVATE_KEY_PATH: &str = "./keys/passive-private.pem";
+const DEFAULT_JWT_PASSIVE_PUBLIC_KEY_PATH: &str = "./keys/passive-public.pem";
+const DEFAULT_JWT_PASSIVE_KEY_ID_PATH: &str = "./keys/passive-key-id";
+const DEFAULT_JWT_KEY_OVERLAP_SECONDS: i64 = 300;
 const DEFAULT_DATABASE_PASSWORD_ENC_PATHS: [&str; 6] = [
     "./.secrets/.database_password.enc",
     "/run/secrets/.database_password.enc",
@@ -114,11 +119,49 @@ fn read_env_or_file_with_default_path(
     read_env_or_file(value_key, path_key).or_else(|| read_first_existing_file(&[default_path]))
 }
 
+/// Read a trimmed, non-empty key-id file while treating missing files as unset.
+fn read_non_empty_file(path: &str) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .filter(|contents| !contents.trim().is_empty())
+}
+
+/// Resolve a key id from an explicit value, configured file, default file, or fallback.
+fn read_key_id(value_key: &str, path_key: &str, default_path: &str, fallback: &str) -> String {
+    let value = env::var(value_key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            env::var(path_key)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .and_then(|path| read_non_empty_file(&path))
+        })
+        .or_else(|| read_non_empty_file(default_path))
+        .unwrap_or_else(|| fallback.to_string());
+    value.trim().to_string()
+}
+
 fn env_or_default_path(path_key: &str, default_path: &str) -> String {
     env::var(path_key)
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| default_path.to_string())
+}
+
+/// Generate an RSA key pair for an explicit rotation operation without persisting it.
+pub fn generate_rsa_key_pair() -> Result<(String, String), String> {
+    let private_key = RsaPrivateKey::new(&mut OsRng, 2048)
+        .map_err(|err| format!("Failed to generate RSA private key: {err}"))?;
+    let public_key = private_key.to_public_key();
+    let private_pem = private_key
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|err| format!("Failed to encode RSA private key: {err}"))?
+        .to_string();
+    let public_pem = public_key
+        .to_public_key_pem(LineEnding::LF)
+        .map_err(|err| format!("Failed to encode RSA public key: {err}"))?;
+    Ok((private_pem, public_pem))
 }
 
 fn generate_and_store_rsa_key_pair(
@@ -151,16 +194,7 @@ fn generate_and_store_rsa_key_pair(
         })?;
     }
 
-    let private_key = RsaPrivateKey::new(&mut OsRng, 2048)
-        .map_err(|err| format!("Failed to generate RSA private key: {err}"))?;
-    let public_key = private_key.to_public_key();
-    let private_pem = private_key
-        .to_pkcs8_pem(LineEnding::LF)
-        .map_err(|err| format!("Failed to encode RSA private key: {err}"))?
-        .to_string();
-    let public_pem = public_key
-        .to_public_key_pem(LineEnding::LF)
-        .map_err(|err| format!("Failed to encode RSA public key: {err}"))?;
+    let (private_pem, public_pem) = generate_rsa_key_pair()?;
 
     fs::write(private_path, private_pem.as_bytes()).map_err(|err| {
         format!(
@@ -543,6 +577,26 @@ pub struct Config {
     pub jwt_private_key_pem: String,
     /// JWT 公钥 PEM（RS256）
     pub jwt_public_key_pem: String,
+    /// Path used by the managed key-rotation operation to persist the active private key.
+    pub jwt_private_key_path: String,
+    /// Path used by the managed key-rotation operation to persist the active public key.
+    pub jwt_public_key_path: String,
+    /// Optional previous public key retained for passive verification during overlap.
+    pub jwt_passive_public_key_pem: Option<String>,
+    /// Optional previous private key retained only for an in-memory rollback operation.
+    pub jwt_passive_private_key_pem: Option<String>,
+    /// Identifier for the passive verification key, when configured.
+    pub jwt_passive_key_id: Option<String>,
+    /// Path used to persist the active key id during rotation.
+    pub jwt_key_id_path: String,
+    /// Path used to persist the passive key id during rotation.
+    pub jwt_passive_key_id_path: String,
+    /// Path used to persist the passive private key during rotation.
+    pub jwt_passive_private_key_path: String,
+    /// Path used to persist the passive public key during rotation.
+    pub jwt_passive_public_key_path: String,
+    /// How long the previous signing key remains valid after rotation.
+    pub jwt_key_overlap_seconds: i64,
     /// Whether JWT key files were generated during startup because no key config was found.
     pub jwt_keys_generated: bool,
     /// 数据库URL
@@ -630,12 +684,52 @@ impl Config {
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
         let allow_generated_jwt_keys = !environment.eq_ignore_ascii_case("production");
         let jwt_issuer = env::var("JWT_ISSUER").unwrap_or_else(|_| DEFAULT_JWT_ISSUER.to_string());
-        let jwt_key_id = env::var("JWT_KEY_ID").unwrap_or_else(|_| DEFAULT_JWT_KEY_ID.to_string());
+        let jwt_key_id = read_key_id(
+            "JWT_KEY_ID",
+            "JWT_KEY_ID_PATH",
+            DEFAULT_JWT_KEY_ID_PATH,
+            DEFAULT_JWT_KEY_ID,
+        );
         let jwt_audiences = parse_csv_env(
             &env::var("JWT_AUDIENCES").unwrap_or_else(|_| DEFAULT_JWT_AUDIENCES.to_string()),
         );
         let (jwt_private_key_pem, jwt_public_key_pem, jwt_keys_generated) =
             load_or_generate_jwt_keys(allow_generated_jwt_keys);
+        let jwt_private_key_path =
+            env_or_default_path("JWT_PRIVATE_KEY_PATH", DEFAULT_JWT_PRIVATE_KEY_PATH);
+        let jwt_public_key_path =
+            env_or_default_path("JWT_PUBLIC_KEY_PATH", DEFAULT_JWT_PUBLIC_KEY_PATH);
+        let jwt_key_id_path = env_or_default_path("JWT_KEY_ID_PATH", DEFAULT_JWT_KEY_ID_PATH);
+        let jwt_passive_private_key_path = env_or_default_path(
+            "JWT_PASSIVE_PRIVATE_KEY_PATH",
+            DEFAULT_JWT_PASSIVE_PRIVATE_KEY_PATH,
+        );
+        let jwt_passive_public_key_path = env_or_default_path(
+            "JWT_PASSIVE_PUBLIC_KEY_PATH",
+            DEFAULT_JWT_PASSIVE_PUBLIC_KEY_PATH,
+        );
+        let jwt_passive_key_id_path =
+            env_or_default_path("JWT_PASSIVE_KEY_ID_PATH", DEFAULT_JWT_PASSIVE_KEY_ID_PATH);
+        let jwt_passive_key_id = read_key_id(
+            "JWT_PASSIVE_KEY_ID",
+            "JWT_PASSIVE_KEY_ID_PATH",
+            &jwt_passive_key_id_path,
+            "",
+        );
+        let jwt_passive_key_id =
+            (!jwt_passive_key_id.trim().is_empty()).then_some(jwt_passive_key_id);
+        let jwt_passive_public_key_pem = read_env_or_file_with_default_path(
+            "JWT_PASSIVE_PUBLIC_KEY_PEM",
+            "JWT_PASSIVE_PUBLIC_KEY_PATH",
+            &jwt_passive_public_key_path,
+        );
+        let jwt_passive_private_key_pem = read_env_or_file_with_default_path(
+            "JWT_PASSIVE_PRIVATE_KEY_PEM",
+            "JWT_PASSIVE_PRIVATE_KEY_PATH",
+            &jwt_passive_private_key_path,
+        );
+        let jwt_key_overlap_seconds =
+            parse_i64_env("JWT_KEY_OVERLAP_SECONDS", DEFAULT_JWT_KEY_OVERLAP_SECONDS);
 
         let database_url = env::var("DATABASE_URL").unwrap_or_default();
 
@@ -707,6 +801,16 @@ impl Config {
             jwt_audiences,
             jwt_private_key_pem,
             jwt_public_key_pem,
+            jwt_private_key_path,
+            jwt_public_key_path,
+            jwt_passive_public_key_pem,
+            jwt_passive_private_key_pem,
+            jwt_passive_key_id,
+            jwt_key_id_path,
+            jwt_passive_key_id_path,
+            jwt_passive_private_key_path,
+            jwt_passive_public_key_path,
+            jwt_key_overlap_seconds,
             jwt_keys_generated,
             database_url,
             server_addr,
@@ -950,6 +1054,33 @@ impl Config {
             );
         }
 
+        if self.jwt_passive_key_id.is_some() != self.jwt_passive_public_key_pem.is_some() {
+            errors.push(
+                "JWT_PASSIVE_KEY_ID and JWT_PASSIVE_PUBLIC_KEY_PEM/PATH must be configured together"
+                    .to_string(),
+            );
+        }
+        if self.jwt_passive_private_key_pem.is_some()
+            && (self.jwt_passive_key_id.is_none() || self.jwt_passive_public_key_pem.is_none())
+        {
+            errors.push(
+                "JWT_PASSIVE_PRIVATE_KEY_PEM/PATH requires a complete passive verification key"
+                    .to_string(),
+            );
+        }
+        if self
+            .jwt_passive_key_id
+            .as_deref()
+            .is_some_and(|passive| passive == self.jwt_key_id)
+        {
+            errors.push("JWT_PASSIVE_KEY_ID must differ from JWT_KEY_ID".to_string());
+        }
+        require_positive(
+            errors,
+            "JWT_KEY_OVERLAP_SECONDS",
+            self.jwt_key_overlap_seconds,
+        );
+
         require_non_empty(errors, "ENVIRONMENT", &self.environment);
         require_non_empty(errors, "SERVER_ADDR", &self.server_addr);
         require_positive(errors, "SERVER_PORT", self.server_port as i64);
@@ -1126,6 +1257,16 @@ mod tests {
             jwt_audiences: vec!["admin-backend".to_string(), "crawler".to_string()],
             jwt_private_key_pem: "private-key".to_string(),
             jwt_public_key_pem: "public-key".to_string(),
+            jwt_private_key_path: "./keys/private.pem".to_string(),
+            jwt_public_key_path: "./keys/public.pem".to_string(),
+            jwt_passive_public_key_pem: None,
+            jwt_passive_private_key_pem: None,
+            jwt_passive_key_id: None,
+            jwt_key_id_path: "./keys/key-id".to_string(),
+            jwt_passive_key_id_path: "./keys/passive-key-id".to_string(),
+            jwt_passive_private_key_path: "./keys/passive-private.pem".to_string(),
+            jwt_passive_public_key_path: "./keys/passive-public.pem".to_string(),
+            jwt_key_overlap_seconds: 300,
             jwt_keys_generated: false,
             database_url: "postgres://keylo_user@localhost:5432/keylo".to_string(),
             server_addr: "127.0.0.1".to_string(),

@@ -1,60 +1,94 @@
-# Keylo 1.3.1 密钥轮换建议
+# JWT signing-key rotation runbook
 
-Keylo 1.3.1 支持通过 `JWT_KEY_ID` 和 JWKS 暴露当前验签公钥，但当前版本仍采用单活动密钥模型，密钥轮换建议以维护窗口方式人工控制。
+Keylo signs new JWTs with one active RSA key and keeps the previous key as a
+passive verification key for a bounded overlap window. The public JWKS endpoint
+publishes the active key and every live passive key; private key material stays
+on the Keylo host and is never returned by an API.
 
-## 轮换目标
+## Configuration
 
-密钥轮换的目标是：
+The active key is loaded at startup from `JWT_PRIVATE_KEY_PATH` and
+`JWT_PUBLIC_KEY_PATH` (or the corresponding PEM variables). Managed rotation
+also persists the active key id to `JWT_KEY_ID_PATH`.
 
-- 替换旧私钥，降低长期暴露风险
-- 让下游系统可以识别新的 `kid`
-- 避免直接共享私钥给任何第三方系统
+Optional passive startup files are controlled by:
 
-## 推荐轮换方式
+- `JWT_PASSIVE_PRIVATE_KEY_PATH`
+- `JWT_PASSIVE_PUBLIC_KEY_PATH`
+- `JWT_PASSIVE_KEY_ID_PATH`
+- `JWT_KEY_OVERLAP_SECONDS` (default `300`, allowed range `1..2592000`)
 
-### 方案一：维护窗口内整体切换
+Configure the passive id and public key together. A passive private key is only
+needed for rollback. Production deployments must provide persistent active key
+files and should back up the active/passive files before maintenance.
 
-适用于系统数量不多的阶段。
+## Rotate
 
-步骤：
+Use a platform administrator access token with recent MFA when required by the
+deployment policy:
 
-1. 生成新的 RSA 私钥和公钥。
-2. 将 `JWT_KEY_ID` 更新为新值。
-3. 替换 `JWT_PRIVATE_KEY_PATH` 和 `JWT_PUBLIC_KEY_PATH`。
-4. 重启 Keylo。
-5. 通知下游系统刷新 JWKS 缓存。
+```http
+POST /v1/admin/security/jwt-keys/rotate
+Authorization: Bearer <platform-admin-token>
+Content-Type: application/json
 
-这种方式简单直接，但要求下游系统具备较短的 JWKS 缓存周期。
+{"key_id":"keylo-rs256-2","overlap_seconds":900}
+```
 
-### 方案二：先切流量较低环境验证，再发布生产
+`key_id` is optional; when omitted Keylo generates a unique id. The response
+returns the active id, passive ids, and the effective overlap. New tokens use
+only the active id. Existing tokens signed by the previous id remain valid
+until the overlap expires or the key is retired.
 
-推荐顺序：
+After rotation, verify that `GET /.well-known/jwks.json` contains both ids and
+that downstream verifiers refresh their JWKS cache when they see the new `kid`.
+The operation writes a `jwt_signing_key.rotated` audit event without private
+key material.
 
-1. 开发环境验证新密钥
-2. 预发环境验证 JWKS 与内省
-3. 生产环境低峰切换
+## Roll back
 
-## 轮换时的注意事项
+Rollback promotes a live passive key back to active and keeps the current
+active key passive for the configured overlap:
 
-1. 新 `kid` 必须唯一。
-2. 私钥和公钥必须一一对应。
-3. 下游系统应优先通过 JWKS 拉取公钥，而不是手工固定公钥内容。
-4. 对高敏接口，轮换期间可优先依赖内省接口降低缓存不一致影响。
+```http
+POST /v1/admin/security/jwt-keys/rollback
+Authorization: Bearer <platform-admin-token>
+Content-Type: application/json
 
-## 当前已知限制
+{"key_id":"keylo-rs256-1"}
+```
 
-Keylo 1.3.1 当前只对外发布一把活动公钥。这意味着：
+Rollback requires that the passive key still has private material. It writes a
+`jwt_signing_key.rollback` audit event and is safe to repeat only while the
+requested key remains in the live passive set.
 
-- 不支持新旧两把公钥长期并行发布
-- 不支持无感平滑双 key 过渡
+## Retire
 
-这不影响当前维护窗口式轮换策略，但属于后续 1.x 版本优先级较高的增强项。
+Retire a passive key early when all downstream systems have refreshed JWKS or
+when the key must be invalidated immediately:
 
-## 对接系统的建议
+```http
+POST /v1/admin/security/jwt-keys/retire
+Authorization: Bearer <platform-admin-token>
+Content-Type: application/json
 
-第三方系统应采用以下策略：
+{"key_id":"keylo-rs256-1"}
+```
 
-1. 通过 `/.well-known/jwks.json` 获取公钥。
-2. 缓存 JWKS，但缓存时间不要过长。
-3. 在验签失败且 `kid` 不匹配时，主动刷新 JWKS。
-4. 对需要强实时性的接口，回退到内省接口补充校验。
+Retirement removes the passive key from runtime verification, deletes its
+persistent passive files, and records `jwt_signing_key.retired`. Tokens signed
+with the retired key are rejected even if their normal JWT expiry has not been
+reached.
+
+## Recovery checklist
+
+1. Confirm the active and passive ids from `/.well-known/jwks.json`.
+2. Check the corresponding rotation/rollback/retire audit event.
+3. Refresh downstream JWKS caches and retry a token signed with the active key.
+4. If the new key is suspected to be invalid, roll back while the previous
+   passive key is still live, then retire the problematic key after verification.
+
+Never copy a private key into JWKS, logs, audit details, support tickets, or
+third-party services. Consumers should use JWKS for local signature checks and
+use `/v1/auth/introspect` or `/v1/service/introspect` only when real-time
+revocation is required.
