@@ -2070,6 +2070,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_admin_principal_list_returns_stable_pagination_metadata() {
+        let server = setup_test_server().await;
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .expect("TEST_DATABASE_URL is required for principal pagination integration tests");
+        let pool = db::init_db_pool(&database_url).await.unwrap();
+        db::run_migrations(&pool).await.unwrap();
+
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        db::create_user(
+            &pool,
+            &format!("principal-pagination-a-{suffix}"),
+            &format!("principal-pagination-a-{suffix}@example.test"),
+            Some("PrincipalA#123"),
+        )
+        .await
+        .unwrap();
+        sleep(Duration::from_millis(5)).await;
+        db::create_user(
+            &pool,
+            &format!("principal-pagination-b-{suffix}"),
+            &format!("principal-pagination-b-{suffix}@example.test"),
+            Some("PrincipalB#123"),
+        )
+        .await
+        .unwrap();
+
+        let login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        login.assert_status_ok();
+        let login_body: serde_json::Value = login.json();
+        let admin_token = login_body["access_token"].as_str().unwrap();
+
+        let first = server
+            .get("/v1/admin/principals?principal_type=user&limit=1&offset=0")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        first.assert_status_ok();
+        let first_body: serde_json::Value = first.json();
+        assert_eq!(first_body["pagination"]["limit"], 1);
+        assert_eq!(first_body["pagination"]["offset"], 0);
+        assert_eq!(first_body["pagination"]["has_more"], true);
+        assert_eq!(first_body["pagination"]["next_offset"], 1);
+        let first_id = first_body["data"][0]["id"].as_str().unwrap();
+
+        let second = server
+            .get("/v1/admin/principals?principal_type=user&limit=1&offset=1")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        second.assert_status_ok();
+        let second_body: serde_json::Value = second.json();
+        assert_eq!(second_body["pagination"]["offset"], 1);
+        assert_ne!(first_id, second_body["data"][0]["id"].as_str().unwrap());
+    }
+
+    #[tokio::test]
     async fn test_inactive_user_cannot_get_auth_token() {
         let server = setup_test_server().await;
 

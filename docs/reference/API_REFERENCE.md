@@ -534,7 +534,7 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/admin/principals?principal_type=&active=&limit=&offset=` | Principal 列表 |
+| GET | `/v1/admin/principals?principal_type=&active=&limit=&offset=` | Principal 列表；响应包含 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | GET | `/v1/admin/authorization-audit-logs?organization_id=&principal_id=&decision=&permission_name=&resource_id=&limit=&offset=` | 授权决策审计日志；organization_id 为精确组织过滤，`decision` 可筛选 `allow` 或 `deny` |
 | POST | `/v1/admin/authorization-audit-logs/cleanup` | 清理超过保留期的授权审计日志，体为 `{ "retention_days": 30 }` |
 | GET | `/v1/admin/principals/{principal_id}` | Principal 详情 |

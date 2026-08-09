@@ -91,7 +91,7 @@ async fn list_principals_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let principals = crate::db::list_principals(
+    let (principals, has_more) = crate::db::list_principals_page(
         db,
         query.principal_type.as_deref(),
         query.active,
@@ -101,9 +101,17 @@ async fn list_principals_handler(
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
     Ok(Json(json!({
         "success": true,
-        "data": principals
+        "data": principals,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 

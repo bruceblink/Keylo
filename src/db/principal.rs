@@ -84,14 +84,16 @@ pub async fn get_principal_by_subject(pool: &PgPool, subject: &str) -> Result<Op
         .await?)
 }
 
-pub async fn list_principals(
+/// List one Principal page and report whether another page exists.
+pub async fn list_principals_page(
     pool: &PgPool,
     principal_type: Option<&str>,
     active: Option<bool>,
     limit: i64,
     offset: i64,
-) -> Result<Vec<Principal>> {
-    let rows = sqlx::query_as::<_, Principal>(
+) -> Result<(Vec<Principal>, bool)> {
+    let limit = limit.max(0);
+    let mut rows = sqlx::query_as::<_, Principal>(
         r#"
         SELECT id, principal_type, subject, ref_id, display_name, active, created_at, updated_at
         FROM principals
@@ -103,12 +105,28 @@ pub async fn list_principals(
     )
     .bind(principal_type)
     .bind(active)
-    .bind(limit)
+    .bind(limit + 1)
     .bind(offset)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows)
+    let has_more = rows.len() > limit as usize;
+    rows.truncate(limit as usize);
+    Ok((rows, has_more))
+}
+
+pub async fn list_principals(
+    pool: &PgPool,
+    principal_type: Option<&str>,
+    active: Option<bool>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Principal>> {
+    Ok(
+        list_principals_page(pool, principal_type, active, limit, offset)
+            .await?
+            .0,
+    )
 }
 
 pub async fn ensure_user_principal(pool: &PgPool, user_id: &str) -> Result<Option<Principal>> {
