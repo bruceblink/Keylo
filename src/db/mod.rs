@@ -379,7 +379,44 @@ pub async fn rotate_client_secret(
     Ok(result.rows_affected() > 0)
 }
 
-/// 列出所有客户端（管理后台）
+/// List one management-client page and report whether another page exists.
+pub async fn list_clients_for_admin_page(
+    pool: &PgPool,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<(String, String, Option<String>, bool, i64)>, bool)> {
+    let limit = limit.max(0);
+    let rows = sqlx::query(
+        "SELECT id, name, description, active,
+                extract(epoch from updated_at)::bigint as updated_at
+         FROM clients
+         ORDER BY updated_at DESC
+         LIMIT $1 OFFSET $2",
+    )
+    .bind(limit + 1)
+    .bind(offset.max(0))
+    .fetch_all(pool)
+    .await?;
+
+    let has_more = rows.len() > limit as usize;
+    let page = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(|row| {
+            (
+                row.get("id"),
+                row.get("name"),
+                row.get("description"),
+                row.get("active"),
+                row.get("updated_at"),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Ok((page, has_more))
+}
+
+/// Compatibility wrapper for callers that only need all management clients.
 pub async fn list_clients_for_admin(
     pool: &PgPool,
 ) -> Result<Vec<(String, String, Option<String>, bool, i64)>> {

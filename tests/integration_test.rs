@@ -1931,6 +1931,17 @@ mod tests {
             .any(|row| row["id"] == managed_client);
         assert!(found);
 
+        let page_resp = server
+            .get("/v1/admin/clients?limit=1&offset=0")
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        page_resp.assert_status_ok();
+        let page_body: serde_json::Value = page_resp.json();
+        assert_eq!(page_body["pagination"]["limit"], 1);
+        assert_eq!(page_body["pagination"]["offset"], 0);
+        assert_eq!(page_body["pagination"]["has_more"], true);
+        assert_eq!(page_body["pagination"]["next_offset"], 1);
+
         let disable_resp = server
             .put(&format!("/v1/admin/clients/{}", managed_client))
             .add_header("Authorization", format!("Bearer {}", access_token))

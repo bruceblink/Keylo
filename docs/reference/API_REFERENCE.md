@@ -277,7 +277,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | GET | `/v1/admin/audit-logs` | 查询审计日志（`limit/offset`） |
 | GET | `/v1/admin/audit-logs/export` | 稳定游标导出审计日志（管理员） |
 | POST | `/v1/admin/audit-logs/cleanup` | 清理审计日志（按保留天数） |
-| GET | `/v1/admin/clients` | 查询管理客户端 |
+| GET | `/v1/admin/clients?limit=&offset=` | 查询管理客户端；响应包含 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | POST | `/v1/admin/clients` | 创建管理客户端 |
 | PUT | `/v1/admin/clients/{client_id}` | 更新管理客户端 |
 | POST | `/v1/admin/clients/{client_id}/rotate-secret` | 轮换管理客户端密钥 |

@@ -1139,6 +1139,7 @@ pub async fn auth_rotate_client_secret(
 pub async fn auth_list_clients(
     State(state): State<AppState>,
     claims: Claims,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     if !claims.has_scope("admin") {
         return Err(AuthError::Forbidden);
@@ -1148,9 +1149,30 @@ pub async fn auth_list_clients(
         .db
         .as_deref()
         .ok_or_else(|| db_error("Database not available"))?;
-    let clients = crate::db::list_clients_for_admin(db)
-        .await
-        .map_err(|_| AuthError::DatabaseError("Failed to list clients".to_string()))?;
+    let has_explicit_pagination = params.contains_key("limit") || params.contains_key("offset");
+    let requested_limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let requested_offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let (clients, has_more, limit, offset) = if has_explicit_pagination {
+        let (clients, has_more) =
+            crate::db::list_clients_for_admin_page(db, requested_limit, requested_offset)
+                .await
+                .map_err(|_| AuthError::DatabaseError("Failed to list clients".to_string()))?;
+        (clients, has_more, requested_limit, requested_offset)
+    } else {
+        let clients = crate::db::list_clients_for_admin(db)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to list clients".to_string()))?;
+        let count = clients.len() as i64;
+        (clients, false, count, 0)
+    };
 
     Ok(Json(json!({
         "success": true,
@@ -1162,7 +1184,13 @@ pub async fn auth_list_clients(
                 "active": active,
                 "updated_at": updated_at
             })
-        }).collect::<Vec<_>>()
+        }).collect::<Vec<_>>(),
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 
