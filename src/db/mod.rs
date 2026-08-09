@@ -786,6 +786,40 @@ pub async fn list_audit_logs(
         .collect())
 }
 
+/// Return a bounded audit-log page and whether another page is available.
+pub async fn list_audit_logs_page(
+    pool: &PgPool,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<(String, Option<String>, Option<String>, i64)>, bool)> {
+    let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
+    let rows = sqlx::query(
+        "SELECT event_type, actor, detail, extract(epoch from created_at)::bigint as created_at
+         FROM audit_logs
+         ORDER BY audit_logs.created_at DESC, audit_logs.id DESC
+         LIMIT $1 OFFSET $2",
+    )
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let has_more = rows.len() > limit as usize;
+    let logs = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(|row| {
+            (
+                row.get("event_type"),
+                row.get("actor"),
+                row.get("detail"),
+                row.get("created_at"),
+            )
+        })
+        .collect();
+    Ok((logs, has_more))
+}
+
 /// Export audit events with a stable `(created_at, id)` cursor.
 ///
 /// The event id is persisted at write time and is returned to consumers as a

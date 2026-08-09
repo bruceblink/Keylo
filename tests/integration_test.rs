@@ -1717,6 +1717,22 @@ mod tests {
         let login_body: serde_json::Value = login.json();
         let admin_token = login_body["access_token"].as_str().unwrap();
 
+        let audit_list = server
+            .get("/v1/admin/audit-logs?limit=200&offset=0")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        audit_list.assert_status_ok();
+        let audit_list_body: serde_json::Value = audit_list.json();
+        assert_eq!(audit_list_body["pagination"]["limit"], 200);
+        assert!(audit_list_body["data"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["event_type"] == event_type
+                    && row["detail"].as_str().is_some_and(|detail| {
+                        !detail.contains("super-secret") && !detail.contains("plain-secret")
+                    })
+            })
+        }));
+
         let first = server
             .get(&format!(
                 "/v1/admin/audit-logs/export?event_type={event_type}&limit=1"

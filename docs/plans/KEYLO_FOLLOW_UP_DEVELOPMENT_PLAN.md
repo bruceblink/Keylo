@@ -165,6 +165,7 @@
 - [x] 组织成员列表复用同一分页元数据，并保留成员状态过滤和幂等管理边界。
 - [x] OIDC client 管理列表支持有界 `limit/offset` 与真实 `has_more/next_offset`，无参数调用保持兼容。
 - [x] RBAC 角色和权限列表支持有界 `limit/offset`、前缀过滤与真实 `has_more/next_offset`，无参数调用保持兼容。
+- [x] 管理审计日志列表返回真实分页元数据并复用导出脱敏规则，避免查询接口回显敏感 detail。
 - 统一 list/filter/pagination、幂等更新、稳定错误码和变更原因字段。
 - 明确 admin client、user principal、service principal 和 future delegated admin 的权限边界；危险操作继续要求近期 MFA。
 - 优先改进客户端、服务、用户、身份源、Principal、RBAC、资源和审计接口的排障反馈，不先开发完整管理后台。

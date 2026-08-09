@@ -957,20 +957,30 @@ pub async fn auth_get_audit_logs(
         .max(0);
 
     if let Some(db) = &state.db {
-        let logs = crate::db::list_audit_logs(db, limit, offset)
+        let (logs, has_more) = crate::db::list_audit_logs_page(db, limit, offset)
             .await
             .map_err(|_| AuthError::DatabaseError("Failed to query audit logs".to_string()))?;
 
-        Ok(Json(json!({
-            "success": true,
-            "data": logs.into_iter().map(|(event_type, actor, detail, created_at)| {
+        let data = logs
+            .into_iter()
+            .map(|(event_type, actor, detail, created_at)| {
                 json!({
                     "event_type": event_type,
                     "actor": actor,
-                    "detail": detail,
+                    "detail": redact_audit_detail(detail),
                     "created_at": created_at
                 })
-            }).collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        Ok(Json(json!({
+            "success": true,
+            "data": data,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "has_more": has_more,
+                "next_offset": has_more.then_some(offset + limit),
+            }
         })))
     } else {
         Err(AuthError::DatabaseError(
