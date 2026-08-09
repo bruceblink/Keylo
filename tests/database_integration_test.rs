@@ -66,6 +66,27 @@ mod database_tests {
             return Err("Failed to restore the internal organization");
         }
 
+        // The fixed support role is installed by a migration and is part of
+        // the production contract, so restore it after the test-only cleanup
+        // truncates the roles table.
+        if (sqlx::query(
+            "INSERT INTO roles (id, name, description, assignable_to, system, scope)
+             VALUES (
+                 '8b1e397a-3e9e-42e8-a49f-aea4720df74f',
+                 'customer_support',
+                 'Restricted, audited customer support access role',
+                 'user',
+                 TRUE,
+                 'platform'
+             )",
+        )
+        .execute(&pool)
+        .await)
+            .is_err()
+        {
+            return Err("Failed to restore the customer support role");
+        }
+
         Ok(pool)
     }
 
