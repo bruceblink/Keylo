@@ -3,7 +3,11 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::{IdentitySource, LinkedOidcIdentitySource, OidcIdentitySourceLink};
+use crate::models::{
+    IdentitySource, LinkedOidcIdentitySource, OidcIdentitySourceLink,
+    IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED, IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE,
+    IDENTITY_SOURCE_USER_CLASS_EXTERNAL_CUSTOMER, IDENTITY_SOURCE_USER_CLASS_INTERNAL_EMPLOYEE,
+};
 
 pub struct CreateIdentitySourceParams<'a> {
     pub name: &'a str,
@@ -15,6 +19,9 @@ pub struct CreateIdentitySourceParams<'a> {
     pub jit_enabled: bool,
     pub auto_link_enabled: bool,
     pub active: bool,
+    pub allowed_user_class: &'a str,
+    pub organization_strategy: &'a str,
+    pub organization_id: Option<&'a str>,
 }
 
 pub struct UpdateIdentitySourceParams<'a> {
@@ -26,6 +33,58 @@ pub struct UpdateIdentitySourceParams<'a> {
     pub jit_enabled: Option<bool>,
     pub auto_link_enabled: Option<bool>,
     pub active: Option<bool>,
+    pub allowed_user_class: Option<&'a str>,
+    pub organization_strategy: Option<&'a str>,
+    pub organization_id: Option<&'a str>,
+}
+
+/// Enforce the closed user-class and organization-strategy combinations.
+fn validate_policy_values(
+    allowed_user_class: &str,
+    organization_strategy: &str,
+    organization_id: Option<&str>,
+) -> Result<()> {
+    if !matches!(
+        allowed_user_class,
+        IDENTITY_SOURCE_USER_CLASS_EXTERNAL_CUSTOMER | IDENTITY_SOURCE_USER_CLASS_INTERNAL_EMPLOYEE
+    ) {
+        anyhow::bail!("identity_source_allowed_user_class_invalid");
+    }
+    match organization_strategy {
+        IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE if organization_id.is_none() => Ok(()),
+        IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED if organization_id.is_some() => Ok(()),
+        _ => anyhow::bail!("identity_source_organization_policy_invalid"),
+    }
+}
+
+/// Validate a fixed source against a live organization before persisting policy.
+async fn validate_fixed_organization(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    allowed_user_class: &str,
+    organization_strategy: &str,
+    organization_id: Option<&str>,
+) -> Result<()> {
+    validate_policy_values(allowed_user_class, organization_strategy, organization_id)?;
+    let Some(organization_id) = organization_id else {
+        return Ok(());
+    };
+    let row = sqlx::query("SELECT kind, status FROM organizations WHERE id = $1 FOR UPDATE")
+        .bind(organization_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("identity_source_organization_not_found"))?;
+    let kind: String = sqlx::Row::get(&row, "kind");
+    let status: String = sqlx::Row::get(&row, "status");
+    if status != "active" {
+        anyhow::bail!("identity_source_organization_not_active");
+    }
+    if allowed_user_class == IDENTITY_SOURCE_USER_CLASS_EXTERNAL_CUSTOMER && kind != "customer" {
+        anyhow::bail!("identity_source_external_customer_requires_customer_organization");
+    }
+    if allowed_user_class == IDENTITY_SOURCE_USER_CLASS_INTERNAL_EMPLOYEE && kind != "internal" {
+        anyhow::bail!("identity_source_internal_employee_requires_internal_organization");
+    }
+    Ok(())
 }
 
 pub async fn create_identity_source(
@@ -33,16 +92,26 @@ pub async fn create_identity_source(
     params: CreateIdentitySourceParams<'_>,
 ) -> Result<IdentitySource> {
     let id = Uuid::new_v4().to_string();
+    let mut transaction = pool.begin().await?;
+    validate_fixed_organization(
+        &mut transaction,
+        params.allowed_user_class,
+        params.organization_strategy,
+        params.organization_id,
+    )
+    .await?;
 
     let source = sqlx::query_as::<_, IdentitySource>(
         r#"
         INSERT INTO identity_sources (
             id, name, source_type, display_name, description, config, claim_mapping,
-            jit_enabled, auto_link_enabled, active
+            jit_enabled, auto_link_enabled, active, allowed_user_class,
+            organization_strategy, organization_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING id, name, source_type, display_name, description, config, claim_mapping,
-                  jit_enabled, auto_link_enabled, active, created_at, updated_at
+                  jit_enabled, auto_link_enabled, active, allowed_user_class,
+                  organization_strategy, organization_id, created_at, updated_at
         "#,
     )
     .bind(id)
@@ -55,8 +124,13 @@ pub async fn create_identity_source(
     .bind(params.jit_enabled)
     .bind(params.auto_link_enabled)
     .bind(params.active)
-    .fetch_one(pool)
+    .bind(params.allowed_user_class)
+    .bind(params.organization_strategy)
+    .bind(params.organization_id)
+    .fetch_one(&mut *transaction)
     .await?;
+
+    transaction.commit().await?;
 
     Ok(source)
 }
@@ -65,7 +139,8 @@ pub async fn list_identity_sources(pool: &PgPool) -> Result<Vec<IdentitySource>>
     let sources = sqlx::query_as::<_, IdentitySource>(
         r#"
         SELECT id, name, source_type, display_name, description, config, claim_mapping,
-               jit_enabled, auto_link_enabled, active, created_at, updated_at
+               jit_enabled, auto_link_enabled, active, allowed_user_class,
+               organization_strategy, organization_id, created_at, updated_at
         FROM identity_sources
         ORDER BY created_at DESC
         "#,
@@ -80,7 +155,8 @@ pub async fn get_identity_source(pool: &PgPool, id: &str) -> Result<Option<Ident
     let source = sqlx::query_as::<_, IdentitySource>(
         r#"
         SELECT id, name, source_type, display_name, description, config, claim_mapping,
-               jit_enabled, auto_link_enabled, active, created_at, updated_at
+               jit_enabled, auto_link_enabled, active, allowed_user_class,
+               organization_strategy, organization_id, created_at, updated_at
         FROM identity_sources
         WHERE id = $1
         "#,
@@ -98,7 +174,7 @@ pub async fn get_active_identity_source_by_name(
     name: &str,
 ) -> Result<Option<IdentitySource>> {
     Ok(sqlx::query_as::<_, IdentitySource>(
-        "SELECT id, name, source_type, display_name, description, config, claim_mapping, jit_enabled, auto_link_enabled, active, created_at, updated_at FROM identity_sources WHERE name = $1 AND active = TRUE",
+        "SELECT id, name, source_type, display_name, description, config, claim_mapping, jit_enabled, auto_link_enabled, active, allowed_user_class, organization_strategy, organization_id, created_at, updated_at FROM identity_sources WHERE name = $1 AND active = TRUE",
     )
     .bind(name)
     .fetch_optional(pool)
@@ -160,7 +236,8 @@ pub async fn update_identity_source(
     let previous = sqlx::query_as::<_, IdentitySource>(
         r#"
         SELECT id, name, source_type, display_name, description, config, claim_mapping,
-               jit_enabled, auto_link_enabled, active, created_at, updated_at
+               jit_enabled, auto_link_enabled, active, allowed_user_class,
+               organization_strategy, organization_id, created_at, updated_at
         FROM identity_sources
         WHERE id = $1
         FOR UPDATE
@@ -173,6 +250,27 @@ pub async fn update_identity_source(
         transaction.commit().await?;
         return Ok(None);
     };
+    let new_allowed_user_class = params
+        .allowed_user_class
+        .unwrap_or(&previous.allowed_user_class);
+    let new_organization_strategy = params
+        .organization_strategy
+        .unwrap_or(&previous.organization_strategy);
+    let new_organization_id =
+        if new_organization_strategy == IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE {
+            None
+        } else {
+            params
+                .organization_id
+                .or(previous.organization_id.as_deref())
+        };
+    validate_fixed_organization(
+        &mut transaction,
+        new_allowed_user_class,
+        new_organization_strategy,
+        new_organization_id,
+    )
+    .await?;
     let source = sqlx::query_as::<_, IdentitySource>(
         r#"
         UPDATE identity_sources
@@ -183,10 +281,14 @@ pub async fn update_identity_source(
             jit_enabled = COALESCE($6, jit_enabled),
             auto_link_enabled = COALESCE($7, auto_link_enabled),
             active = COALESCE($8, active),
+            allowed_user_class = $9,
+            organization_strategy = $10,
+            organization_id = $11,
             updated_at = NOW()
         WHERE id = $1
         RETURNING id, name, source_type, display_name, description, config, claim_mapping,
-                  jit_enabled, auto_link_enabled, active, created_at, updated_at
+                  jit_enabled, auto_link_enabled, active, allowed_user_class,
+                  organization_strategy, organization_id, created_at, updated_at
         "#,
     )
     .bind(params.id)
@@ -197,13 +299,20 @@ pub async fn update_identity_source(
     .bind(params.jit_enabled)
     .bind(params.auto_link_enabled)
     .bind(params.active)
+    .bind(new_allowed_user_class)
+    .bind(new_organization_strategy)
+    .bind(new_organization_id)
     .fetch_one(&mut *transaction)
     .await?;
 
     let source_reconfigured = previous.active
         && source.active
         && previous.source_type == "oidc_upstream"
-        && previous.config != source.config;
+        && (previous.config != source.config
+            || previous.claim_mapping != source.claim_mapping
+            || previous.allowed_user_class != source.allowed_user_class
+            || previous.organization_strategy != source.organization_strategy
+            || previous.organization_id != source.organization_id);
     let source_disabled =
         previous.active && !source.active && previous.source_type == "oidc_upstream";
     if source_disabled || source_reconfigured {
@@ -250,4 +359,53 @@ pub async fn update_identity_source(
     transaction.commit().await?;
 
     Ok(Some(source))
+}
+
+/// Create the active membership explicitly authorized by a fixed identity-source policy.
+pub async fn ensure_identity_source_membership(
+    pool: &PgPool,
+    source: &IdentitySource,
+    user_id: &str,
+) -> Result<()> {
+    let Some(organization_id) = source.organization_id.as_deref() else {
+        return Ok(());
+    };
+    let principal = crate::db::ensure_user_principal(pool, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("identity_source_user_principal_not_found"))?;
+    if crate::db::get_organization_membership(pool, organization_id, &principal.id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    crate::db::upsert_organization_membership(
+        pool,
+        organization_id,
+        &principal.id,
+        "active",
+        Some(&format!("identity_source:{}", source.id)),
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Return a fixed source's organization only when the user's membership is live.
+pub async fn identity_source_login_organization(
+    pool: &PgPool,
+    source: &IdentitySource,
+    user_id: &str,
+) -> Result<Option<String>> {
+    let Some(organization_id) = source.organization_id.as_deref() else {
+        return Ok(None);
+    };
+    let principal = crate::db::ensure_user_principal(pool, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("identity_source_user_principal_not_found"))?;
+    Ok(
+        crate::db::get_active_organization_membership(pool, organization_id, &principal.id)
+            .await?
+            .map(|membership| membership.organization_id),
+    )
 }

@@ -1335,6 +1335,9 @@ mod database_tests {
                 jit_enabled: true,
                 auto_link_enabled: true,
                 active: true,
+                allowed_user_class: "external_customer",
+                organization_strategy: "none",
+                organization_id: None,
             },
         )
         .await
@@ -1361,6 +1364,128 @@ mod database_tests {
         assert!(
             replay.is_none(),
             "A consumed upstream state must not be reusable"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_identity_source_policy_controls_user_class_and_live_organization_membership() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping identity source policy test: {msg}");
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4();
+        let customer = db::create_organization(
+            &pool,
+            &format!("identity-policy-customer-{suffix}"),
+            "Identity Policy Customer",
+            "customer",
+        )
+        .await
+        .expect("Failed to create customer organization");
+        let internal = db::create_organization(
+            &pool,
+            &format!("identity-policy-internal-{suffix}"),
+            "Identity Policy Internal",
+            "internal",
+        )
+        .await
+        .expect("Failed to create internal organization");
+        let source_name = format!("identity-policy-source-{suffix}");
+        let source = db::identity::create_identity_source(
+            &pool,
+            db::identity::CreateIdentitySourceParams {
+                name: &source_name,
+                source_type: "oidc_upstream",
+                display_name: "Identity Policy Source",
+                description: None,
+                config: &serde_json::json!({}),
+                claim_mapping: &serde_json::json!({}),
+                jit_enabled: true,
+                auto_link_enabled: true,
+                active: true,
+                allowed_user_class: "external_customer",
+                organization_strategy: "fixed",
+                organization_id: Some(&customer.id),
+            },
+        )
+        .await
+        .expect("Failed to create fixed customer identity source");
+        assert_eq!(source.allowed_user_class, "external_customer");
+        assert_eq!(source.organization_strategy, "fixed");
+        assert_eq!(
+            source.organization_id.as_deref(),
+            Some(customer.id.as_str())
+        );
+
+        let wrong_kind_name = format!("identity-policy-wrong-kind-{suffix}");
+        let wrong_kind = db::identity::create_identity_source(
+            &pool,
+            db::identity::CreateIdentitySourceParams {
+                name: &wrong_kind_name,
+                source_type: "oidc_upstream",
+                display_name: "Wrong Kind Source",
+                description: None,
+                config: &serde_json::json!({}),
+                claim_mapping: &serde_json::json!({}),
+                jit_enabled: true,
+                auto_link_enabled: true,
+                active: true,
+                allowed_user_class: "external_customer",
+                organization_strategy: "fixed",
+                organization_id: Some(&internal.id),
+            },
+        )
+        .await
+        .expect_err("External customer sources must reject internal organizations");
+        assert_eq!(
+            wrong_kind.to_string(),
+            "identity_source_external_customer_requires_customer_organization"
+        );
+
+        let username = format!("identity-policy-user-{suffix}");
+        let user = db::create_user_with_email_verified_as_class(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            None,
+            true,
+            &source.allowed_user_class,
+        )
+        .await
+        .expect("Failed to create source-policy user");
+        assert_eq!(user.user_class, "external_customer");
+        db::identity::ensure_identity_source_membership(&pool, &source, &user.id)
+            .await
+            .expect("Failed to assign fixed source membership");
+        let organization_id =
+            db::identity::identity_source_login_organization(&pool, &source, &user.id)
+                .await
+                .expect("Failed to resolve live source organization");
+        assert_eq!(organization_id.as_deref(), Some(customer.id.as_str()));
+
+        let principal = db::ensure_user_principal(&pool, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        db::upsert_organization_membership(
+            &pool,
+            &customer.id,
+            &principal.id,
+            "suspended",
+            Some("identity-source-policy-test"),
+            None,
+        )
+        .await
+        .expect("Failed to suspend fixed source membership");
+        assert!(
+            db::identity::identity_source_login_organization(&pool, &source, &user.id)
+                .await
+                .expect("Failed to revalidate suspended source membership")
+                .is_none()
         );
     }
 

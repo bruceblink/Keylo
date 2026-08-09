@@ -769,6 +769,9 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
   },
   "jit_enabled": true,
   "auto_link_enabled": true,
+  "allowed_user_class": "external_customer",
+  "organization_strategy": "fixed",
+  "organization_id": "org-acme",
   "active": true
 }
 ```
@@ -779,12 +782,15 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - `source_type`：支持 `local_password`、`oauth2`、`oidc_upstream`、`ldap`。
 - `display_name`：面向管理界面或集成文档展示的名称。
 - `config`：身份源配置对象。Keylo 当前只校验它是 JSON object，具体 schema 由后续接入实现定义；响应会将 key 名含 `secret`、`password` 或等于 `token` 的配置值脱敏，提交后的敏感值不能通过读取接口回显。
+- `allowed_user_class`：该来源唯一允许创建或自动关联的用户类别，支持 `external_customer`、`internal_employee`，默认 `external_customer`。上游 claim、邮箱或域名不能覆盖此值。
+- `organization_strategy`：组织归属策略，支持 `none`、`fixed`，默认 `none`。`fixed` 必须同时提供 `organization_id`；不支持从 claim 或请求头动态选择组织。
+- `organization_id`：`fixed` 策略的唯一组织。external customer 来源只能绑定 active customer 组织，internal employee 来源只能绑定 active internal 组织。
 
 `oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调。完全隔离的内网可在该身份源的 `config` 中显式设置 `allow_insecure_internal_http: true`，允许 issuer、Discovery endpoint 和 callback 使用 HTTP；此设置只能用于受控网络，不得跨越公网、共享办公网或不受控 Wi-Fi，且不得暴露到不受信任网络。scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience、`azp` 和 expiry。多受众 ID Token 必须把 `azp` 设为 Keylo 的 client ID；单受众 token 若带 `azp`，它也必须匹配。Keylo 目前以 `client_secret_basic` 完成 confidential client 的 token 认证；若 Discovery 显式声明的 `token_endpoint_auth_methods_supported` 不包含它，注册和登录都会拒绝，避免进入必然失败的兼容性路径。若 Discovery 提供 `userinfo_endpoint`，Keylo 会用 token response 的 access token 获取资料，并要求 UserInfo 的 `sub` 与已验证 ID Token 完全一致；UserInfo 只补齐 ID Token 缺失的 profile fields，不能覆盖已验证声明。
 
 Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `id_token_signing_alg_values_supported` 不包含 RS256，注册和登录都会拒绝，避免将授权码交给无法被当前验证器安全处理的上游身份源。
 
-成功回调返回标准 Keylo `AuthBody`，包含 Bearer access token、可轮换 refresh token 和 `expires_in`。令牌代表已关联的本地用户，沿用本地用户的角色、权限和会话策略；已验证的上游邮箱只会更新本地 `email_verified` 状态，不会自动改写本地邮箱；令牌及上游 ID Token 不会出现在审计详情中。
+成功回调返回标准 Keylo `AuthBody`，包含 Bearer access token、可轮换 refresh token 和 `expires_in`。令牌代表已关联的本地用户，沿用本地用户的角色、权限和会话策略；已验证的上游邮箱只会更新本地 `email_verified` 状态，不会自动改写本地邮箱；令牌及上游 ID Token 不会出现在审计详情中。固定组织来源的 JIT 用户会建立 active membership，access/refresh token 与 refresh session 都固定到该组织；组织、用户、Principal 或 membership 失效后，回调与刷新均失败关闭。
 
 上游 `(source, sub)` 到 Keylo 用户的绑定是不可改绑的：并发登录若发现该上游主体已经关联到其他用户，回调会返回冲突，绝不会覆盖既有映射。JIT 创建若在绑定阶段发生该冲突，会清理刚创建的无密码用户。
 
@@ -792,11 +798,11 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 
 已登录用户可调用 `GET /v1/user/identity-sources/links` 查看自己的已关联 OIDC upstream 身份源（仅返回来源标识、展示名和关联时间），再通过 `DELETE /v1/user/identity-sources/{source_id}/link` 解除关联。解除操作会撤销仅由该身份源签发的 refresh session 并写入审计日志；若该关联是用户唯一的登录方式，接口返回冲突而不执行解除，避免用户把自己锁在账户之外。
 - `claim_mapping`：外部身份字段到 Keylo 标准字段的映射对象。`oidc_upstream` 仅支持 `external_subject`、`email`、`username`、`email_verified` 四个本地字段，值为已签名 ID Token 中的 claim 名；缺省时分别使用 `sub`、`email`、`preferred_username`、`email_verified`。映射到已有账号的邮箱仍需映射后的 `email_verified` 为 `true`，不会因自定义映射降低自动关联的安全要求。
-- `jit_enabled`：是否允许在没有映射和同邮箱账号时创建无密码的 Keylo 用户，默认 `false`。
-- `auto_link_enabled`：是否允许把已有同邮箱 Keylo 用户关联到上游身份，默认 `true`。仅上游 ID Token 声明 `email_verified: true` 时才会自动关联；否则需要显式关联，避免未验证邮箱接管账号。
+- `jit_enabled`：是否允许在没有映射和同邮箱账号时创建无密码的 Keylo 用户，默认 `false`。创建类别只能来自 `allowed_user_class`。
+- `auto_link_enabled`：是否允许把已有同邮箱 Keylo 用户关联到上游身份，默认 `true`。仅上游 ID Token 声明 `email_verified: true`、本地 `user_class` 与来源策略一致且固定组织 membership 已 active 时才会自动关联；否则拒绝自动关联，避免未验证邮箱或来源策略跨越账户边界。
 - `active`：是否启用该身份源，默认 `true`。
 
-`PUT /v1/admin/identity-sources/{source_id}` 支持局部更新：`display_name`、`description`、`config`、`claim_mapping`、`jit_enabled`、`auto_link_enabled`、`active`。
+`PUT /v1/admin/identity-sources/{source_id}` 支持局部更新：`display_name`、`description`、`config`、`claim_mapping`、`jit_enabled`、`auto_link_enabled`、`active`、`allowed_user_class`、`organization_strategy`、`organization_id`。将策略切换为 `none` 会清除组织归属；策略、claim mapping 或 config 变化都属于 trust boundary 变更，会撤销该来源现有 refresh session 和未完成的回调事务。
 
 更新 `config` 时，读取接口返回的 `[REDACTED]` 敏感字段会保留数据库中的原值；只有提交新的非脱敏值才会替换凭据。这样可以安全地读取、编辑非敏感配置后再保存。
 

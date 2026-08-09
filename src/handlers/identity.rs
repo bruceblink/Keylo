@@ -3,7 +3,8 @@ use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
     oidc_discovery_url, parse_oidc_upstream_config, parse_oidc_upstream_discovery, Claims,
     CreateIdentitySourceRequest, IdentitySource, OidcUpstreamDiscovery, OidcUpstreamProfile,
-    UpdateIdentitySourceRequest,
+    UpdateIdentitySourceRequest, IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED,
+    IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE, IDENTITY_SOURCE_USER_CLASS_EXTERNAL_CUSTOMER,
 };
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
@@ -66,6 +67,52 @@ fn normalize_source_type(value: &str) -> Result<String, AuthError> {
         )));
     }
     Ok(source_type)
+}
+
+/// Normalize API policy fields without accepting claim-derived organization selection.
+fn normalize_identity_source_policy(
+    allowed_user_class: Option<&str>,
+    organization_strategy: Option<&str>,
+    organization_id: Option<&str>,
+) -> Result<(String, String, Option<String>), AuthError> {
+    let allowed_user_class = allowed_user_class
+        .unwrap_or(IDENTITY_SOURCE_USER_CLASS_EXTERNAL_CUSTOMER)
+        .trim()
+        .to_ascii_lowercase();
+    if !crate::models::is_valid_identity_source_user_class(&allowed_user_class) {
+        return Err(AuthError::InvalidRequest(
+            "allowed_user_class must be external_customer or internal_employee".to_string(),
+        ));
+    }
+    let organization_strategy = organization_strategy
+        .unwrap_or(IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE)
+        .trim()
+        .to_ascii_lowercase();
+    if !crate::models::is_valid_identity_source_organization_strategy(&organization_strategy) {
+        return Err(AuthError::InvalidRequest(
+            "organization_strategy must be none or fixed".to_string(),
+        ));
+    }
+    let organization_id = organization_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    match (organization_strategy.as_str(), organization_id.as_ref()) {
+        (IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE, None)
+        | (IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED, Some(_)) => {}
+        (IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE, Some(_)) => {
+            return Err(AuthError::InvalidRequest(
+                "organization_id must be omitted when organization_strategy is none".to_string(),
+            ));
+        }
+        (IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED, None) => {
+            return Err(AuthError::InvalidRequest(
+                "organization_id is required when organization_strategy is fixed".to_string(),
+            ));
+        }
+        _ => unreachable!("identity source strategy was validated above"),
+    }
+    Ok((allowed_user_class, organization_strategy, organization_id))
 }
 
 fn json_object_or_default(field_name: &str, value: Option<Value>) -> Result<Value, AuthError> {
@@ -136,9 +183,38 @@ fn validate_identity_source_claim_mapping(
     Ok(())
 }
 
+/// Convert caller-correctable source policy failures into stable request errors.
+fn map_identity_source_persistence_error(error: anyhow::Error) -> AuthError {
+    match error.to_string().as_str() {
+        "identity_source_allowed_user_class_invalid"
+        | "identity_source_organization_policy_invalid"
+        | "identity_source_organization_not_found"
+        | "identity_source_organization_not_active"
+        | "identity_source_external_customer_requires_customer_organization"
+        | "identity_source_internal_employee_requires_internal_organization" => {
+            AuthError::InvalidRequest(error.to_string())
+        }
+        _ => AuthError::DatabaseError(error.to_string()),
+    }
+}
+
 /// Build the stable external-provider key used to keep one source's subjects separate from another.
 fn oidc_mapping_provider(source: &IdentitySource) -> String {
     format!("oidc_upstream:{}", source.id)
+}
+
+/// Reject a callback when an administrator changed its source trust policy mid-flight.
+fn identity_source_trust_is_unchanged(
+    transaction_source: &IdentitySource,
+    current_source: &IdentitySource,
+) -> bool {
+    current_source.active
+        && current_source.source_type == "oidc_upstream"
+        && transaction_source.config == current_source.config
+        && transaction_source.claim_mapping == current_source.claim_mapping
+        && transaction_source.allowed_user_class == current_source.allowed_user_class
+        && transaction_source.organization_strategy == current_source.organization_strategy
+        && transaction_source.organization_id == current_source.organization_id
 }
 
 /// Generate a deterministic fallback username when an upstream preferred username is already used.
@@ -305,6 +381,21 @@ async fn resolve_oidc_upstream_user(
             .map_err(|_| AuthError::DatabaseError("Failed to load mapped user".to_string()))?
             .filter(|user| user.active)
             .ok_or(AuthError::Forbidden)?;
+        if user.user_class != source.allowed_user_class {
+            return Err(AuthError::Forbidden);
+        }
+        if source.organization_strategy == IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED
+            && identity_db::identity_source_login_organization(db, source, &user.id)
+                .await
+                .map_err(|_| {
+                    AuthError::DatabaseError(
+                        "Failed to validate identity source organization".to_string(),
+                    )
+                })?
+                .is_none()
+        {
+            return Err(AuthError::Forbidden);
+        }
         record_oidc_email_change(db, source, profile, &mapping).await?;
         apply_upstream_email_verification(db, source, profile, &user).await?;
         return Ok(user);
@@ -320,6 +411,23 @@ async fn resolve_oidc_upstream_user(
             ));
         }
         if !user.active {
+            return Err(AuthError::Forbidden);
+        }
+        if user.user_class != source.allowed_user_class {
+            return Err(AuthError::Conflict(
+                "The existing Keylo account is not eligible for this identity source".to_string(),
+            ));
+        }
+        if source.organization_strategy == IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED
+            && identity_db::identity_source_login_organization(db, source, &user.id)
+                .await
+                .map_err(|_| {
+                    AuthError::DatabaseError(
+                        "Failed to validate identity source organization".to_string(),
+                    )
+                })?
+                .is_none()
+        {
             return Err(AuthError::Forbidden);
         }
         create_oidc_user_mapping(db, source, profile, &user.id).await?;
@@ -338,12 +446,13 @@ async fn resolve_oidc_upstream_user(
         Some(_) => oidc_jit_username(source, profile),
         None => profile.username.clone(),
     };
-    let user = crate::db::create_user_with_email_verified(
+    let user = crate::db::create_user_with_email_verified_as_class(
         db,
         &username,
         &profile.email,
         None,
         profile.email_verified,
+        &source.allowed_user_class,
     )
     .await
     .map_err(|error| {
@@ -353,6 +462,18 @@ async fn resolve_oidc_upstream_user(
             AuthError::DatabaseError("Failed to create JIT OIDC user".to_string())
         }
     })?;
+    if let Err(error) = identity_db::ensure_identity_source_membership(db, source, &user.id).await {
+        crate::db::delete_user(db, &user.id, None)
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError(
+                    "Failed to clean up JIT user after organization assignment".to_string(),
+                )
+            })?;
+        return Err(AuthError::DatabaseError(format!(
+            "Failed to assign JIT identity source organization: {error}"
+        )));
+    }
     if let Err(error) = create_oidc_user_mapping(db, source, profile, &user.id).await {
         crate::db::delete_user(db, &user.id, None)
             .await
@@ -397,6 +518,12 @@ pub async fn create_identity_source(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    let (allowed_user_class, organization_strategy, organization_id) =
+        normalize_identity_source_policy(
+            payload.allowed_user_class.as_deref(),
+            payload.organization_strategy.as_deref(),
+            payload.organization_id.as_deref(),
+        )?;
 
     let db = require_db(&state)?;
     let source = identity_db::create_identity_source(
@@ -411,6 +538,9 @@ pub async fn create_identity_source(
             jit_enabled: payload.jit_enabled.unwrap_or(false),
             auto_link_enabled: payload.auto_link_enabled.unwrap_or(true),
             active: payload.active.unwrap_or(true),
+            allowed_user_class: &allowed_user_class,
+            organization_strategy: &organization_strategy,
+            organization_id: organization_id.as_deref(),
         },
     )
     .await
@@ -421,7 +551,7 @@ pub async fn create_identity_source(
                 name
             ))
         } else {
-            AuthError::DatabaseError(e.to_string())
+            map_identity_source_persistence_error(e)
         }
     })?;
 
@@ -777,14 +907,29 @@ pub async fn complete_oidc_upstream_login(
     } else {
         claims
     };
-    let profile = crate::models::oidc_upstream_profile_with_mapping(&claims, &source.claim_mapping)
-        .map_err(AuthError::InvalidRequest)?;
-    let user = resolve_oidc_upstream_user(db, &source, &profile).await?;
+    let current_source = identity_db::get_identity_source(db, &source.id)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to revalidate identity source".to_string()))?
+        .filter(|current| identity_source_trust_is_unchanged(&source, current))
+        .ok_or(AuthError::Forbidden)?;
+    let profile =
+        crate::models::oidc_upstream_profile_with_mapping(&claims, &current_source.claim_mapping)
+            .map_err(AuthError::InvalidRequest)?;
+    let user = resolve_oidc_upstream_user(db, &current_source, &profile).await?;
+    let organization_id =
+        identity_db::identity_source_login_organization(db, &current_source, &user.id)
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError(
+                    "Failed to resolve identity source organization".to_string(),
+                )
+            })?;
     let tokens = crate::handlers::issue_external_user_session(
         &state,
         db,
         &user,
-        &oidc_mapping_provider(&source),
+        &oidc_mapping_provider(&current_source),
+        organization_id.as_deref(),
     )
     .await?;
     serde_json::to_value(tokens).map(Json).map_err(|_| {
@@ -813,31 +958,41 @@ pub async fn update_identity_source(
     let claim_mapping = optional_json_object("claim_mapping", payload.claim_mapping)?;
 
     let db = require_db(&state)?;
-    let needs_existing =
-        config.is_some() || claim_mapping.is_some() || payload.active == Some(false);
-    let existing = if needs_existing {
-        Some(
-            identity_db::get_identity_source(db, &source_id)
-                .await
-                .map_err(|e| AuthError::DatabaseError(e.to_string()))?
-                .ok_or(AuthError::NotFound)?,
-        )
-    } else {
-        None
-    };
+    let existing = identity_db::get_identity_source(db, &source_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or(AuthError::NotFound)?;
     if let Some(config) = config.as_mut() {
-        let existing = existing
-            .as_ref()
-            .expect("existing source required for config validation");
         preserve_redacted_identity_secrets(&existing.config, config);
         validate_identity_source_config(&existing.source_type, config)?;
     }
     if let Some(claim_mapping) = claim_mapping.as_ref() {
-        let existing = existing
-            .as_ref()
-            .expect("existing source required for claim mapping validation");
         validate_identity_source_claim_mapping(&existing.source_type, claim_mapping)?;
     }
+    let effective_strategy = payload
+        .organization_strategy
+        .as_deref()
+        .unwrap_or(&existing.organization_strategy);
+    let effective_organization_id = if effective_strategy
+        .trim()
+        .eq_ignore_ascii_case(IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE)
+    {
+        payload.organization_id.as_deref()
+    } else {
+        payload
+            .organization_id
+            .as_deref()
+            .or(existing.organization_id.as_deref())
+    };
+    let (allowed_user_class, organization_strategy, organization_id) =
+        normalize_identity_source_policy(
+            payload
+                .allowed_user_class
+                .as_deref()
+                .or(Some(&existing.allowed_user_class)),
+            Some(effective_strategy),
+            effective_organization_id,
+        )?;
     let source = identity_db::update_identity_source(
         db,
         identity_db::UpdateIdentitySourceParams {
@@ -849,11 +1004,14 @@ pub async fn update_identity_source(
             jit_enabled: payload.jit_enabled,
             auto_link_enabled: payload.auto_link_enabled,
             active: payload.active,
+            allowed_user_class: Some(&allowed_user_class),
+            organization_strategy: Some(&organization_strategy),
+            organization_id: organization_id.as_deref(),
         },
         Some(&claims.sub),
     )
     .await
-    .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+    .map_err(map_identity_source_persistence_error)?
     .ok_or(AuthError::NotFound)?;
 
     Ok(Json(source.redacted_for_response()))
@@ -957,6 +1115,28 @@ mod tests {
     }
 
     #[test]
+    fn identity_source_policy_defaults_to_external_without_an_organization() {
+        let policy = normalize_identity_source_policy(None, None, None).unwrap();
+
+        assert_eq!(
+            policy,
+            ("external_customer".to_string(), "none".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn identity_source_policy_rejects_claim_derived_organization_context() {
+        let error = normalize_identity_source_policy(
+            Some("external_customer"),
+            Some("claim"),
+            Some("org-customer"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, AuthError::InvalidRequest(_)));
+    }
+
+    #[test]
     fn redacted_identity_secrets_are_preserved_during_update() {
         let existing = json!({
             "client_secret": "original-secret",
@@ -989,6 +1169,9 @@ mod tests {
             jit_enabled: true,
             auto_link_enabled: true,
             active: true,
+            allowed_user_class: "external_customer".to_string(),
+            organization_strategy: "none".to_string(),
+            organization_id: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

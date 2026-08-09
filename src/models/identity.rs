@@ -8,6 +8,11 @@ use std::collections::{BTreeMap, HashSet};
 use url::Url;
 use uuid::Uuid;
 
+pub const IDENTITY_SOURCE_USER_CLASS_EXTERNAL_CUSTOMER: &str = "external_customer";
+pub const IDENTITY_SOURCE_USER_CLASS_INTERNAL_EMPLOYEE: &str = "internal_employee";
+pub const IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE: &str = "none";
+pub const IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED: &str = "fixed";
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct IdentitySource {
     pub id: String,
@@ -20,6 +25,9 @@ pub struct IdentitySource {
     pub jit_enabled: bool,
     pub auto_link_enabled: bool,
     pub active: bool,
+    pub allowed_user_class: String,
+    pub organization_strategy: String,
+    pub organization_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -76,6 +84,14 @@ pub struct CreateIdentitySourceRequest {
     pub jit_enabled: Option<bool>,
     pub auto_link_enabled: Option<bool>,
     pub active: Option<bool>,
+    /// The only human class a JIT flow may create or link through this source.
+    #[serde(default)]
+    pub allowed_user_class: Option<String>,
+    /// `none` keeps the source outside an organization; `fixed` pins it to one org.
+    #[serde(default)]
+    pub organization_strategy: Option<String>,
+    #[serde(default)]
+    pub organization_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +103,26 @@ pub struct UpdateIdentitySourceRequest {
     pub jit_enabled: Option<bool>,
     pub auto_link_enabled: Option<bool>,
     pub active: Option<bool>,
+    #[serde(default)]
+    pub allowed_user_class: Option<String>,
+    #[serde(default)]
+    pub organization_strategy: Option<String>,
+    #[serde(default)]
+    pub organization_id: Option<String>,
+}
+
+pub fn is_valid_identity_source_user_class(value: &str) -> bool {
+    matches!(
+        value,
+        IDENTITY_SOURCE_USER_CLASS_EXTERNAL_CUSTOMER | IDENTITY_SOURCE_USER_CLASS_INTERNAL_EMPLOYEE
+    )
+}
+
+pub fn is_valid_identity_source_organization_strategy(value: &str) -> bool {
+    matches!(
+        value,
+        IDENTITY_SOURCE_ORGANIZATION_STRATEGY_NONE | IDENTITY_SOURCE_ORGANIZATION_STRATEGY_FIXED
+    )
 }
 
 /// Validated configuration required to use an upstream OpenID Connect provider.

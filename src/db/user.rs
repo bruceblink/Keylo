@@ -107,6 +107,29 @@ pub async fn create_user_with_email_verified(
     password: Option<&str>,
     email_verified: bool,
 ) -> Result<User> {
+    create_user_with_email_verified_as_class(
+        pool,
+        username,
+        email,
+        password,
+        email_verified,
+        USER_CLASS_EXTERNAL_CUSTOMER,
+    )
+    .await
+}
+
+/// Create an externally verified human account using an already validated source policy.
+pub async fn create_user_with_email_verified_as_class(
+    pool: &PgPool,
+    username: &str,
+    email: &str,
+    password: Option<&str>,
+    email_verified: bool,
+    user_class: &str,
+) -> Result<User> {
+    if !is_valid_user_class(user_class) {
+        anyhow::bail!("invalid_user_class");
+    }
     let id = Uuid::new_v4().to_string();
     let password_hash = if let Some(p) = password {
         Some(hash_password(p)?)
@@ -126,7 +149,7 @@ pub async fn create_user_with_email_verified(
     .bind(username)
     .bind(email)
     .bind(email_verified)
-    .bind(USER_CLASS_EXTERNAL_CUSTOMER)
+    .bind(user_class)
     .bind(password_hash)
     .bind(now)
     .bind(now)

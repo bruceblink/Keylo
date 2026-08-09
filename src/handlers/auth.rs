@@ -248,6 +248,7 @@ pub async fn issue_external_user_session(
     db: &sqlx::PgPool,
     user: &crate::models::User,
     session_client_id: &str,
+    organization_id: Option<&str>,
 ) -> Result<AuthBody, AuthError> {
     if !user.active {
         return Err(AuthError::Forbidden);
@@ -257,6 +258,16 @@ pub async fn issue_external_user_session(
         .await
         .map_err(|_| AuthError::DatabaseError("Failed to resolve user principal".to_string()))?
         .ok_or(AuthError::InvalidToken)?;
+    if let Some(organization_id) = organization_id {
+        crate::db::get_active_organization_membership(db, organization_id, &principal.id)
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError(
+                    "Failed to validate external login organization".to_string(),
+                )
+            })?
+            .ok_or(AuthError::Forbidden)?;
+    }
     enforce_refresh_session_policy(state, db, &principal, false).await?;
 
     let now = Utc::now().timestamp();
@@ -266,7 +277,7 @@ pub async fn issue_external_user_session(
         uid: Some(user.id.clone()),
         principal_id: Some(principal.id.clone()),
         principal_type: Some("user".to_string()),
-        organization_id: None,
+        organization_id: organization_id.map(str::to_string),
         customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
@@ -282,7 +293,7 @@ pub async fn issue_external_user_session(
         uid: access_claims.uid.clone(),
         principal_id: Some(principal.id.clone()),
         principal_type: Some("user".to_string()),
-        organization_id: None,
+        organization_id: organization_id.map(str::to_string),
         customer_support_grant_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
@@ -303,7 +314,7 @@ pub async fn issue_external_user_session(
             session_id: &session_id,
             principal_id: &principal.id,
             client_id: session_client_id,
-            organization_id: None,
+            organization_id,
             refresh_token_id: &refresh_claims.jti,
             refresh_token: &refresh_token,
             access_jti: &access_claims.jti,

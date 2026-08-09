@@ -1997,6 +1997,9 @@ mod tests {
         assert_eq!(create_body["jit_enabled"], true);
         assert_eq!(create_body["auto_link_enabled"], true);
         assert_eq!(create_body["active"], true);
+        assert_eq!(create_body["allowed_user_class"], "external_customer");
+        assert_eq!(create_body["organization_strategy"], "none");
+        assert!(create_body["organization_id"].is_null());
         let source_id = create_body["id"].as_str().unwrap();
 
         let get_resp = server
@@ -2036,6 +2039,129 @@ mod tests {
             .unwrap()
             .iter()
             .any(|source| source["id"] == source_id));
+    }
+
+    #[tokio::test]
+    async fn test_identity_source_policy_requires_a_matching_active_organization() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let suffix = format!(
+            "{}-{}",
+            std::process::id(),
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let customer = db::create_organization(
+            &pool,
+            &format!("identity-customer-{suffix}"),
+            "Identity Customer",
+            "customer",
+        )
+        .await
+        .unwrap();
+        let internal = db::create_organization(
+            &pool,
+            &format!("identity-internal-{suffix}"),
+            "Identity Internal",
+            "internal",
+        )
+        .await
+        .unwrap();
+        let disabled = db::create_organization(
+            &pool,
+            &format!("identity-disabled-{suffix}"),
+            "Identity Disabled",
+            "customer",
+        )
+        .await
+        .unwrap();
+        db::set_organization_status(&pool, &disabled.id, "disabled")
+            .await
+            .unwrap();
+
+        let create = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "name": format!("customer-idp-{suffix}"),
+                "source_type": "oauth2",
+                "display_name": "Customer IdP",
+                "jit_enabled": true,
+                "allowed_user_class": "external_customer",
+                "organization_strategy": "fixed",
+                "organization_id": customer.id
+            }))
+            .await;
+        create.assert_status_ok();
+        let source = create.json::<serde_json::Value>();
+        assert_eq!(source["allowed_user_class"], "external_customer");
+        assert_eq!(source["organization_strategy"], "fixed");
+        assert_eq!(source["organization_id"], customer.id);
+
+        let wrong_kind = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "name": format!("wrong-kind-idp-{suffix}"),
+                "source_type": "oauth2",
+                "display_name": "Wrong Kind IdP",
+                "allowed_user_class": "external_customer",
+                "organization_strategy": "fixed",
+                "organization_id": internal.id
+            }))
+            .await;
+        assert_eq!(wrong_kind.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            wrong_kind.json::<serde_json::Value>()["error"],
+            "invalid_request"
+        );
+
+        let disabled_source = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "name": format!("disabled-idp-{suffix}"),
+                "source_type": "oauth2",
+                "display_name": "Disabled IdP",
+                "organization_strategy": "fixed",
+                "organization_id": disabled.id
+            }))
+            .await;
+        assert_eq!(disabled_source.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            disabled_source.json::<serde_json::Value>()["error"],
+            "invalid_request"
+        );
+
+        let implicit_claim_policy = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "name": format!("claim-org-idp-{suffix}"),
+                "source_type": "oauth2",
+                "display_name": "Claim Organization IdP",
+                "organization_strategy": "claim",
+                "organization_id": customer.id
+            }))
+            .await;
+        assert_eq!(implicit_claim_policy.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            implicit_claim_policy.json::<serde_json::Value>()["error"],
+            "invalid_request"
+        );
     }
 
     #[tokio::test]

@@ -83,7 +83,7 @@
 - [x] 人类密码登录可显式创建 organization-scoped refresh session；scope 同时写入 access/refresh JWT 与会话记录，刷新实时重验 session scope、组织和 membership，组织停用/归档或成员变为 pending/suspended/removed 时原子撤销对应 session。
 - [x] 将人类与机器主体分开建模：`user` 继续使用 `user_class`，`service` 保持现有服务 Principal，新增 `device` 作为设备/边缘代理/无人值守任务的机器 Principal；机器主体没有 user_class、密码登录、浏览器会话或人类 MFA 要求。
 - [x] 新增 MachineCredential/API key 记录：principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by、allowed_scopes、allowed_audiences；原始 key 只在创建或轮换响应中显示一次。
-- 为用户、OIDC client、service client、identity source、resource、refresh session 和授权审计逐项定义 organization_id 归属；resource、refresh session 与授权审计已经完成 scope、查询过滤和授权路径，用户、OIDC client、service client 与 identity source 仍不可仅加 nullable 列，必须随其完整查询约束和授权路径一起实施。
+- 为用户、OIDC client、service client、identity source、resource、refresh session 和授权审计逐项定义 organization_id 归属；用户使用显式 membership，service client、identity source、resource、refresh session 与授权审计已经完成 scope、查询过滤和授权路径，OIDC client 仍不可仅加 nullable 列，必须随其完整查询约束和授权路径一起实施。
 - 设计兼容迁移：现有数据必须进入明确的 default organization 或显式 platform scope，并为每个 user 生成明确的 user_class 映射；迁移保持前向、可重复和可审计。生产恢复使用已验证的备份/恢复或修复迁移，不假设未实现的 down migration；禁止用隐式 NULL 代表所有组织或用默认类别掩盖不确定性。
 
 验收：迁移在干净数据库和已有单组织数据库上都能执行；重复执行不产生重复组织、类别或绑定；任一租户归属或 user_class 不明确的对象都会阻止发布而不是被静默归入错误组织。
@@ -95,7 +95,7 @@
 - [x] 提供组织 owner/admin 管理成员、邀请和加入的 API；这些接口必须被限制在其 active organization 内。
 - [x] pending/suspended/removed 成员不能创建或刷新 organization-scoped refresh session；组织 disabled/archived 会撤销该组织 session，重新 active 不恢复旧 token。
 - internal_employee 可以使用平台作用域，或加入 kind=internal 的内部组织；external_customer 只有加入 kind=customer 的 active organization 后才能进入客户资源，未归属或 pending 状态不得创建组织上下文。
-- 身份源必须声明允许创建的 user_class 和组织归属策略；外部 OIDC/社交登录默认只能创建 external_customer，不得通过邮箱或 claim 自动获得 internal_employee。
+- [x] 身份源必须声明允许创建的 user_class 和组织归属策略；外部 OIDC/社交登录默认只能创建 external_customer，不得通过邮箱或 claim 自动获得 internal_employee。当前只允许显式 `none` 或单一 active `fixed` 组织，不接受 claim/header 动态选租户；固定来源 JIT 创建匹配类别账号和 active membership，并签发同组织 refresh session。
 - 组织切换必须重新校验 membership 并签发新的 active organization context；不能信任任意 X-Organization-Id 请求头。
 - 组织删除初期只允许 archive；物理删除、数据导出和保留策略另行审批。
 
@@ -114,7 +114,7 @@
 
 验收：跨组织 check、batch-check、resource-tree、client 管理、identity source 管理和 refresh 都有拒绝测试；external_customer 绑定 platform/global role 会失败；internal_employee 的无授权客户访问会失败；平台管理员的跨组织操作必须显式调用、最小授权和审计。
 
-当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销、组织停用、organization-scoped refresh session、organization-scoped service Token、organization owner/admin 限定本组织的 service/device 与 API key 管理，以及带目标组织、operation、原因和实时撤销的 customer-support 访问。`device` 和 API key 以不可变 platform/organization scope、hash-only 存储、轮换/撤销、实时 Principal/membership 校验和显式 `X-API-Key` 授权检查落地；OIDC client 与 identity source 的组织归属仍属于后续未完成项。
+当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销、组织停用、organization-scoped refresh session、organization-scoped service Token、organization owner/admin 限定本组织的 service/device 与 API key 管理，以及带目标组织、operation、原因和实时撤销的 customer-support 访问。`device` 和 API key 以不可变 platform/organization scope、hash-only 存储、轮换/撤销、实时 Principal/membership 校验和显式 `X-API-Key` 授权检查落地；identity source 已使用显式 user class、`none/fixed` 组织策略、JIT membership 和 scoped session，OIDC client 的组织归属仍属于后续未完成项。
 
 ### 3.4 非人类主体与 API_KEY 认证
 
