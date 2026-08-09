@@ -388,6 +388,47 @@ pub async fn list_service_clients_filtered(
     Ok(rows.into_iter().map(service_info_from_row).collect())
 }
 
+/// Return a bounded service-client page and whether another page exists.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_service_clients_filtered_page(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    scope_kind: Option<&str>,
+    active: Option<bool>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<ServiceInfo>, bool)> {
+    let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
+    let rows = sqlx::query(
+        "SELECT service_id, name, description, scope_kind, organization_id, allowed_scopes,
+                allowed_audiences, active, integration_type, introspection_allowed,
+                token_ttl_seconds, owner, contact,
+                extract(epoch from created_at)::bigint as created_at,
+                extract(epoch from updated_at)::bigint as updated_at
+         FROM service_clients
+         WHERE ($1::text IS NULL OR organization_id = $1)
+           AND ($2::text IS NULL OR scope_kind = $2)
+           AND ($3::bool IS NULL OR active = $3)
+         ORDER BY service_clients.created_at DESC, service_clients.service_id
+         LIMIT $4 OFFSET $5",
+    )
+    .bind(organization_id)
+    .bind(scope_kind)
+    .bind(active)
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let has_more = rows.len() > limit as usize;
+    let services = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(service_info_from_row)
+        .collect();
+    Ok((services, has_more))
+}
+
 /// Lists the service clients whose immutable scope is exactly one organization.
 pub async fn list_service_clients_in_organization(
     pool: &PgPool,
@@ -404,6 +445,24 @@ pub async fn list_service_clients_in_organization_paginated(
     offset: i64,
 ) -> Result<Vec<ServiceInfo>> {
     list_service_clients_filtered(
+        pool,
+        Some(organization_id),
+        Some(SERVICE_CLIENT_SCOPE_ORGANIZATION),
+        None,
+        limit,
+        offset,
+    )
+    .await
+}
+
+/// Return a bounded page for one organization without allowing a broader scope filter.
+pub async fn list_service_clients_in_organization_page(
+    pool: &PgPool,
+    organization_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<ServiceInfo>, bool)> {
+    list_service_clients_filtered_page(
         pool,
         Some(organization_id),
         Some(SERVICE_CLIENT_SCOPE_ORGANIZATION),

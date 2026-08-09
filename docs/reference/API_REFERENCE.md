@@ -666,7 +666,7 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 | GET | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles` | 查询组织角色绑定 |
 | POST | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles` | `{ "role_id": "..." }`，只接受 organization-scoped role |
 | DELETE | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles/{role_id}` | 幂等撤销组织角色绑定 |
-| GET | `/v1/organizations/{organization_id}/services?limit=&offset=` | 查询当前组织的 service client；limit 默认 50、最大 200，offset 默认 0 |
+| GET | `/v1/organizations/{organization_id}/services?limit=&offset=` | 查询当前组织的 service client；limit 默认 50、最大 200，offset 默认 0，返回 `has_more/next_offset` |
 | POST | `/v1/organizations/{organization_id}/services` | 创建当前组织的 service client |
 | GET | `/v1/organizations/{organization_id}/services/{service_id}` | 查询当前组织的 service client |
 | PUT | `/v1/organizations/{organization_id}/services/{service_id}` | 更新当前组织 service 的可变元数据 |
@@ -899,7 +899,7 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/admin/services?organization_id=&scope_kind=&active=&limit=&offset=` | 服务列表；精确过滤 scope，limit 默认 50、最大 200，offset 默认 0 |
+| GET | `/v1/admin/services?organization_id=&scope_kind=&active=&limit=&offset=` | 服务列表；精确过滤 scope，limit 默认 50、最大 200，offset 默认 0，返回 `has_more/next_offset` |
 | POST | `/v1/admin/services` | 注册服务 |
 | GET | `/v1/admin/services/{service_id}` | 服务详情 |
 | PUT | `/v1/admin/services/{service_id}` | 更新服务 |

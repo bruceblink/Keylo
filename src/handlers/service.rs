@@ -209,18 +209,28 @@ pub async fn list_services(
         ));
     }
 
-    let services = svc_db::list_service_clients_filtered(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (services, has_more) = svc_db::list_service_clients_filtered_page(
         db,
         query.organization_id.as_deref(),
         query.scope_kind.as_deref(),
         query.active,
-        query.limit.unwrap_or(50).clamp(1, 200),
-        query.offset.unwrap_or(0).max(0),
+        limit,
+        offset,
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-    Ok(Json(json!({ "services": services })))
+    Ok(Json(json!({
+        "services": services,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 #[derive(Debug, Deserialize)]

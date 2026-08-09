@@ -632,16 +632,23 @@ async fn list_delegated_services_handler(
 ) -> Result<Json<serde_json::Value>, AuthError> {
     require_delegated_manager(&state, &claims, &organization_id).await?;
     let db = require_organization_db(&state)?;
-    let services = svc_db::list_service_clients_in_organization_paginated(
-        db,
-        &organization_id,
-        query.limit.unwrap_or(50).clamp(1, 200),
-        query.offset.unwrap_or(0).max(0),
-    )
-    .await
-    .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (services, has_more) =
+        svc_db::list_service_clients_in_organization_page(db, &organization_id, limit, offset)
+            .await
+            .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
 
-    Ok(Json(json!({"success": true, "data": services})))
+    Ok(Json(json!({
+        "success": true,
+        "data": services,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 #[derive(Debug, Deserialize)]

@@ -3894,10 +3894,14 @@ mod tests {
             .add_header("Authorization", format!("Bearer {organization_token}"))
             .await;
         empty_list.assert_status_ok();
-        assert!(empty_list.json::<serde_json::Value>()["data"]
+        let empty_list_body: serde_json::Value = empty_list.json();
+        assert!(empty_list_body["data"]
             .as_array()
             .expect("Service list should be an array")
             .is_empty());
+        assert_eq!(empty_list_body["pagination"]["limit"], 50);
+        assert_eq!(empty_list_body["pagination"]["offset"], 0);
+        assert_eq!(empty_list_body["pagination"]["has_more"], false);
 
         let service_id = format!("delegated-service-{suffix}");
         let forbidden_organization_override = server
@@ -3933,6 +3937,16 @@ mod tests {
         assert_eq!(registered["data"]["scope_kind"], "organization");
         assert_eq!(registered["data"]["organization_id"], organization_a.id);
         assert_eq!(registered["data"]["introspection_allowed"], false);
+
+        let populated_list = server
+            .get(&format!("{list_path}?limit=1&offset=0"))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .await;
+        populated_list.assert_status_ok();
+        let populated_list: serde_json::Value = populated_list.json();
+        assert_eq!(populated_list["pagination"]["limit"], 1);
+        assert_eq!(populated_list["pagination"]["offset"], 0);
+        assert_eq!(populated_list["pagination"]["has_more"], false);
 
         let service_principal = db::get_principal_by_ref(&pool, "service", &service_id)
             .await
@@ -4521,6 +4535,9 @@ mod tests {
         service_list.assert_status_ok();
         let service_list: serde_json::Value = service_list.json();
         assert_eq!(service_list["services"].as_array().unwrap().len(), 1);
+        assert_eq!(service_list["pagination"]["limit"], 1);
+        assert_eq!(service_list["pagination"]["offset"], 0);
+        assert_eq!(service_list["pagination"]["has_more"], false);
         assert_eq!(service_list["services"][0]["service_id"], service_id);
         assert_eq!(
             service_list["services"][0]["organization_id"],
