@@ -10,18 +10,142 @@ use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::response::Redirect;
 use axum::Json;
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 const SUPPORTED_SOURCE_TYPES: [&str; 4] = ["local_password", "oauth2", "oidc_upstream", "ldap"];
+const OIDC_UPSTREAM_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const OIDC_UPSTREAM_METADATA_CACHE_TTL_SECONDS: i64 = 300;
 
 #[derive(Deserialize)]
 pub struct OidcUpstreamCallbackQuery {
     pub code: Option<String>,
     pub state: Option<String>,
     pub error: Option<String>,
+}
+
+/// Build one bounded HTTP client for upstream metadata and token requests.
+fn oidc_upstream_http_client() -> Result<reqwest::Client, AuthError> {
+    reqwest::Client::builder()
+        .timeout(OIDC_UPSTREAM_HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC HTTP client".to_string()))
+}
+
+/// Treat source updated_at as the trust configuration version and expire cached metadata.
+fn upstream_cache_entry_is_fresh(
+    entry: &crate::state::OidcUpstreamMetadataCacheEntry,
+    source: &IdentitySource,
+) -> bool {
+    entry.source_updated_at == source.updated_at
+        && Utc::now()
+            .signed_duration_since(entry.fetched_at)
+            .num_seconds()
+            < OIDC_UPSTREAM_METADATA_CACHE_TTL_SECONDS
+}
+
+/// Return validated Discovery metadata without refetching a live source within the cache window.
+async fn fetch_cached_oidc_discovery(
+    state: &AppState,
+    source: &IdentitySource,
+    config: &crate::models::OidcUpstreamConfig,
+    client: &reqwest::Client,
+) -> Result<OidcUpstreamDiscovery, AuthError> {
+    if let Some(discovery) = state
+        .oidc_upstream_metadata_cache
+        .read()
+        .await
+        .get(&source.id)
+        .filter(|entry| upstream_cache_entry_is_fresh(entry, source))
+        .map(|entry| entry.discovery.clone())
+    {
+        return Ok(discovery);
+    }
+
+    let document = client
+        .get(oidc_discovery_url(&config.issuer))
+        .send()
+        .await
+        .map_err(|_| {
+            AuthError::InvalidRequest("Unable to fetch OIDC Discovery document".to_string())
+        })?
+        .error_for_status()
+        .map_err(|_| {
+            AuthError::InvalidRequest(
+                "OIDC Discovery endpoint returned an unsuccessful status".to_string(),
+            )
+        })?
+        .json::<Value>()
+        .await
+        .map_err(|_| {
+            AuthError::InvalidRequest("OIDC Discovery document is not valid JSON".to_string())
+        })?;
+    let discovery = parse_oidc_upstream_discovery(&config.issuer, &document)
+        .map_err(AuthError::InvalidRequest)?;
+    state.oidc_upstream_metadata_cache.write().await.insert(
+        source.id.clone(),
+        crate::state::OidcUpstreamMetadataCacheEntry {
+            source_updated_at: source.updated_at,
+            fetched_at: Utc::now(),
+            discovery: discovery.clone(),
+            jwks: None,
+        },
+    );
+    Ok(discovery)
+}
+
+/// Return cached JWKS and refresh it explicitly when a rotated signing key is unavailable.
+async fn fetch_cached_oidc_jwks(
+    state: &AppState,
+    source: &IdentitySource,
+    discovery: &OidcUpstreamDiscovery,
+    client: &reqwest::Client,
+    force_refresh: bool,
+) -> Result<crate::models::OidcUpstreamJwks, AuthError> {
+    if !force_refresh {
+        if let Some(jwks) = state
+            .oidc_upstream_metadata_cache
+            .read()
+            .await
+            .get(&source.id)
+            .filter(|entry| {
+                upstream_cache_entry_is_fresh(entry, source)
+                    && entry.discovery.jwks_uri == discovery.jwks_uri
+            })
+            .and_then(|entry| entry.jwks.clone())
+        {
+            return Ok(jwks);
+        }
+    }
+
+    let jwks = client
+        .get(&discovery.jwks_uri)
+        .send()
+        .await
+        .map_err(|_| AuthError::InvalidRequest("Unable to fetch OIDC JWKS".to_string()))?
+        .error_for_status()
+        .map_err(|_| {
+            AuthError::InvalidRequest(
+                "OIDC JWKS endpoint returned an unsuccessful status".to_string(),
+            )
+        })?
+        .json::<crate::models::OidcUpstreamJwks>()
+        .await
+        .map_err(|_| AuthError::InvalidRequest("OIDC JWKS is invalid".to_string()))?;
+    state.oidc_upstream_metadata_cache.write().await.insert(
+        source.id.clone(),
+        crate::state::OidcUpstreamMetadataCacheEntry {
+            source_updated_at: source.updated_at,
+            fetched_at: Utc::now(),
+            discovery: discovery.clone(),
+            jwks: Some(jwks.clone()),
+        },
+    );
+    Ok(jwks)
 }
 
 fn require_db(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {
@@ -660,28 +784,8 @@ pub async fn discover_oidc_upstream(
         ));
     }
     let config = parse_oidc_upstream_config(&source.config).map_err(AuthError::InvalidRequest)?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC HTTP client".to_string()))?;
-    let response = client
-        .get(oidc_discovery_url(&config.issuer))
-        .send()
-        .await
-        .map_err(|_| {
-            AuthError::InvalidRequest("Unable to fetch OIDC Discovery document".to_string())
-        })?;
-    if !response.status().is_success() {
-        return Err(AuthError::InvalidRequest(
-            "OIDC Discovery endpoint returned an unsuccessful status".to_string(),
-        ));
-    }
-    let document = response.json::<Value>().await.map_err(|_| {
-        AuthError::InvalidRequest("OIDC Discovery document is not valid JSON".to_string())
-    })?;
-    let discovery = parse_oidc_upstream_discovery(&config.issuer, &document)
-        .map_err(AuthError::InvalidRequest)?;
+    let client = oidc_upstream_http_client()?;
+    let discovery = fetch_cached_oidc_discovery(&state, &source, &config, &client).await?;
     Ok(Json(discovery))
 }
 
@@ -697,31 +801,8 @@ pub async fn begin_oidc_upstream_login(
         .filter(|source| source.source_type == "oidc_upstream")
         .ok_or(AuthError::NotFound)?;
     let config = parse_oidc_upstream_config(&source.config).map_err(AuthError::InvalidRequest)?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC HTTP client".to_string()))?;
-    let document = client
-        .get(oidc_discovery_url(&config.issuer))
-        .send()
-        .await
-        .map_err(|_| {
-            AuthError::InvalidRequest("Unable to fetch OIDC Discovery document".to_string())
-        })?
-        .error_for_status()
-        .map_err(|_| {
-            AuthError::InvalidRequest(
-                "OIDC Discovery endpoint returned an unsuccessful status".to_string(),
-            )
-        })?
-        .json::<Value>()
-        .await
-        .map_err(|_| {
-            AuthError::InvalidRequest("OIDC Discovery document is not valid JSON".to_string())
-        })?;
-    let discovery = parse_oidc_upstream_discovery(&config.issuer, &document)
-        .map_err(AuthError::InvalidRequest)?;
+    let client = oidc_upstream_http_client()?;
+    let discovery = fetch_cached_oidc_discovery(&state, &source, &config, &client).await?;
     let transaction = crate::models::new_oidc_upstream_authorization_state();
     let mfa_key = state.config.mfa_secret_key_bytes().map_err(|_| {
         AuthError::DatabaseError("MFA_SECRET_KEY is required for upstream OIDC login".to_string())
@@ -800,31 +881,8 @@ pub async fn complete_oidc_upstream_login(
                 "OIDC authorization transaction cannot be decrypted".to_string(),
             )
         })?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| AuthError::DatabaseError("Failed to create OIDC HTTP client".to_string()))?;
-    let discovery_document = client
-        .get(oidc_discovery_url(&config.issuer))
-        .send()
-        .await
-        .map_err(|_| {
-            AuthError::InvalidRequest("Unable to fetch OIDC Discovery document".to_string())
-        })?
-        .error_for_status()
-        .map_err(|_| {
-            AuthError::InvalidRequest(
-                "OIDC Discovery endpoint returned an unsuccessful status".to_string(),
-            )
-        })?
-        .json::<Value>()
-        .await
-        .map_err(|_| {
-            AuthError::InvalidRequest("OIDC Discovery document is not valid JSON".to_string())
-        })?;
-    let discovery = parse_oidc_upstream_discovery(&config.issuer, &discovery_document)
-        .map_err(AuthError::InvalidRequest)?;
+    let client = oidc_upstream_http_client()?;
+    let discovery = fetch_cached_oidc_discovery(&state, &source, &config, &client).await?;
     let token = client
         .post(&discovery.token_endpoint)
         .basic_auth(&config.client_id, Some(&config.client_secret))
@@ -852,22 +910,17 @@ pub async fn complete_oidc_upstream_login(
         .ok_or_else(|| {
             AuthError::InvalidRequest("OIDC token response is missing id_token".to_string())
         })?;
-    let jwks = client
-        .get(&discovery.jwks_uri)
-        .send()
-        .await
-        .map_err(|_| AuthError::InvalidRequest("Unable to fetch OIDC JWKS".to_string()))?
-        .error_for_status()
-        .map_err(|_| {
-            AuthError::InvalidRequest(
-                "OIDC JWKS endpoint returned an unsuccessful status".to_string(),
-            )
-        })?
-        .json::<crate::models::OidcUpstreamJwks>()
-        .await
-        .map_err(|_| AuthError::InvalidRequest("OIDC JWKS is invalid".to_string()))?;
-    let claims = crate::models::verify_oidc_upstream_id_token(id_token, &jwks)
-        .map_err(AuthError::InvalidRequest)?;
+    let jwks = fetch_cached_oidc_jwks(&state, &source, &discovery, &client, false).await?;
+    let claims = match crate::models::verify_oidc_upstream_id_token(id_token, &jwks) {
+        Ok(claims) => claims,
+        Err(error) if error == "Upstream ID Token signing key is unavailable" => {
+            let refreshed_jwks =
+                fetch_cached_oidc_jwks(&state, &source, &discovery, &client, true).await?;
+            crate::models::verify_oidc_upstream_id_token(id_token, &refreshed_jwks)
+                .map_err(AuthError::InvalidRequest)?
+        }
+        Err(error) => return Err(AuthError::InvalidRequest(error)),
+    };
     crate::models::validate_oidc_upstream_id_token_claims(
         &claims,
         &config.issuer,
@@ -1154,6 +1207,85 @@ mod tests {
         assert_eq!(incoming["client_secret"], "original-secret");
         assert_eq!(incoming["nested"]["bind_password"], "original-password");
         assert_eq!(incoming["issuer"], "https://new-idp.example");
+    }
+
+    #[tokio::test]
+    async fn upstream_metadata_cache_uses_source_version_and_cached_jwks() {
+        let state = AppState::default();
+        let source_updated_at = chrono::Utc::now();
+        let source = IdentitySource {
+            id: "cache-source".to_string(),
+            name: "cache-source".to_string(),
+            source_type: "oidc_upstream".to_string(),
+            display_name: "Cache source".to_string(),
+            description: None,
+            config: json!({}),
+            claim_mapping: json!({}),
+            jit_enabled: true,
+            auto_link_enabled: true,
+            active: true,
+            allowed_user_class: "external_customer".to_string(),
+            organization_strategy: "none".to_string(),
+            organization_id: None,
+            created_at: source_updated_at,
+            updated_at: source_updated_at,
+        };
+        let config: crate::models::OidcUpstreamConfig = serde_json::from_value(json!({
+            "issuer": "https://127.0.0.1:1",
+            "client_id": "cache-client",
+            "client_secret": "cache-secret",
+            "redirect_uri": "https://keylo.example.test/callback"
+        }))
+        .unwrap();
+        let discovery = OidcUpstreamDiscovery {
+            issuer: config.issuer.clone(),
+            authorization_endpoint: "https://127.0.0.1:1/authorize".to_string(),
+            token_endpoint: "https://127.0.0.1:1/token".to_string(),
+            jwks_uri: "https://127.0.0.1:1/jwks".to_string(),
+            userinfo_endpoint: None,
+            response_types_supported: vec!["code".to_string()],
+            grant_types_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            id_token_signing_alg_values_supported: None,
+        };
+        let jwks = crate::models::OidcUpstreamJwks { keys: Vec::new() };
+        state.oidc_upstream_metadata_cache.write().await.insert(
+            source.id.clone(),
+            crate::state::OidcUpstreamMetadataCacheEntry {
+                source_updated_at,
+                fetched_at: chrono::Utc::now(),
+                discovery: discovery.clone(),
+                jwks: Some(jwks.clone()),
+            },
+        );
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(20))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            fetch_cached_oidc_discovery(&state, &source, &config, &client)
+                .await
+                .unwrap()
+                .jwks_uri,
+            discovery.jwks_uri
+        );
+        assert!(
+            fetch_cached_oidc_jwks(&state, &source, &discovery, &client, false)
+                .await
+                .unwrap()
+                .keys
+                .is_empty()
+        );
+
+        let changed_source = IdentitySource {
+            updated_at: source_updated_at + chrono::Duration::seconds(1),
+            ..source
+        };
+        assert!(matches!(
+            fetch_cached_oidc_discovery(&state, &changed_source, &config, &client).await,
+            Err(AuthError::InvalidRequest(_))
+        ));
     }
 
     #[test]

@@ -770,6 +770,7 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 | POST | `/v1/admin/identity-sources` | 注册身份源 |
 | GET | `/v1/admin/identity-sources/{source_id}` | 身份源详情 |
 | PUT | `/v1/admin/identity-sources/{source_id}` | 更新身份源 |
+| POST | `/v1/admin/identity-sources/{source_id}/oidc/discover` | 拉取并校验 OIDC Discovery；成功结果按 source 配置版本缓存 |
 | GET | `/v1/admin/identity-sources/{source_id}/links` | 查看该 OIDC 身份源关联的本地用户 |
 | DELETE | `/v1/admin/identity-sources/{source_id}/links/{user_id}` | 管理员解除指定本地用户的 OIDC 关联 |
 
@@ -808,7 +809,7 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - `organization_strategy`：组织归属策略，支持 `none`、`fixed`，默认 `none`。`fixed` 必须同时提供 `organization_id`；不支持从 claim 或请求头动态选择组织。
 - `organization_id`：`fixed` 策略的唯一组织。external customer 来源只能绑定 active customer 组织，internal employee 来源只能绑定 active internal 组织。
 
-`oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调。完全隔离的内网可在该身份源的 `config` 中显式设置 `allow_insecure_internal_http: true`，允许 issuer、Discovery endpoint 和 callback 使用 HTTP；此设置只能用于受控网络，不得跨越公网、共享办公网或不受控 Wi-Fi，且不得暴露到不受信任网络。scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience、`azp` 和 expiry。多受众 ID Token 必须把 `azp` 设为 Keylo 的 client ID；单受众 token 若带 `azp`，它也必须匹配。Keylo 目前以 `client_secret_basic` 完成 confidential client 的 token 认证；若 Discovery 显式声明的 `token_endpoint_auth_methods_supported` 不包含它，注册和登录都会拒绝，避免进入必然失败的兼容性路径。若 Discovery 提供 `userinfo_endpoint`，Keylo 会用 token response 的 access token 获取资料，并要求 UserInfo 的 `sub` 与已验证 ID Token 完全一致；UserInfo 只补齐 ID Token 缺失的 profile fields，不能覆盖已验证声明。
+`oidc_upstream` 现要求 `config` 包含 `issuer`、`client_id`、`client_secret`、`redirect_uri` 与可选 `scopes`。issuer 必须为不含 query/fragment 的 HTTPS URL；redirect URI 必须为 HTTPS，开发期允许 `localhost`、`127.0.0.1`、`[::1]` 的 HTTP 回调。完全隔离的内网可在该身份源的 `config` 中显式设置 `allow_insecure_internal_http: true`，允许 issuer、Discovery endpoint 和 callback 使用 HTTP；此设置只能用于受控网络，不得跨越公网、共享办公网或不受控 Wi-Fi，且不得暴露到不受信任网络。scopes 必须唯一且包含 `openid`。登录入口为 `GET /v1/upstream/oidc/{source_name}/login`，回调为 `GET /v1/upstream/oidc/callback`；回调会校验 Discovery、PKCE、state、nonce、ID Token 签名、issuer、audience、`azp` 和 expiry。Discovery 与 JWKS 请求使用 5 秒超时；经过校验的元数据按 source 的 `updated_at` 配置版本缓存最多 5 分钟，source 配置或状态更新会自然失效旧缓存，遇到未知签名 `kid` 时只执行一次 JWKS 强制刷新。多受众 ID Token 必须把 `azp` 设为 Keylo 的 client ID；单受众 token 若带 `azp`，它也必须匹配。Keylo 目前以 `client_secret_basic` 完成 confidential client 的 token 认证；若 Discovery 显式声明的 `token_endpoint_auth_methods_supported` 不包含它，注册和登录都会拒绝，避免进入必然失败的兼容性路径。若 Discovery 提供 `userinfo_endpoint`，Keylo 会用 token response 的 access token 获取资料，并要求 UserInfo 的 `sub` 与已验证 ID Token 完全一致；UserInfo 只补齐 ID Token 缺失的 profile fields，不能覆盖已验证声明。
 
 Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `id_token_signing_alg_values_supported` 不包含 RS256，注册和登录都会拒绝，避免将授权码交给无法被当前验证器安全处理的上游身份源。
 

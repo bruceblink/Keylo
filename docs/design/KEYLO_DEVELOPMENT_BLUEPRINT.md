@@ -29,7 +29,7 @@ Keylo 采用“先通用 IAM 和可用性，再以 SaaS 组织隔离为下一条
 | 标准 OIDC/OAuth 和浏览器 SSO | Discovery、Authorization Code + PKCE、UserInfo、consent、浏览器会话、退出和标准错误 | 已实现并有真实 HTTP 测试 |
 | 身份代理和首次登录关联 | OIDC upstream、JIT、稳定 external subject、账号关联/解除关联和上游会话撤销 | OIDC upstream 已实现 |
 | Token、密钥和会话生命周期 | RS256/JWKS、audience 约束、refresh session 原子轮换、重放撤销、按主体撤销、组织作用域撤销和审计 | 已实现；JWT 支持 active/passive overlap、轮换、回滚、下线和审计 |
-| 服务账号与 client credentials | 将非人类调用映射到稳定 service Principal、scope/audience 和可撤销凭证；API key 只作为受限的直连便利，不替代 OIDC | 已实现 `service_id + service_secret -> service_access`；直接 API key 仍属于下一条主线 |
+| 服务账号与 client credentials | 将非人类调用映射到稳定 service Principal、scope/audience 和可撤销凭证；API key 只作为受限的直连便利，不替代 OIDC | 已实现 `service_id + service_secret -> service_access` 与 platform/organization-scoped API key；API key 只进入显式授权检查接口 |
 | 最小权限管理 | Principal、角色、权限、资源树、单点/批量授权检查、变更历史和拒绝原因为审计 | 已实现；暂不做任意策略引擎 |
 | 安全默认值 | 精确 redirect URI、PKCE、HTTPS 默认、限流、登录锁定、MFA、密文配置、失败关闭 | 已实现并持续加固 |
 | 运维可追溯性 | healthz、readyz、固定基数 Prometheus 指标、审计日志、迁移和 setup 状态 | 已实现并纳入发布门槛 |
@@ -78,7 +78,7 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 | 标准 OIDC | Discovery、Authorization Code、PKCE、state、nonce、ID Token、UserInfo、consent、浏览器会话、退出、confidential/public client 和 secret rotation；relying party client 支持显式 platform/organization scope | 只发布 authorization_code；组织 client 需要 owner/admin 的 active organization context；没有 Dynamic Client Registration、OIDC token revocation、Device/CIBA/PAR/DPoP |
 | 本地账户 | 注册、密码登录、密码复杂度、限流、登录锁定、用户/管理员密码修改或重置、email_verified 状态 | 没有 SMTP 或其他邮件投递；验证邮箱目前由可信上游或完成近期 MFA 的管理员触发；没有用户自助 forgot-password 邮件流程 |
 | MFA | TOTP enrollment、近期验证、恢复码、敏感管理操作的 step-up 和审计 | 没有 WebAuthn/Passkey；不把 TOTP 自动扩展成任意认证流编排 |
-| 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、显式 user class/fixed organization 策略、邮箱变化记录、启停和会话撤销 | identity source 的 ldap 类型目前只是注册元数据，不包含 LDAP bind、同步、组映射或故障切换 |
+| 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、显式 user class/fixed organization 策略、邮箱变化记录、启停和会话撤销；Discovery/JWKS 有超时、按 source 配置版本缓存和未知 kid 强制刷新 | identity source 的 ldap 类型目前只是注册元数据，不包含 LDAP bind、同步、组映射或故障切换 |
 | 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`；service/device Principal 都可绑定多个 API key，显式为 platform 或单一 organization scope，组织调用每次实时重验组织与 membership | API key 只开放给明确声明的授权检查 API；不支持把 API key 作为人类 Bearer Token |
 | 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | platform 与 organization 角色按 signed active context 分开决策，资源按 organization_id 过滤；组、composite role 和细粒度 delegated admin 仍未实现 |
 | SaaS 组织基础 | `organizations`、`user_class`、成员关系、组织角色绑定、资源、refresh session、OIDC client、service client、identity source 和 device/API key scope 已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织；平台与组织成员管理 API 已可用 | organization role binding 和 organization OIDC client 管理只在同一 signed active context 中生效 |

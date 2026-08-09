@@ -164,11 +164,11 @@
 
 ### 2.1-P1-C OIDC upstream 可运营化
 
-- 为每个 upstream source 提供 Discovery 校验、超时、JWKS 缓存和明确的配置版本。
-- 修改或禁用 source 时，原子撤销未完成授权、来源 refresh session，并记录撤销数量。
-- 保持稳定 external subject；上游邮箱变化只记录观察结果，不自动覆盖本地邮箱。
+- [x] 为每个 upstream source 提供 Discovery 校验、5 秒超时、JWKS 缓存和以 `updated_at` 表示的配置版本；未知签名 `kid` 只触发一次强制 JWKS 刷新。
+- [x] 修改或禁用 source 时，原子撤销未完成授权、来源 refresh session，并记录撤销数量。
+- [x] 保持稳定 external subject；上游邮箱变化只记录观察结果，不自动覆盖本地邮箱。
 
-验收：IdP 错误、Discovery 变化、source 禁用、配置回滚和重复 callback 都有确定结果，不能造成账号错绑。
+验收（已使用真实 PostgreSQL 与本地 HTTP upstream fixture）：IdP 错误、Discovery 变化、source 禁用、配置回滚和重复 callback 都有确定结果，不能造成账号错绑；Discovery/JWKS 缓存命中与配置版本失效均可验证。
 
 ### 2.1-P1-D 运行可观测性
 

@@ -51,6 +51,7 @@ wwIDAQAB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{extract::State as AxumState, response::Json as AxumJson, routing::get, Router};
     use keylo::models::{Claims, Keys};
     use openidconnect::{
         core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
@@ -58,10 +59,51 @@ mod tests {
         OAuth2TokenResponse, PkceCodeChallenge, RedirectUrl, Scope,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::time::sleep;
 
     static TEST_PREFIX_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    async fn fake_upstream_discovery(
+        AxumState((hits, issuer)): AxumState<(Arc<AtomicU64>, String)>,
+    ) -> AxumJson<serde_json::Value> {
+        hits.fetch_add(1, Ordering::Relaxed);
+        AxumJson(json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/authorize"),
+            "token_endpoint": format!("{issuer}/token"),
+            "jwks_uri": format!("{issuer}/jwks"),
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "token_endpoint_auth_methods_supported": ["client_secret_basic"],
+            "id_token_signing_alg_values_supported": ["RS256"]
+        }))
+    }
+
+    async fn fake_upstream_jwks() -> AxumJson<serde_json::Value> {
+        AxumJson(json!({"keys": []}))
+    }
+
+    async fn spawn_fake_upstream_metadata_server(
+    ) -> (String, Arc<AtomicU64>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Fake upstream listener should bind");
+        let issuer = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicU64::new(0));
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                get(fake_upstream_discovery),
+            )
+            .route("/jwks", get(fake_upstream_jwks))
+            .with_state((hits.clone(), issuer.clone()));
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (issuer, hits, handle)
+    }
 
     fn test_config() -> Config {
         Config {
@@ -2714,6 +2756,89 @@ mod tests {
             .add_header("Authorization", format!("Bearer {}", admin_access_token))
             .await;
         assert_eq!(unlink_resp.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_oidc_upstream_discovery_cache_invalidates_on_source_update() {
+        let (issuer, discovery_hits, upstream_handle) = spawn_fake_upstream_metadata_server().await;
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
+            upstream_handle.abort();
+            return;
+        }
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let source_name = format!(
+            "upstream-cache-{}",
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let create_source = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "name": source_name,
+                "source_type": "oidc_upstream",
+                "display_name": "Upstream cache test",
+                "config": {
+                    "issuer": issuer,
+                    "client_id": "cache-client-v1",
+                    "client_secret": "cache-secret",
+                    "redirect_uri": "http://127.0.0.1/callback",
+                    "allow_insecure_internal_http": true
+                }
+            }))
+            .await;
+        create_source.assert_status_ok();
+        let source_id = create_source.json::<serde_json::Value>()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        for _ in 0..2 {
+            let discover = server
+                .post(&format!(
+                    "/v1/admin/identity-sources/{source_id}/oidc/discover"
+                ))
+                .add_header("Authorization", format!("Bearer {admin_token}"))
+                .await;
+            discover.assert_status_ok();
+        }
+        assert_eq!(discovery_hits.load(Ordering::Relaxed), 1);
+
+        let update = server
+            .put(&format!("/v1/admin/identity-sources/{source_id}"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "config": {
+                    "issuer": issuer,
+                    "client_id": "cache-client-v2",
+                    "client_secret": "cache-secret-v2",
+                    "redirect_uri": "http://127.0.0.1/callback",
+                    "allow_insecure_internal_http": true
+                }
+            }))
+            .await;
+        update.assert_status_ok();
+
+        let discover_after_update = server
+            .post(&format!(
+                "/v1/admin/identity-sources/{source_id}/oidc/discover"
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        discover_after_update.assert_status_ok();
+        assert_eq!(discovery_hits.load(Ordering::Relaxed), 2);
+        upstream_handle.abort();
     }
 
     #[tokio::test]

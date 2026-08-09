@@ -1,7 +1,8 @@
 use crate::config::Config;
-use crate::models::Keys;
 use crate::models::MigrationBatchJob;
+use crate::models::{Keys, OidcUpstreamDiscovery, OidcUpstreamJwks};
 use bcrypt::verify;
+use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -41,8 +42,21 @@ pub struct AppState {
     /// 异步迁移任务状态
     pub migration_jobs: Arc<RwLock<HashMap<String, MigrationBatchJob>>>,
 
+    /// Validated upstream Discovery/JWKS metadata keyed by source id.
+    pub oidc_upstream_metadata_cache: Arc<RwLock<HashMap<String, OidcUpstreamMetadataCacheEntry>>>,
+
     /// Process-local HTTP metrics exposed through the Prometheus text endpoint.
     pub runtime_metrics: Arc<RuntimeMetrics>,
+}
+
+/// Cache entry is versioned by the source's updated_at value so trust-boundary changes
+/// invalidate metadata without relying on an operator to restart the process.
+#[derive(Clone)]
+pub struct OidcUpstreamMetadataCacheEntry {
+    pub source_updated_at: DateTime<Utc>,
+    pub fetched_at: DateTime<Utc>,
+    pub discovery: OidcUpstreamDiscovery,
+    pub jwks: Option<OidcUpstreamJwks>,
 }
 
 /// Small fixed-cardinality HTTP metrics that remain safe to expose without request identifiers.
@@ -305,6 +319,7 @@ impl AppState {
             auth_rate_limits: Arc::new(RwLock::new(HashMap::new())),
             redis_client,
             migration_jobs: Arc::new(RwLock::new(HashMap::new())),
+            oidc_upstream_metadata_cache: Arc::new(RwLock::new(HashMap::new())),
             runtime_metrics: Arc::new(RuntimeMetrics::new()),
         })
     }

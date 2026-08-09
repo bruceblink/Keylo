@@ -140,7 +140,7 @@ pub struct OidcUpstreamConfig {
 }
 
 /// Minimal OIDC Discovery document required for authorization-code login.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcUpstreamDiscovery {
     pub issuer: String,
     pub authorization_endpoint: String,
@@ -351,12 +351,12 @@ fn oidc_bool_claim(
     Ok(value)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OidcUpstreamJwks {
     pub keys: Vec<OidcUpstreamJwk>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OidcUpstreamJwk {
     pub kid: Option<String>,
     pub kty: String,
