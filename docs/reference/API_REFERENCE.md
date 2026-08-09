@@ -692,8 +692,8 @@ Customer Support 不是组织成员关系，也不使用 `organization_role_bind
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
-| GET | `/v1/admin/customer-support-grants?organization_id=&support_principal_id=&granted_by_principal_id=&include_revoked=&limit=&offset=` | platform admin | 精确筛选临时支持授权 |
-| GET | `/v1/admin/customer-support-audit-logs?organization_id=&actor_principal_id=&grant_id=&operation=&outcome=&limit=&offset=` | platform admin | 精确筛选不可变支持审计轨迹 |
+| GET | `/v1/admin/customer-support-grants?organization_id=&support_principal_id=&granted_by_principal_id=&include_revoked=&limit=&offset=` | platform admin | 精确筛选临时支持授权，返回 `has_more/next_offset` |
+| GET | `/v1/admin/customer-support-audit-logs?organization_id=&actor_principal_id=&grant_id=&operation=&outcome=&limit=&offset=` | platform admin | 精确筛选不可变支持审计轨迹，返回 `has_more/next_offset` |
 | POST | `/v1/admin/customer-support-grants` | internal human platform admin | 创建目标组织、操作与到期时间固定的授权 |
 | DELETE | `/v1/admin/customer-support-grants/{grant_id}` | internal human platform admin | 请求体 `{ "reason": "..." }`；重复撤销幂等 |
 | POST | `/v1/customer-support/context` | 普通、platform-scoped support user access token | 请求体 `{ "grant_id": "..." }`，换取不超过 5 分钟且不超过授权到期时间的 `customer_support_access` token |

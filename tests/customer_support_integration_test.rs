@@ -244,6 +244,19 @@ mod tests {
             json!(["organization.read"])
         );
 
+        let grant_list_response = server
+            .get(&format!(
+                "/v1/admin/customer-support-grants?organization_id={}&limit=1&offset=0",
+                organization_a.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        grant_list_response.assert_status_ok();
+        let grant_list_body = grant_list_response.json::<Value>();
+        assert_eq!(grant_list_body["pagination"]["limit"], 1);
+        assert_eq!(grant_list_body["pagination"]["offset"], 0);
+        assert_eq!(grant_list_body["pagination"]["has_more"], false);
+
         let support_login = server
             .post("/v1/auth/token")
             .json(&json!({
@@ -345,9 +358,13 @@ mod tests {
             .add_header("Authorization", format!("Bearer {admin_token}"))
             .await;
         audit_list_response.assert_status_ok();
-        assert!(audit_list_response.json::<Value>()["data"]
+        let audit_list_body = audit_list_response.json::<Value>();
+        assert!(audit_list_body["data"]
             .as_array()
             .is_some_and(|entries| entries.len() >= 5));
+        assert_eq!(audit_list_body["pagination"]["limit"], 50);
+        assert_eq!(audit_list_body["pagination"]["offset"], 0);
+        assert_eq!(audit_list_body["pagination"]["has_more"], false);
 
         let audit_logs = db::list_customer_support_audit_logs(
             &pool,

@@ -545,6 +545,43 @@ pub async fn list_customer_support_access_grants(
     Ok(rows.iter().map(grant_detail_from_row).collect())
 }
 
+/// Return a bounded grant page and detect a following row without weakening the
+/// exact filters or the public maximum page size.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_customer_support_access_grants_page(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    support_principal_id: Option<&str>,
+    granted_by_principal_id: Option<&str>,
+    include_revoked: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<CustomerSupportAccessGrantDetail>, bool)> {
+    let limit = limit.clamp(1, MAX_LIST_LIMIT);
+    let offset = offset.max(0);
+    let grants = list_customer_support_access_grants(
+        pool,
+        organization_id,
+        support_principal_id,
+        granted_by_principal_id,
+        include_revoked,
+        limit,
+        offset,
+    )
+    .await?;
+    let following = list_customer_support_access_grants(
+        pool,
+        organization_id,
+        support_principal_id,
+        granted_by_principal_id,
+        include_revoked,
+        1,
+        offset.saturating_add(limit),
+    )
+    .await?;
+    Ok((grants, !following.is_empty()))
+}
+
 /// Revoke one grant once and record the revocation in the same transaction.
 ///
 /// A repeat revocation returns the stored grant without replacing its original
@@ -871,6 +908,45 @@ pub async fn list_customer_support_audit_logs(
     .await?;
 
     Ok(logs)
+}
+
+/// Return a bounded support-audit page and whether another filtered row exists.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_customer_support_audit_logs_page(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    actor_principal_id: Option<&str>,
+    grant_id: Option<&str>,
+    operation: Option<&str>,
+    outcome: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<CustomerSupportAuditLog>, bool)> {
+    let limit = limit.clamp(1, MAX_LIST_LIMIT);
+    let offset = offset.max(0);
+    let logs = list_customer_support_audit_logs(
+        pool,
+        organization_id,
+        actor_principal_id,
+        grant_id,
+        operation,
+        outcome,
+        limit,
+        offset,
+    )
+    .await?;
+    let following = list_customer_support_audit_logs(
+        pool,
+        organization_id,
+        actor_principal_id,
+        grant_id,
+        operation,
+        outcome,
+        1,
+        offset.saturating_add(limit),
+    )
+    .await?;
+    Ok((logs, !following.is_empty()))
 }
 
 /// Converts the externally supplied expiry into the database timestamp model when callers use epochs.

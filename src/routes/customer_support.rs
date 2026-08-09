@@ -382,19 +382,30 @@ async fn list_customer_support_grants(
     Query(query): Query<CustomerSupportAccessGrantListQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     let db = support_db(&state)?;
-    let grants = crate::db::list_customer_support_access_grants(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (grants, has_more) = crate::db::list_customer_support_access_grants_page(
         db,
         query.organization_id.as_deref(),
         query.support_principal_id.as_deref(),
         query.granted_by_principal_id.as_deref(),
         query.include_revoked.unwrap_or(false),
-        query.limit.unwrap_or(50),
-        query.offset.unwrap_or(0),
+        limit,
+        offset,
     )
     .await
     .map_err(support_db_error)?;
 
-    Ok(Json(json!({ "success": true, "data": grants })))
+    Ok(Json(json!({
+        "success": true,
+        "data": grants,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 /// Lets platform operators inspect the immutable support trail with exact filters.
@@ -406,20 +417,31 @@ async fn list_customer_support_audit_logs(
     Query(query): Query<CustomerSupportAuditLogListQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     let db = support_db(&state)?;
-    let logs = crate::db::list_customer_support_audit_logs(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (logs, has_more) = crate::db::list_customer_support_audit_logs_page(
         db,
         query.organization_id.as_deref(),
         query.actor_principal_id.as_deref(),
         query.grant_id.as_deref(),
         query.operation.as_deref(),
         query.outcome.as_deref(),
-        query.limit.unwrap_or(50),
-        query.offset.unwrap_or(0),
+        limit,
+        offset,
     )
     .await
     .map_err(support_db_error)?;
 
-    Ok(Json(json!({ "success": true, "data": logs })))
+    Ok(Json(json!({
+        "success": true,
+        "data": logs,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn create_customer_support_grant(
