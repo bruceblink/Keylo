@@ -303,7 +303,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/admin/users?limit=&offset=` | 用户分页列表 |
+| GET | `/v1/admin/users?limit=&offset=` | 用户分页列表；响应包含 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | POST | `/v1/admin/users` | 创建用户 |
 | POST | `/v1/admin/users/provision` | 原子创建用户并绑定角色模板 |
 | GET | `/v1/admin/users/{user_id}` | 获取用户详情 |

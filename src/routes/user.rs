@@ -119,10 +119,16 @@ async fn list_users_handler(
         .unwrap_or(0)
         .max(0);
 
-    match list_users(db, limit, offset).await {
-        Ok(users) => Ok(Json(json!({
+    match list_users_page(db, limit, offset).await {
+        Ok((users, has_more)) => Ok(Json(json!({
             "success": true,
             "data": users,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "has_more": has_more,
+                "next_offset": has_more.then_some(offset + limit),
+            },
         }))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,

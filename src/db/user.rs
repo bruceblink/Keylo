@@ -73,17 +73,28 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User
     Ok(user)
 }
 
-/// 列出用户，支持分页
-pub async fn list_users(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<User>> {
-    let users = sqlx::query_as::<_, User>(
+/// List one user page and report whether another page exists.
+///
+/// Fetching one extra row avoids claiming `has_more` when the result ends
+/// exactly on the requested page boundary.
+pub async fn list_users_page(pool: &PgPool, limit: i64, offset: i64) -> Result<(Vec<User>, bool)> {
+    let limit = limit.max(0);
+    let mut users = sqlx::query_as::<_, User>(
         "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
     )
-    .bind(limit)
+    .bind(limit + 1)
     .bind(offset)
     .fetch_all(pool)
     .await?;
 
-    Ok(users)
+    let has_more = users.len() > limit as usize;
+    users.truncate(limit as usize);
+    Ok((users, has_more))
+}
+
+/// Compatibility wrapper for callers that only need the current page rows.
+pub async fn list_users(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<User>> {
+    Ok(list_users_page(pool, limit, offset).await?.0)
 }
 
 /// 创建用户，并将本地邮箱默认为未验证。

@@ -156,6 +156,7 @@
 
 ### 2.1-P1-B 管理 API 可用性
 
+- [x] 用户管理列表提供真实 `has_more`、稳定 `next_offset` 和显式 `limit/offset` 元数据；后续列表切片沿用同一契约。
 - 统一 list/filter/pagination、幂等更新、稳定错误码和变更原因字段。
 - 明确 admin client、user principal、service principal 和 future delegated admin 的权限边界；危险操作继续要求近期 MFA。
 - 优先改进客户端、服务、用户、身份源、Principal、RBAC、资源和审计接口的排障反馈，不先开发完整管理后台。
