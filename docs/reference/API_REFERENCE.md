@@ -135,7 +135,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 {
   "client_id": "alice",
   "client_secret": "Alice#12345",
-  "force": false
+  "force": false,
+  "organization_id": "org-acme"
 }
 ```
 
@@ -150,13 +151,13 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 }
 ```
 
-`force` 可选，默认 `false`。仅当 `SESSION_POLICY=single_user_session` 或 `SESSION_POLICY=single_principal_session` 且认证成功后，`force=true` 才会撤销同一 Principal 的旧 refresh session 并接管登录。
+`force` 可选，默认 `false`。仅当 `SESSION_POLICY=single_user_session` 或 `SESSION_POLICY=single_principal_session` 且认证成功后，`force=true` 才会撤销同一 Principal 的旧 refresh session 并接管登录。`organization_id` 同样可选；提供时只允许人类密码登录，服务端会实时确认该 Principal 在目标组织有 active membership，随后将相同 scope 写入 access token、refresh token 与 refresh session。省略或传 `null` 保持 platform session；空、未知、已停用或非 active membership 的组织范围均不会签发 Token。
 
 ### 3.2 获取管理 Token
 
 - **POST** `/v1/admin/token`
 - 鉴权：否（仅受信任管理客户端凭证可通过）
-- 请求体同 `/v1/auth/token`
+- 请求体使用 `client_id`、`client_secret` 和可选 `force`；不接受 `organization_id`
 - 响应体包含 `access_token` 与 `refresh_token`
 
 ### 3.3 刷新 Token
@@ -177,6 +178,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 - 刷新时旧 `refresh_token` 会被 refresh session 原子消费并固定轮换。
 - 并发或重复使用同一个 refresh token 只允许一个请求成功。
 - 旧 refresh token 重放会撤销所属 refresh session，并写入审计日志。
+- organization-scoped refresh token 只会在 session scope、签名 `organization_id`、active organization 与 active membership 全部一致时轮换；成员变为 pending/suspended/removed 或组织变为 disabled/archived 后，该 scope 的旧 session 会被撤销，重新 active 不会恢复旧 token。
 
 ### 3.4 当前用户信息
 
@@ -511,7 +513,7 @@ access token 带有 `organization_id` 时，这两个端点会实时确认该 Pr
 | GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false` | Principal refresh session 列表 |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions` | 撤销该 Principal 的所有 refresh session |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions/{session_id}` | 撤销单个 refresh session |
-| GET | `/v1/admin/refresh-sessions?include_revoked=false&principal_id=&client_id=&login_ip=&limit=&offset=` | 全局 refresh session 列表 |
+| GET | `/v1/admin/refresh-sessions?include_revoked=false&organization_id=&principal_id=&client_id=&login_ip=&limit=&offset=` | 全局 refresh session 列表；organization_id 为精确组织过滤 |
 | DELETE | `/v1/admin/refresh-sessions/{session_id}` | 按 session ID 强制撤销 refresh session |
 
 绑定角色请求体：
@@ -601,9 +603,9 @@ access token 带有 `organization_id` 时，这两个端点会实时确认该 Pr
 }
 ```
 
-`kind` 只能是 `customer` 或 `internal`，`slug` 全局唯一，且不是认证凭据。组织不会被物理删除。状态写入请求为 `{ "status": "active|disabled|archived" }`，只允许 `active -> disabled/archived`、`disabled -> active/archived`、`archived -> active` 或同状态重试；不允许的转换返回 `400 invalid_request`。
+`kind` 只能是 `customer` 或 `internal`，`slug` 全局唯一，且不是认证凭据。组织不会被物理删除。状态写入请求为 `{ "status": "active|disabled|archived" }`，只允许 `active -> disabled/archived`、`disabled -> active/archived`、`archived -> active` 或同状态重试；不允许的转换返回 `400 invalid_request`。从 active 进入 disabled 或 archived 时，系统会在同一事务中撤销该组织的未过期 refresh session。
 
-成员状态写入请求为 `{ "status": "pending|active|suspended|removed", "management_role": "member|admin|owner" }`；`management_role` 可由平台管理员用于显式设置组织初始 owner/admin，省略时保持已有管理角色或默认为 `member`。对同一 `(organization_id, principal_id)` 的重复请求不会创建重复关系。external_customer 不能加入 internal 组织；disabled 或 archived 组织不能创建 pending/active 成员关系。成功写入正常会产生 `organization.created`、`organization.status_changed` 或 `organization.membership_changed` 审计事件。
+成员状态写入请求为 `{ "status": "pending|active|suspended|removed", "management_role": "member|admin|owner" }`；`management_role` 可由平台管理员用于显式设置组织初始 owner/admin，省略时保持已有管理角色或默认为 `member`。对同一 `(organization_id, principal_id)` 的重复请求不会创建重复关系。external_customer 不能加入 internal 组织；disabled 或 archived 组织不能创建 pending/active 成员关系。成员变为 pending、suspended 或 removed 时，会原子撤销该成员在本组织的 refresh session，不影响其 platform 或其他组织 session。成功写入正常会产生 `organization.created`、`organization.status_changed` 或 `organization.membership_changed` 审计事件。
 
 ### 7.6 组织 owner/admin 自服务成员 API
 
@@ -611,7 +613,7 @@ access token 带有 `organization_id` 时，这两个端点会实时确认该 Pr
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
-| POST | `/v1/auth/organization-context` | user access token | 校验 active membership 后重新签发带 `organization_id` 的短期 access token |
+| POST | `/v1/auth/organization-context` | user access token | 校验 active membership 后重新签发带 `organization_id` 的短期 access token；不创建 refresh session |
 
 除首次接受邀请的 join 请求外，以下接口都要求 token 中的 `organization_id` 与路径一致，并实时确认调用者是该组织 active membership 的 `admin` 或 `owner`。人类写操作沿用近期 MFA 规则；机器 client、普通 member、pending/suspended/removed 成员和跨组织路径统一拒绝。
 
@@ -635,7 +637,8 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 - 每次刷新固定轮换 refresh token。
 - 旧 refresh token 重放会撤销所属 session。
 - 管理员可以按 Principal 或单个 session 撤销 refresh session。
-- 管理员可以通过全局 refresh session 列表替代 Keystone 在线用户列表和强制退出功能。列表项包含 `id`、`principal_id`、`client_id`、`login_ip`、`user_agent`、`issued_at`、`rotated_at`、`expires_at`、`revoked_at`、`revoke_reason`。
+- 管理员可以通过全局 refresh session 列表替代 Keystone 在线用户列表和强制退出功能。列表项包含 `id`、`principal_id`、`client_id`、可选 `organization_id`、`login_ip`、`user_agent`、`issued_at`、`rotated_at`、`expires_at`、`revoked_at`、`revoke_reason`。
+- 人类密码登录提供 `organization_id` 时，refresh session 固定属于该组织；只有 session 记录、refresh JWT 与实时 active membership 均保持同一 scope 才能刷新。组织停用/归档或成员变为 pending/suspended/removed 会撤销对应 scoped session，不会撤销 platform 或其他组织 session。
 
 会话策略通过 `SESSION_POLICY` 配置：
 

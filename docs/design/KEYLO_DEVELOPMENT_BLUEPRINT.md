@@ -28,7 +28,7 @@ Keylo 采用“先通用 IAM 和可用性，再以 SaaS 组织隔离为下一条
 | --- | --- | --- |
 | 标准 OIDC/OAuth 和浏览器 SSO | Discovery、Authorization Code + PKCE、UserInfo、consent、浏览器会话、退出和标准错误 | 已实现并有真实 HTTP 测试 |
 | 身份代理和首次登录关联 | OIDC upstream、JIT、稳定 external subject、账号关联/解除关联和上游会话撤销 | OIDC upstream 已实现 |
-| Token、密钥和会话生命周期 | RS256/JWKS、audience 约束、refresh session 原子轮换、重放撤销、按主体撤销和审计 | 已实现；当前是单活动密钥 |
+| Token、密钥和会话生命周期 | RS256/JWKS、audience 约束、refresh session 原子轮换、重放撤销、按主体撤销、组织作用域撤销和审计 | 已实现；当前是单活动密钥 |
 | 服务账号与 client credentials | 将非人类调用映射到稳定 service Principal、scope/audience 和可撤销凭证；API key 只作为受限的直连便利，不替代 OIDC | 已实现 `service_id + service_secret -> service_access`；直接 API key 仍属于下一条主线 |
 | 最小权限管理 | Principal、角色、权限、资源树、单点/批量授权检查、变更历史和拒绝原因为审计 | 已实现；暂不做任意策略引擎 |
 | 安全默认值 | 精确 redirect URI、PKCE、HTTPS 默认、限流、登录锁定、MFA、密文配置、失败关闭 | 已实现并持续加固 |
@@ -80,9 +80,9 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 | MFA | TOTP enrollment、近期验证、恢复码、敏感管理操作的 step-up 和审计 | 没有 WebAuthn/Passkey；不把 TOTP 自动扩展成任意认证流编排 |
 | 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、邮箱变化记录、启停和会话撤销 | identity source 的 ldap 类型目前只是注册元数据，不包含 LDAP bind、同步、组映射或故障切换 |
 | 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`，服务 Principal 可参与 RBAC | 当前没有直接 `X-API-Key` 鉴权、独立 device Principal、多 key 生命周期或机器凭证的组织归属 |
-| 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | 组织领域数据已落库，但当前授权仍只读取 platform 角色；尚未有组织上下文、组织角色决策、资源组织过滤、组、composite role 或细粒度 delegated admin |
-| SaaS 组织基础 | `organizations`、`user_class`、成员关系和组织角色绑定已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织；平台组织与成员状态管理 API 已可用 | 组织 role binding 尚未参与授权，Token 也没有 active organization context；客户数据表仍是 platform-scoped，因此不能把该基础层视为已完成的租户隔离 |
-| Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | JWKS 当前只包含一把活动公钥；没有新旧 key 并行的无感轮换 |
+| 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | platform 与 organization 角色按 signed active context 分开决策，资源按 organization_id 过滤；组、composite role 和细粒度 delegated admin 仍未实现 |
+| SaaS 组织基础 | `organizations`、`user_class`、成员关系、组织角色绑定与资源 organization_id 已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织；平台与组织成员管理 API 已可用 | organization role binding 只在同一 signed active context 中参与授权；client、identity source 与机器身份仍是 platform-scoped，不能把它们当作已隔离客户对象 |
+| Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | 人类密码登录可显式建立 organization-scoped refresh session，生命周期会撤销该 scope；JWKS 当前只包含一把活动公钥，没有新旧 key 并行的无感轮换 |
 | 运行和首启 | PostgreSQL SQLx migrations、Redis 生产就绪校验、healthz/readyz、固定基数 metrics、审计清理、密文配置、setup wizard | 尚未承诺多实例一致性、outbox/webhook、OpenTelemetry 或跨区域恢复 |
 | 管理体验 | API-first 的用户、客户端、服务、身份源、Principal、RBAC、资源和审计接口；setup wizard 只做首启诊断 | 没有 Admin Console、Account Console、主题系统或管理 CLI |
 
@@ -114,11 +114,11 @@ allowed_scopes 和 allowed_audiences 继续约束服务 Token 的签发边界；
 | 凭证或 Token | 用途 | 规则 |
 | --- | --- | --- |
 | access | 用户、管理客户端或资源服务访问 API | 校验签名、issuer、audience、时效和 token_type |
-| refresh | 换取新 access token | 仅安全保存；每次使用原子轮换，重放撤销所属会话 |
+| refresh | 换取新 access token | 仅安全保存；每次使用原子轮换，重放撤销所属会话；organization-scoped token 还必须匹配 session 记录和实时 active membership |
 | service_access | 服务间访问 | 先满足 scope/audience 白名单，再由服务 Principal 的 RBAC 判定能力 |
 | api_key | 机器/设备直接调用显式支持的 API | 使用 `X-API-Key` 传递；服务端只保存 hash 和可查找的 key id/prefix，检查 active、过期、组织、scope/audience、RBAC 和限流；不创建 refresh session |
 
-Refresh Session 是稳定会话索引，支持按 Principal、客户端或单个会话撤销。会话策略可以是 multi_session、single_user_session 或 single_principal_session；显式接管必须先完成认证。
+Refresh Session 是稳定会话索引，支持按 Principal、客户端、组织或单个会话撤销。人类密码登录可显式提供 `organization_id`，服务端仅在 live membership 为 active 时同时把该 scope 写入 access token、refresh token 和 session 记录；组织停用/归档或成员变为 pending、suspended、removed 时，只撤销对应组织 session，平台与其他组织 session 不受影响。会话策略可以是 multi_session、single_user_session 或 single_principal_session；显式接管必须先完成认证。
 
 密钥演进必须保持 issuer 和 kid 契约：当前版本接受一把活动 RSA key，后续 P0 安全工作将引入活动 key 与被动验证 key 的重叠窗口、旧 key 下线和回滚记录；在此之前不把维护窗口式切换描述成无感轮换。
 
@@ -137,7 +137,7 @@ Spring、Node、Go、Rust 样例与授权决策契约见 [第三方系统与服�
 
 Organization 是 SaaS 租户边界，但不是新的认证协议或 Realm 层级。Keylo 先采用单部署、多组织、共享运行时的模型；所有组织拥有的数据和关系必须显式带 organization_id，平台级对象才允许为空。
 
-当前实现状态（2026-08-09）：组织、用户类别、成员关系、组织角色绑定和资源 organization_id 已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台角色写入统一校验 `user_class` 与 role scope：external_customer 不能通过 user、Principal、provision 或批量接口获得 platform/global role，organization role 只能进入同组织的 organization_role_bindings；对 user Principal 的授予和撤销同步维护两张角色关系表。历史脏绑定在同步、权限、资源树、管理 Token 和 introspection 读取侧默认失败关闭，并会阻止将该账户提升为 internal_employee，直到管理员显式清理绑定。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。授权 check、batch-check、effective-permissions 与 resource-tree 每次都重验 signed active organization context、组织状态和 membership，并分别解释 platform role 或同组织 role binding；相同资源坐标可以由多个组织复用，跨组织资源保持普通 deny/forbidden 边界。组织 service/client、identity source、refresh 与 API key 的 tenant 归属仍未实现，不能把它们当作已隔离的客户对象。
+当前实现状态（2026-08-09）：组织、用户类别、成员关系、组织角色绑定、资源和 refresh session organization_id 已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台角色写入统一校验 `user_class` 与 role scope：external_customer 不能通过 user、Principal、provision 或批量接口获得 platform/global role，organization role 只能进入同组织的 organization_role_bindings；对 user Principal 的授予和撤销同步维护两张角色关系表。历史脏绑定在同步、权限、资源树、管理 Token 和 introspection 读取侧默认失败关闭，并会阻止将该账户提升为 internal_employee，直到管理员显式清理绑定。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。授权 check、batch-check、effective-permissions 与 resource-tree 每次都重验 signed active organization context、组织状态和 membership，并分别解释 platform role 或同组织 role binding；相同资源坐标可以由多个组织复用，跨组织资源保持普通 deny/forbidden 边界。人类密码登录提供 organization_id 时会创建相同 scope 的 refresh session，刷新时再次校验 scope 和 live membership，组织停用/归档或成员失效会原子撤销该 scope。组织 service/client、identity source 与 API key 的 tenant 归属仍未实现，不能把它们当作已隔离的客户对象。
 
 用户至少分为两类：
 
@@ -161,8 +161,8 @@ User class 不是 RBAC 权限。它只参与注册、身份源映射、组织成
 
 | 对象 | 最小字段/关系 | 规则 |
 | --- | --- | --- |
-| Organization | id、slug、name、kind（customer/internal）、status、created_at | id 稳定；disabled/archived 组织默认不能新建会话；slug 只用于展示和路由，不作为授权凭据 |
-| OrganizationMembership | organization_id、principal_id、status、joined_at | 一个 Principal 可以加入多个组织；pending、active、suspended、removed 状态必须可审计 |
+| Organization | id、slug、name、kind（customer/internal）、status、created_at | id 稳定；disabled/archived 组织默认不能新建会话，并原子撤销本组织 scoped refresh session；slug 只用于展示和路由，不作为授权凭据 |
+| OrganizationMembership | organization_id、principal_id、status、joined_at | 一个 Principal 可以加入多个组织；pending、active、suspended、removed 状态必须可审计，非 active 状态撤销该成员的本组织 scoped refresh session |
 | OrganizationRoleBinding | organization_id、principal_id、role_id、scope | 组织角色只能作用于同一 organization_id；组织成员不能通过角色绑定获得平台级权限 |
 | MachineCredential | principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by | 原始 API key 只在创建/轮换响应中显示一次；撤销、过期、主体或组织停用必须立即拒绝；审计只记录 key id/prefix，不记录原值 |
 | Tenant-owned object | organization_id + 领域字段 | 查询、创建、更新、删除都必须带组织过滤；跨组织 ID、slug 或资源引用默认返回 not found/forbidden，不泄露存在性 |
@@ -175,7 +175,7 @@ request -> authenticated principal -> active organization context
         -> permission/resource decision
 ~~~
 
-认证 Token 只携带当前 active organization context（例如 organization_id）和稳定主体信息，不把所有组织的完整权限塞进 JWT。一个用户切换组织时必须重新确认 membership 并签发新的上下文；资源服务必须校验 Token 中的 organization_id 与请求资源所属组织一致，不能把任意 X-Organization-Id 请求头当成授权依据。
+认证 Token 只携带当前 active organization context（例如 organization_id）和稳定主体信息，不把所有组织的完整权限塞进 JWT。一个用户切换组织时必须重新确认 membership 并签发新的上下文；密码登录可选择创建同 scope 的 refresh session，`/v1/auth/organization-context` 只重新签发短期 access token。资源服务必须校验 Token 中的 organization_id 与请求资源所属组织一致，不能把任意 X-Organization-Id 请求头当成授权依据。
 
 机器 API key 不支持“切换组织”；其 MachineCredential 绑定的 organization_id 就是本次调用的唯一组织上下文。请求中的组织标识只能用于资源匹配，不能覆盖凭证绑定的组织。
 

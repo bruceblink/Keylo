@@ -75,6 +75,7 @@ pub fn principal_admin_routes() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 struct RefreshSessionListQuery {
     include_revoked: Option<bool>,
+    organization_id: Option<String>,
     principal_id: Option<String>,
     client_id: Option<String>,
     login_ip: Option<String>,
@@ -164,8 +165,9 @@ async fn list_refresh_sessions_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let sessions = crate::db::list_refresh_sessions(
+    let sessions = crate::db::list_refresh_sessions_in_organization(
         db,
+        query.organization_id.as_deref(),
         query.include_revoked.unwrap_or(false),
         query.principal_id.as_deref(),
         query.client_id.as_deref(),

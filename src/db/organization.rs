@@ -366,6 +366,26 @@ pub async fn set_organization_status(
     .bind(Local::now().naive_utc())
     .fetch_one(&mut *transaction)
     .await?;
+
+    if previous_status == ORGANIZATION_STATUS_ACTIVE && status != ORGANIZATION_STATUS_ACTIVE {
+        // Commit lifecycle state and session revocation together so a disabled
+        // or archived organization never leaves a usable scoped session behind.
+        let revoke_reason = format!("organization_{status}");
+        sqlx::query(
+            r#"
+            UPDATE refresh_sessions
+            SET revoked_at = NOW(),
+                revoke_reason = COALESCE(revoke_reason, $2)
+            WHERE organization_id = $1
+              AND revoked_at IS NULL
+              AND expires_at > NOW()
+            "#,
+        )
+        .bind(organization_id)
+        .bind(revoke_reason)
+        .execute(&mut *transaction)
+        .await?;
+    }
     transaction.commit().await?;
 
     Ok(Some(OrganizationStatusChange {
@@ -471,6 +491,27 @@ pub async fn upsert_organization_membership(
     .bind(management_role)
     .fetch_one(&mut *transaction)
     .await?;
+    if status != MEMBERSHIP_STATUS_ACTIVE {
+        // An inactive membership must invalidate only that person's scoped
+        // tenant sessions; their platform and other-organization sessions stay intact.
+        let revoke_reason = format!("organization_membership_{status}");
+        sqlx::query(
+            r#"
+            UPDATE refresh_sessions
+            SET revoked_at = NOW(),
+                revoke_reason = COALESCE(revoke_reason, $3)
+            WHERE organization_id = $1
+              AND principal_id = $2
+              AND revoked_at IS NULL
+              AND expires_at > NOW()
+            "#,
+        )
+        .bind(organization_id)
+        .bind(principal_id)
+        .bind(revoke_reason)
+        .execute(&mut *transaction)
+        .await?;
+    }
     transaction.commit().await?;
     Ok(membership)
 }
@@ -616,6 +657,27 @@ pub async fn upsert_organization_membership_as_manager(
     .bind(management_role)
     .fetch_one(&mut *transaction)
     .await?;
+    if status != MEMBERSHIP_STATUS_ACTIVE {
+        // Delegated member updates share the same revocation rule as platform
+        // updates, while retaining the manager authorization transaction above.
+        let revoke_reason = format!("organization_membership_{status}");
+        sqlx::query(
+            r#"
+            UPDATE refresh_sessions
+            SET revoked_at = NOW(),
+                revoke_reason = COALESCE(revoke_reason, $3)
+            WHERE organization_id = $1
+              AND principal_id = $2
+              AND revoked_at IS NULL
+              AND expires_at > NOW()
+            "#,
+        )
+        .bind(organization_id)
+        .bind(target_principal_id)
+        .bind(revoke_reason)
+        .execute(&mut *transaction)
+        .await?;
+    }
     transaction.commit().await?;
     Ok(membership)
 }

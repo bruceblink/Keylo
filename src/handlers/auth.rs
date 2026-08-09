@@ -64,6 +64,48 @@ async fn is_user_admin(db: &sqlx::PgPool, user_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Resolves an optional organization requested at password login into a live
+/// membership-backed session scope. A caller-supplied identifier is never used
+/// until this check confirms that the human Principal can currently enter it.
+async fn resolve_requested_organization_session_scope(
+    db: &sqlx::PgPool,
+    requested_organization_id: Option<&str>,
+    principal: &Principal,
+) -> Result<Option<String>, AuthError> {
+    let Some(organization_id) = requested_organization_id else {
+        return Ok(None);
+    };
+    let organization_id = organization_id.trim();
+    if organization_id.is_empty() {
+        return Err(AuthError::InvalidRequest(
+            "organization_id must not be empty".to_string(),
+        ));
+    }
+
+    let membership =
+        crate::db::get_active_organization_membership(db, organization_id, &principal.id)
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to resolve organization membership".to_string())
+            })?;
+
+    membership
+        .map(|membership| Some(membership.organization_id))
+        .ok_or(AuthError::Forbidden)
+}
+
+/// Preserves a generic authorization failure when a lifecycle change wins the
+/// race against scoped-session creation, while retaining database diagnostics
+/// for every other persistence failure.
+fn map_refresh_session_creation_error(error: anyhow::Error) -> AuthError {
+    let message = error.to_string();
+    if message == "organization_session_context_inactive" {
+        AuthError::Forbidden
+    } else {
+        AuthError::DatabaseError("Failed to create refresh session".to_string())
+    }
+}
+
 fn require_admin_scope(claims: &Claims) -> Result<(), AuthError> {
     if claims.has_scope("admin") {
         Ok(())
@@ -257,6 +299,7 @@ pub async fn issue_external_user_session(
             session_id: &session_id,
             principal_id: &principal.id,
             client_id: session_client_id,
+            organization_id: None,
             refresh_token_id: &refresh_claims.jti,
             refresh_token: &refresh_token,
             access_jti: &access_claims.jti,
@@ -465,15 +508,6 @@ pub async fn auth_token(
         return Err(AuthError::WrongCredentials);
     }
 
-    state.clear_login_failures(&payload.client_id).await;
-    audit_event(
-        &state,
-        "auth.token.success",
-        Some(&payload.client_id),
-        Some("Access token issued"),
-    )
-    .await;
-
     let now = Utc::now().timestamp();
     let subject_prefix = "user";
     let is_admin_user = if let Some(user_id) = user_id.as_deref() {
@@ -488,10 +522,35 @@ pub async fn auth_token(
             .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?,
         None => None,
     };
+    let organization_id = match principal.as_ref() {
+        Some(principal) => {
+            resolve_requested_organization_session_scope(
+                db,
+                payload.organization_id.as_deref(),
+                principal,
+            )
+            .await?
+        }
+        None if payload.organization_id.is_some() => return Err(AuthError::InvalidToken),
+        None => None,
+    };
     if let Some(principal) = principal.as_ref() {
         enforce_refresh_session_policy(&state, db, principal, payload.force.unwrap_or(false))
             .await?;
     }
+
+    state.clear_login_failures(&payload.client_id).await;
+    let audit_detail = organization_id.as_deref().map_or_else(
+        || "Access token issued".to_string(),
+        |organization_id| format!("Access token issued; organization_id={organization_id}"),
+    );
+    audit_event(
+        &state,
+        "auth.token.success",
+        Some(&payload.client_id),
+        Some(&audit_detail),
+    )
+    .await;
 
     // Create access token claims
     let access_claims = Claims {
@@ -499,7 +558,7 @@ pub async fn auth_token(
         uid: user_id.clone(),
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("user".to_string()),
-        organization_id: None,
+        organization_id: organization_id.clone(),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, is_admin_user),
@@ -517,7 +576,7 @@ pub async fn auth_token(
         uid: user_id.clone(),
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("user".to_string()),
-        organization_id: None,
+        organization_id: organization_id.clone(),
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -538,6 +597,7 @@ pub async fn auth_token(
                 session_id: &session_id,
                 principal_id: &principal.id,
                 client_id: &refresh_client_id,
+                organization_id: organization_id.as_deref(),
                 refresh_token_id: &refresh_claims.jti,
                 refresh_token: &refresh_token,
                 access_jti: &access_claims.jti,
@@ -547,7 +607,7 @@ pub async fn auth_token(
             },
         )
         .await
-        .map_err(|_| AuthError::DatabaseError("Failed to create refresh session".to_string()))?;
+        .map_err(map_refresh_session_creation_error)?;
     }
 
     // Send the authorized tokens
@@ -566,6 +626,11 @@ pub async fn admin_token(
 ) -> Result<Json<AuthBody>, AuthError> {
     if payload.client_id.is_empty() || payload.client_secret.is_empty() {
         return Err(AuthError::MissingCredentials);
+    }
+    if payload.organization_id.is_some() {
+        return Err(AuthError::InvalidRequest(
+            "organization_id is only supported by /v1/auth/token".to_string(),
+        ));
     }
 
     let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
@@ -694,6 +759,7 @@ pub async fn admin_token(
                 session_id: &session_id,
                 principal_id: &principal.id,
                 client_id: &payload.client_id,
+                organization_id: None,
                 refresh_token_id: &refresh_claims.jti,
                 refresh_token: &refresh_token,
                 access_jti: &access_claims.jti,
@@ -1310,6 +1376,12 @@ pub async fn auth_refresh(
                     )
                 })?;
         if active_membership.is_none() {
+            let _ = crate::db::revoke_refresh_session_by_token(
+                db,
+                &payload.refresh_token,
+                Some("organization_membership_inactive"),
+            )
+            .await;
             return Err(AuthError::InvalidToken);
         }
     }
@@ -1337,6 +1409,7 @@ pub async fn auth_refresh(
     match crate::db::consume_and_rotate_refresh_session(
         db,
         &payload.refresh_token,
+        refresh_claims.organization_id.as_deref(),
         &refresh_jti,
         &new_refresh_token,
         &access_jti,
@@ -1380,6 +1453,19 @@ pub async fn auth_refresh(
             .await;
             return Err(AuthError::InvalidToken);
         }
+        ConsumeRefreshSessionResult::OrganizationScopeMismatch => {
+            audit_event(
+                &state,
+                "auth.refresh.organization_scope_mismatch",
+                Some(refresh_claims.sub.as_str()),
+                Some("Refresh session organization scope does not match token"),
+            )
+            .await;
+            return Err(AuthError::InvalidToken);
+        }
+        ConsumeRefreshSessionResult::NotFound if refresh_claims.organization_id.is_some() => {
+            return Err(AuthError::InvalidToken);
+        }
         ConsumeRefreshSessionResult::NotFound => {}
     }
 
@@ -1421,6 +1507,7 @@ pub async fn auth_refresh(
             session_id: &session_id,
             principal_id: &principal.id,
             client_id: &client_id,
+            organization_id: None,
             refresh_token_id: &migrated_refresh_claims.jti,
             refresh_token: &migrated_refresh_token,
             access_jti: &access_claims.jti,

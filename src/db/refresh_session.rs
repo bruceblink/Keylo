@@ -8,6 +8,7 @@ pub struct RefreshSessionInfo {
     pub id: String,
     pub principal_id: String,
     pub client_id: String,
+    pub organization_id: Option<String>,
     pub login_ip: Option<String>,
     pub user_agent: Option<String>,
     pub current_access_jti: String,
@@ -23,6 +24,7 @@ pub struct ConsumedRefreshSession {
     pub session_id: String,
     pub principal_id: String,
     pub client_id: String,
+    pub organization_id: Option<String>,
     pub expires_at: i64,
 }
 
@@ -31,12 +33,14 @@ pub enum ConsumeRefreshSessionResult {
     Consumed(ConsumedRefreshSession),
     NotFound,
     Replayed { session_id: String },
+    OrganizationScopeMismatch,
 }
 
 pub struct CreateRefreshSessionParams<'a> {
     pub session_id: &'a str,
     pub principal_id: &'a str,
     pub client_id: &'a str,
+    pub organization_id: Option<&'a str>,
     pub refresh_token_id: &'a str,
     pub refresh_token: &'a str,
     pub access_jti: &'a str,
@@ -45,19 +49,129 @@ pub struct CreateRefreshSessionParams<'a> {
     pub expires_at: i64,
 }
 
+/// Lock the facts that make an organization-scoped session valid before it is
+/// inserted. Lifecycle writers must wait on these rows, or this check observes
+/// their committed state before the session can be written.
+async fn lock_active_organization_session_context(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: &str,
+    principal_id: &str,
+) -> Result<()> {
+    let organization = sqlx::query(
+        r#"
+        SELECT status, kind
+        FROM organizations
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(organization_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(organization) = organization else {
+        anyhow::bail!("organization_session_context_inactive");
+    };
+    let organization_status: String = organization.get("status");
+    let organization_kind: String = organization.get("kind");
+    if organization_status != "active" {
+        anyhow::bail!("organization_session_context_inactive");
+    }
+
+    let principal = sqlx::query(
+        r#"
+        SELECT principal_type, ref_id, active
+        FROM principals
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(principal_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(principal) = principal else {
+        anyhow::bail!("organization_session_context_inactive");
+    };
+    let principal_type: String = principal.get("principal_type");
+    let principal_ref_id: String = principal.get("ref_id");
+    let principal_active: bool = principal.get("active");
+    if !principal_active || principal_type != "user" {
+        anyhow::bail!("organization_session_context_inactive");
+    }
+
+    let user = sqlx::query(
+        r#"
+        SELECT active, user_class
+        FROM users
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(principal_ref_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(user) = user else {
+        anyhow::bail!("organization_session_context_inactive");
+    };
+    let user_active: bool = user.get("active");
+    let user_class: Option<String> = user.get("user_class");
+    let user_class_valid = matches!(
+        user_class.as_deref(),
+        Some("internal_employee" | "external_customer")
+    );
+    if !user_active
+        || !user_class_valid
+        || (user_class.as_deref() == Some("external_customer") && organization_kind != "customer")
+    {
+        anyhow::bail!("organization_session_context_inactive");
+    }
+
+    let membership = sqlx::query(
+        r#"
+        SELECT status
+        FROM organization_memberships
+        WHERE organization_id = $1 AND principal_id = $2
+        FOR UPDATE
+        "#,
+    )
+    .bind(organization_id)
+    .bind(principal_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(membership) = membership else {
+        anyhow::bail!("organization_session_context_inactive");
+    };
+    let membership_status: String = membership.get("status");
+    if membership_status != "active" {
+        anyhow::bail!("organization_session_context_inactive");
+    }
+
+    Ok(())
+}
+
+/// Creates a refresh session plus its first hashed token record.
+///
+/// When `organization_id` is set, the transaction rejects inactive organization
+/// context with `organization_session_context_inactive` before writing either row.
 pub async fn create_refresh_session(
     pool: &PgPool,
     params: CreateRefreshSessionParams<'_>,
 ) -> Result<()> {
+    // Store the immutable session scope alongside the token hash so later
+    // refreshes can prove that a signed organization context still matches it.
     let mut tx = pool.begin().await?;
     let refresh_token_hash = token_hash(params.refresh_token);
+
+    if let Some(organization_id) = params.organization_id {
+        lock_active_organization_session_context(&mut tx, organization_id, params.principal_id)
+            .await?;
+    }
 
     sqlx::query(
         r#"
         INSERT INTO refresh_sessions
             (id, principal_id, client_id, current_refresh_token_id, current_access_jti,
-             login_ip, user_agent, expires_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8))
+             organization_id, login_ip, user_agent, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9))
         "#,
     )
     .bind(params.session_id)
@@ -65,6 +179,7 @@ pub async fn create_refresh_session(
     .bind(params.client_id)
     .bind(params.refresh_token_id)
     .bind(params.access_jti)
+    .bind(params.organization_id)
     .bind(params.login_ip)
     .bind(params.user_agent)
     .bind(params.expires_at)
@@ -88,13 +203,20 @@ pub async fn create_refresh_session(
     Ok(())
 }
 
+/// Atomically consumes one refresh token and stores its replacement.
+///
+/// The signed `expected_organization_id` must match the persisted session scope;
+/// a mismatch returns `OrganizationScopeMismatch` and leaves both token rows unchanged.
 pub async fn consume_and_rotate_refresh_session(
     pool: &PgPool,
     refresh_token: &str,
+    expected_organization_id: Option<&str>,
     new_refresh_token_id: &str,
     new_refresh_token: &str,
     new_access_jti: &str,
 ) -> Result<ConsumeRefreshSessionResult> {
+    // Lock both records before checking scope and consuming the old token, so a
+    // concurrent refresh cannot race a rotation or cross an organization boundary.
     let mut tx = pool.begin().await?;
     let refresh_token_hash = token_hash(refresh_token);
     let new_refresh_token_hash = token_hash(new_refresh_token);
@@ -109,6 +231,7 @@ pub async fn consume_and_rotate_refresh_session(
             rst.expires_at > NOW() AS token_active,
             rs.principal_id,
             rs.client_id,
+            rs.organization_id,
             rs.revoked_at AS session_revoked_at,
             rs.expires_at > NOW() AS session_active,
             extract(epoch from rs.expires_at)::bigint AS session_expires_at
@@ -143,6 +266,14 @@ pub async fn consume_and_rotate_refresh_session(
     if !token_active || !session_active {
         tx.commit().await?;
         return Ok(ConsumeRefreshSessionResult::NotFound);
+    }
+
+    let organization_id: Option<String> = row.get("organization_id");
+    if organization_id.as_deref() != expected_organization_id {
+        // A mismatch must not consume the token or revoke the stored session:
+        // callers map this to an invalid token without changing valid state.
+        tx.commit().await?;
+        return Ok(ConsumeRefreshSessionResult::OrganizationScopeMismatch);
     }
 
     if token_consumed || token_revoked || session_revoked {
@@ -212,6 +343,7 @@ pub async fn consume_and_rotate_refresh_session(
             session_id,
             principal_id,
             client_id,
+            organization_id,
             expires_at: session_expires_at,
         },
     ))
@@ -303,6 +435,7 @@ pub async fn list_refresh_sessions_for_principal(
             id,
             principal_id,
             client_id,
+            organization_id,
             login_ip,
             user_agent,
             current_access_jti,
@@ -328,6 +461,7 @@ pub async fn list_refresh_sessions_for_principal(
             id: row.get("id"),
             principal_id: row.get("principal_id"),
             client_id: row.get("client_id"),
+            organization_id: row.get("organization_id"),
             login_ip: row.get("login_ip"),
             user_agent: row.get("user_agent"),
             current_access_jti: row.get("current_access_jti"),
@@ -349,12 +483,39 @@ pub async fn list_refresh_sessions(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<RefreshSessionInfo>> {
+    list_refresh_sessions_in_organization(
+        pool,
+        None,
+        include_revoked,
+        principal_id,
+        client_id,
+        login_ip,
+        limit,
+        offset,
+    )
+    .await
+}
+
+/// List sessions with an optional exact organization filter; `None` keeps the
+/// existing global view, while `Some(id)` exposes only that tenant's sessions.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_refresh_sessions_in_organization(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    include_revoked: bool,
+    principal_id: Option<&str>,
+    client_id: Option<&str>,
+    login_ip: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<RefreshSessionInfo>> {
     let rows = sqlx::query(
         r#"
         SELECT
             id,
             principal_id,
             client_id,
+            organization_id,
             login_ip,
             user_agent,
             current_access_jti,
@@ -365,14 +526,16 @@ pub async fn list_refresh_sessions(
             revoke_reason
         FROM refresh_sessions
         WHERE ($1 OR revoked_at IS NULL)
-          AND ($2::text IS NULL OR principal_id = $2)
-          AND ($3::text IS NULL OR client_id = $3)
-          AND ($4::text IS NULL OR login_ip = $4)
+          AND ($2::text IS NULL OR organization_id = $2)
+          AND ($3::text IS NULL OR principal_id = $3)
+          AND ($4::text IS NULL OR client_id = $4)
+          AND ($5::text IS NULL OR login_ip = $5)
         ORDER BY issued_at DESC
-        LIMIT $5 OFFSET $6
+        LIMIT $6 OFFSET $7
         "#,
     )
     .bind(include_revoked)
+    .bind(organization_id)
     .bind(principal_id)
     .bind(client_id)
     .bind(login_ip)
@@ -387,6 +550,7 @@ pub async fn list_refresh_sessions(
             id: row.get("id"),
             principal_id: row.get("principal_id"),
             client_id: row.get("client_id"),
+            organization_id: row.get("organization_id"),
             login_ip: row.get("login_ip"),
             user_agent: row.get("user_agent"),
             current_access_jti: row.get("current_access_jti"),
@@ -413,6 +577,31 @@ pub async fn revoke_principal_refresh_sessions(
         "#,
     )
     .bind(principal_id)
+    .bind(reason)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+/// Revoke only unexpired, unrevoked sessions bound to one organization.
+/// Platform sessions and sessions in every other organization remain untouched.
+pub async fn revoke_organization_refresh_sessions(
+    pool: &PgPool,
+    organization_id: &str,
+    reason: Option<&str>,
+) -> Result<u64> {
+    let result = sqlx::query(
+        r#"
+        UPDATE refresh_sessions
+        SET revoked_at = NOW(),
+            revoke_reason = COALESCE(revoke_reason, $2)
+        WHERE organization_id = $1
+          AND revoked_at IS NULL
+          AND expires_at > NOW()
+        "#,
+    )
+    .bind(organization_id)
     .bind(reason)
     .execute(pool)
     .await?;

@@ -575,7 +575,10 @@ mod tests {
         let location = location_header.to_str().unwrap();
         assert!(location.starts_with("https://client.example.test/callback?error=access_denied"));
         assert!(location.contains("state=client-state"));
-        assert!(location.contains("iss=keylo"));
+        assert!(location.contains(&format!(
+            "iss={}",
+            urlencoding::encode(&test_config().oidc_issuer())
+        )));
     }
 
     #[tokio::test]
@@ -725,6 +728,25 @@ mod tests {
         )
         .await
         .unwrap();
+        let client_id = format!(
+            "oidc-browser-disabled-{}",
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        db::create_oidc_client(
+            &pool,
+            &keylo::models::CreateOidcClientRequest {
+                client_id: client_id.clone(),
+                client_secret: None,
+                name: "OIDC disabled browser session test".to_string(),
+                description: None,
+                client_type: "public".to_string(),
+                redirect_uris: vec!["https://client.example.test/callback".to_string()],
+                grant_types: None,
+                scopes: None,
+            },
+        )
+        .await
+        .unwrap();
         let browser_cookie = format!("oidc-browser-session-{}", uuid::Uuid::new_v4());
         db::create_browser_session(
             &pool,
@@ -739,7 +761,9 @@ mod tests {
         db::set_user_active(&pool, &user.id, false).await.unwrap();
 
         let response = server
-            .get("/v1/oidc/authorize?response_type=code&client_id=unused&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcallback&scope=openid&nonce=test-nonce&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256")
+            .get(&format!(
+                "/v1/oidc/authorize?response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcallback&scope=openid&nonce=test-nonce&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256"
+            ))
             .add_header("Cookie", format!("keylo_oidc_session={browser_cookie}"))
             .await;
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
@@ -2128,6 +2152,7 @@ mod tests {
                 "config": {
                     "issuer": "https://idp.example.test",
                     "client_id": "keylo-test-client",
+                    "client_secret": "keylo-test-client-secret",
                     "redirect_uri": "https://keylo.example.test/v1/upstream/oidc/callback"
                 },
                 "claim_mapping": {"external_subject": "sub", "email": "email"}
@@ -2225,6 +2250,7 @@ mod tests {
                 session_id: &session_id,
                 principal_id: &principal.id,
                 client_id: &format!("oidc_upstream:{source_id}"),
+                organization_id: None,
                 refresh_token_id: &refresh_token_id,
                 refresh_token: &refresh_token,
                 access_jti: "upstream-access-jti",
@@ -3140,6 +3166,249 @@ mod tests {
         assert_eq!(disabled_organization.status_code(), StatusCode::FORBIDDEN);
     }
 
+    /// Verifies that a password login can create a tenant-scoped refresh session
+    /// and that organization or membership lifecycle changes revoke only that
+    /// tenant session while preserving the user's platform session.
+    #[tokio::test]
+    async fn test_organization_scoped_refresh_sessions_follow_live_lifecycle() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization = db::create_organization(
+            &pool,
+            &format!("refresh-session-org-{suffix}"),
+            "Refresh session organization",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create refresh-session organization");
+        let user = db::create_user(
+            &pool,
+            &format!("refresh-session-user-{suffix}"),
+            &format!("refresh-session-user-{suffix}@example.test"),
+            Some("RefreshSessionUser#123"),
+        )
+        .await
+        .expect("Failed to create refresh-session user");
+        let principal = db::get_principal_by_ref(&pool, "user", &user.id)
+            .await
+            .expect("Failed to load refresh-session principal")
+            .expect("Refresh-session principal should exist");
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &principal.id,
+            "active",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to activate refresh-session membership");
+
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let platform_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": &user.username,
+                "client_secret": "RefreshSessionUser#123"
+            }))
+            .await;
+        platform_login.assert_status_ok();
+        let platform_refresh_token = platform_login.json::<serde_json::Value>()["refresh_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let organization_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": &user.username,
+                "client_secret": "RefreshSessionUser#123",
+                "organization_id": &organization.id
+            }))
+            .await;
+        organization_login.assert_status_ok();
+        let organization_login_body: serde_json::Value = organization_login.json();
+        let organization_access_token = organization_login_body["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let organization_refresh_token = organization_login_body["refresh_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let organization_me = server
+            .get("/v1/auth/me")
+            .add_header(
+                "Authorization",
+                format!("Bearer {organization_access_token}"),
+            )
+            .await;
+        organization_me.assert_status_ok();
+        assert_eq!(
+            organization_me.json::<serde_json::Value>()["organization_id"],
+            organization.id
+        );
+
+        let listed = server
+            .get(&format!(
+                "/v1/admin/refresh-sessions?organization_id={}&principal_id={}",
+                organization.id, principal.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        listed.assert_status_ok();
+        let listed_body: serde_json::Value = listed.json();
+        assert_eq!(listed_body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(listed_body["data"][0]["organization_id"], organization.id);
+
+        let scoped_refresh = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": organization_refresh_token }))
+            .await;
+        scoped_refresh.assert_status_ok();
+        let rotated_organization_refresh_token = scoped_refresh.json::<serde_json::Value>()
+            ["refresh_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let disable_organization = server
+            .put(&format!(
+                "/v1/admin/organizations/{}/status",
+                organization.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({ "status": "disabled" }))
+            .await;
+        disable_organization.assert_status_ok();
+
+        let revoked_sessions = db::list_refresh_sessions_in_organization(
+            &pool,
+            Some(&organization.id),
+            true,
+            Some(&principal.id),
+            None,
+            None,
+            10,
+            0,
+        )
+        .await
+        .expect("Failed to list revoked organization sessions");
+        assert_eq!(revoked_sessions.len(), 1);
+        assert!(revoked_sessions[0].revoked_at.is_some());
+        assert_eq!(
+            revoked_sessions[0].revoke_reason.as_deref(),
+            Some("organization_disabled")
+        );
+
+        let rejected_scoped_refresh = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": rotated_organization_refresh_token }))
+            .await;
+        assert_eq!(
+            rejected_scoped_refresh.status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let platform_refresh = server
+            .post("/v1/auth/refresh")
+            .json(&json!({ "refresh_token": platform_refresh_token }))
+            .await;
+        platform_refresh.assert_status_ok();
+
+        let reactivate_organization = server
+            .put(&format!(
+                "/v1/admin/organizations/{}/status",
+                organization.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({ "status": "active" }))
+            .await;
+        reactivate_organization.assert_status_ok();
+
+        let membership_path = format!(
+            "/v1/admin/organizations/{}/memberships/{}",
+            organization.id, principal.id
+        );
+        for membership_status in ["pending", "suspended", "removed"] {
+            let active_login = server
+                .post("/v1/auth/token")
+                .json(&json!({
+                    "client_id": &user.username,
+                    "client_secret": "RefreshSessionUser#123",
+                    "organization_id": &organization.id
+                }))
+                .await;
+            active_login.assert_status_ok();
+            let active_refresh_token = active_login.json::<serde_json::Value>()["refresh_token"]
+                .as_str()
+                .unwrap()
+                .to_string();
+
+            let update_membership = server
+                .put(&membership_path)
+                .add_header("Authorization", format!("Bearer {admin_token}"))
+                .json(&json!({ "status": membership_status }))
+                .await;
+            update_membership.assert_status_ok();
+
+            let rejected_login = server
+                .post("/v1/auth/token")
+                .json(&json!({
+                    "client_id": &user.username,
+                    "client_secret": "RefreshSessionUser#123",
+                    "organization_id": &organization.id
+                }))
+                .await;
+            assert_eq!(rejected_login.status_code(), StatusCode::FORBIDDEN);
+
+            let rejected_refresh = server
+                .post("/v1/auth/refresh")
+                .json(&json!({ "refresh_token": active_refresh_token }))
+                .await;
+            assert_eq!(rejected_refresh.status_code(), StatusCode::UNAUTHORIZED);
+
+            let revoked_sessions = db::list_refresh_sessions_in_organization(
+                &pool,
+                Some(&organization.id),
+                true,
+                Some(&principal.id),
+                None,
+                None,
+                20,
+                0,
+            )
+            .await
+            .expect("Failed to list membership-revoked organization sessions");
+            assert!(revoked_sessions.iter().any(|session| {
+                session.revoke_reason.as_deref()
+                    == Some(&format!("organization_membership_{membership_status}"))
+            }));
+
+            let reactivate_membership = server
+                .put(&membership_path)
+                .add_header("Authorization", format!("Bearer {admin_token}"))
+                .json(&json!({ "status": "active" }))
+                .await;
+            reactivate_membership.assert_status_ok();
+        }
+    }
+
     #[tokio::test]
     async fn test_external_customer_with_admin_claims_cannot_access_platform_organizations() {
         let Some(pool) = setup_organization_test_pool().await else {
@@ -3685,6 +3954,7 @@ mod tests {
 
         let login_resp = server
             .post("/v1/auth/token")
+            .add_header("User-Agent", "KeyloIntegrationTest/1.0")
             .json(&json!({
                 "client_id": username,
                 "client_secret": password

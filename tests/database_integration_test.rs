@@ -337,6 +337,128 @@ mod database_tests {
         .is_err());
     }
 
+    /// Keeps a tenant refresh token bound to the organization recorded with its
+    /// session. A mismatched signed claim must not consume, rotate, or revoke a
+    /// still-valid session that belongs to the real organization.
+    #[tokio::test]
+    async fn test_organization_refresh_session_scope_mismatch_preserves_session() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_organization_refresh_session_scope_mismatch_preserves_session: {msg}"
+                );
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization = db::create_organization(
+            &pool,
+            &format!("refresh-scope-{suffix}"),
+            "Refresh scope organization",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create refresh-scope organization");
+        let user = db::create_user(
+            &pool,
+            &format!("refresh-scope-user-{suffix}"),
+            &format!("refresh-scope-user-{suffix}@example.test"),
+            Some("RefreshScope#123"),
+        )
+        .await
+        .expect("Failed to create refresh-scope user");
+        let principal = db::ensure_user_principal(&pool, &user.id)
+            .await
+            .expect("Failed to resolve refresh-scope principal")
+            .expect("Refresh-scope principal should exist");
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &principal.id,
+            "active",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to activate refresh-scope membership");
+
+        let session_id = format!("refresh-scope-session-{suffix}");
+        let refresh_token_id = format!("refresh-scope-token-{suffix}");
+        let refresh_token = format!("refresh-scope-raw-token-{suffix}");
+        db::create_refresh_session(
+            &pool,
+            db::CreateRefreshSessionParams {
+                session_id: &session_id,
+                principal_id: &principal.id,
+                client_id: "user:refresh-scope-test",
+                organization_id: Some(&organization.id),
+                refresh_token_id: &refresh_token_id,
+                refresh_token: &refresh_token,
+                access_jti: "refresh-scope-access-jti",
+                login_ip: None,
+                user_agent: None,
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .expect("Failed to create organization-scoped refresh session");
+
+        let mismatch = db::consume_and_rotate_refresh_session(
+            &pool,
+            &refresh_token,
+            Some("different-organization"),
+            "mismatched-refresh-token-id",
+            "mismatched-refresh-token",
+            "mismatched-access-jti",
+        )
+        .await
+        .expect("Scope mismatch query should complete");
+        assert_eq!(
+            mismatch,
+            db::ConsumeRefreshSessionResult::OrganizationScopeMismatch
+        );
+
+        let sessions = db::list_refresh_sessions_in_organization(
+            &pool,
+            Some(&organization.id),
+            true,
+            Some(&principal.id),
+            None,
+            None,
+            10,
+            0,
+        )
+        .await
+        .expect("Failed to list organization refresh sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session_id);
+        assert_eq!(
+            sessions[0].organization_id.as_deref(),
+            Some(organization.id.as_str())
+        );
+        assert!(sessions[0].rotated_at.is_none());
+        assert!(sessions[0].revoked_at.is_none());
+
+        let consumed = db::consume_and_rotate_refresh_session(
+            &pool,
+            &refresh_token,
+            Some(&organization.id),
+            "matching-refresh-token-id",
+            "matching-refresh-token",
+            "matching-access-jti",
+        )
+        .await
+        .expect("Matching organization refresh should rotate");
+        assert!(matches!(
+            consumed,
+            db::ConsumeRefreshSessionResult::Consumed(ref session)
+                if session.session_id == session_id
+                    && session.organization_id.as_deref() == Some(organization.id.as_str())
+        ));
+    }
+
     /// Verifies the database constraints that keep tenant resource identities
     /// reusable across organizations but never allow a cross-scope tree edge.
     #[tokio::test]

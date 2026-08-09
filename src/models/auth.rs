@@ -30,6 +30,9 @@ pub struct AuthPayload {
     pub client_id: String,
     pub client_secret: String,
     pub force: Option<bool>,
+    /// Optional signed-session scope requested by a human password login.
+    /// The server revalidates it against live membership and never trusts it as authority by itself.
+    pub organization_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
