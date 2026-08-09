@@ -778,6 +778,8 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 
 `expires_in` 优先使用服务客户端的 `token_ttl_seconds`；未配置时使用全局 `SERVICE_TOKEN_EXPIRY_SECONDS`。
 
+服务 Token 的组织边界只能从已注册 service client 的持久化记录派生，`/v1/service/token` 不接受 `organization_id`、请求头或 audience/scope 以外的字段来切换组织。organization-scoped client 签发的 JWT 会包含其唯一的 `organization_id`；每次使用时都会实时检查 service client、service Principal、组织和 active membership。组织停用、服务 Principal 停用或 membership 变为 pending/suspended/removed 时，已有 Token 和新的签发请求都会被拒绝。
+
 ### 9.2 服务受保护接口
 
 | 方法 | 路径 | 鉴权 |
@@ -791,6 +793,8 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
   "token": "..."
 }
 ```
+
+`/v1/service/introspect` 与 `/v1/auth/introspect` 只接受 active platform-scoped service client 作为调用方。organization-scoped service Token 不能用内省端点探测 platform 或其他组织 Token 的状态。
 
 ### 9.3 服务管理接口（admin）
 
@@ -810,6 +814,7 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
   "service_secret": "secret",
   "name": "Order Service",
   "description": "Order domain API",
+  "organization_id": "org-acme",
   "allowed_scopes": ["read", "write"],
   "allowed_audiences": ["inventory-svc"],
   "integration_type": "internal",
@@ -824,8 +829,9 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 
 - `allowed_scopes`：该服务最多可申请的 scope 集合。
 - `allowed_audiences`：该服务最多可访问的目标 audience 集合，`"*"` 表示不限。
+- `organization_id`：可选。省略时创建显式 `platform` service client；提供时必须是 active organization，创建结果为显式 `organization` scope，并原子创建该 service Principal 的 active organization membership。
 - `integration_type`：可选集成类型，默认 `internal`。建议使用 `internal`、`third_party`、`gateway`、`job` 等稳定枚举值。
-- `introspection_allowed`：是否允许该服务调用 `/v1/auth/introspect` 和 `/v1/service/introspect`，默认 `true`。
+- `introspection_allowed`：是否允许 platform-scoped 服务调用 `/v1/auth/introspect` 和 `/v1/service/introspect`，默认 `true`；organization-scoped 服务始终不能调用这些端点。
 - `token_ttl_seconds`：该服务 token TTL。为空时使用全局 `SERVICE_TOKEN_EXPIRY_SECONDS`。
 - `owner` / `contact`：运维归属信息，用于审计、轮换和事故联系。
 
@@ -837,7 +843,7 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 - `allowed_audiences` 可使用 `*` 通配；`allowed_scopes` 不允许使用 `*`。
 - `token_ttl_seconds` 必须大于 0，且不能超过 `REFRESH_TOKEN_EXPIRY_SECONDS`。
 
-`GET /v1/admin/services/{service_id}` 与列表接口会返回上述服务元数据，但不会返回密钥或密钥 hash。
+`GET /v1/admin/services/{service_id}` 与列表接口会返回上述服务元数据，以及不可变的 `scope_kind`（`platform` 或 `organization`）和可选 `organization_id`，但不会返回密钥或密钥 hash。`PUT` 不接受也不能变更 scope；需要变更组织边界时必须注册新的 service client 和凭证。
 
 `POST /v1/admin/services/{service_id}/rotate-secret`：
 

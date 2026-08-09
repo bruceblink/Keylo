@@ -58,12 +58,40 @@ pub async fn service_token(
                     .unwrap_or(state.config.service_token_expiry_seconds);
                 let principal = crate::db::ensure_service_principal(db, &payload.service_id)
                     .await
-                    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+                    .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+                    .ok_or(AuthError::ServiceClientNotAuthorized)?;
+                let service_scope = svc_db::get_service_client_scope(db, &payload.service_id)
+                    .await
+                    .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+                    .ok_or(AuthError::ServiceClientNotAuthorized)?;
+
+                if !service_scope_is_well_formed(&service_scope) {
+                    return Err(AuthError::ServiceClientNotAuthorized);
+                }
+                let token_context_active = svc_db::service_token_context_is_active(
+                    db,
+                    &payload.service_id,
+                    Some(&principal.id),
+                    service_scope.organization_id.as_deref(),
+                )
+                .await
+                .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+                if !token_context_active {
+                    audit_service_event(
+                        &state,
+                        "service.token.forbidden",
+                        Some(&payload.service_id),
+                        Some("Service client organization context is inactive"),
+                    )
+                    .await;
+                    return Err(AuthError::ServiceClientNotAuthorized);
+                }
 
                 let token = mint_service_token(
                     &state,
                     &payload.service_id,
-                    principal.as_ref().map(|value| value.id.as_str()),
+                    Some(&principal.id),
+                    service_scope.organization_id.as_deref(),
                     &granted_scopes,
                     &audience,
                     expires_in,
@@ -74,9 +102,10 @@ pub async fn service_token(
                     "service.token.issued",
                     Some(&payload.service_id),
                     Some(&format!(
-                        "scope={}, aud={}",
+                        "scope={}, aud={}, organization_id={}",
                         granted_scopes.join(" "),
-                        audience
+                        audience,
+                        service_scope.organization_id.as_deref().unwrap_or("-")
                     )),
                 )
                 .await;
@@ -125,14 +154,35 @@ pub async fn service_introspect(
     }
 }
 
-/// Confirm that a service token still belongs to an enabled service before exposing it as active.
+/// Confirms that a service token still names the same live service boundary.
+///
+/// This makes organization disable and service-membership suspension effective
+/// immediately instead of waiting for the short-lived JWT to expire.
 async fn service_token_claims_are_active(db: &sqlx::PgPool, claims: &ServiceClaims) -> bool {
     let Some(service_id) = claims.sub.strip_prefix("service:") else {
         return false;
     };
-    svc_db::service_client_is_active(db, service_id)
-        .await
-        .unwrap_or(false)
+    svc_db::service_token_context_is_active(
+        db,
+        service_id,
+        claims.principal_id.as_deref(),
+        claims.organization_id.as_deref(),
+    )
+    .await
+    .unwrap_or(false)
+}
+
+/// Rejects impossible persisted scope combinations before they become JWT claims.
+///
+/// The database CHECK is the authoritative guard, but this explicit boundary
+/// keeps a corrupted or partially migrated record from silently minting a
+/// token with a misleading organization context.
+fn service_scope_is_well_formed(scope: &svc_db::ServiceClientScope) -> bool {
+    matches!(
+        (scope.scope_kind.as_str(), scope.organization_id.as_deref()),
+        (svc_db::SERVICE_CLIENT_SCOPE_PLATFORM, None)
+            | (svc_db::SERVICE_CLIENT_SCOPE_ORGANIZATION, Some(_))
+    )
 }
 
 fn require_db(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {
@@ -180,6 +230,12 @@ pub async fn register_service(
     let integration_type = normalized_or_default(payload.integration_type.as_deref(), "internal");
     let owner = payload.owner.as_deref().and_then(non_empty_trimmed);
     let contact = payload.contact.as_deref().and_then(non_empty_trimmed);
+    let organization_id = payload.organization_id.as_deref().map(str::trim);
+    if organization_id.is_some_and(str::is_empty) {
+        return Err(AuthError::InvalidRequest(
+            "organization_id must not be blank when supplied".to_string(),
+        ));
+    }
 
     svc_db::create_service_client(
         db,
@@ -188,6 +244,7 @@ pub async fn register_service(
             service_secret: &payload.service_secret,
             name: &payload.name,
             description: payload.description.as_deref(),
+            organization_id,
             allowed_scopes: &allowed_scopes,
             allowed_audiences: &allowed_audiences,
             integration_type: &integration_type,
@@ -204,6 +261,13 @@ pub async fn register_service(
                 "Service client '{}' already exists; choose a different service_id or update the existing service.",
                 payload.service_id
             ))
+        } else if e
+            .to_string()
+            .contains("organization_service_client_context_inactive")
+        {
+            AuthError::InvalidRequest(
+                "organization_id must reference an active organization".to_string(),
+            )
         } else {
             AuthError::DatabaseError(e.to_string())
         }
@@ -213,12 +277,27 @@ pub async fn register_service(
         &state,
         "service.registered",
         Some(&payload.service_id),
-        Some(&payload.name),
+        Some(&format!(
+            "name={}, scope_kind={}, organization_id={}",
+            payload.name,
+            if organization_id.is_some() {
+                svc_db::SERVICE_CLIENT_SCOPE_ORGANIZATION
+            } else {
+                svc_db::SERVICE_CLIENT_SCOPE_PLATFORM
+            },
+            organization_id.unwrap_or("-")
+        )),
     )
     .await;
 
     Ok(Json(json!({
         "service_id": payload.service_id,
+        "scope_kind": if organization_id.is_some() {
+            svc_db::SERVICE_CLIENT_SCOPE_ORGANIZATION
+        } else {
+            svc_db::SERVICE_CLIENT_SCOPE_PLATFORM
+        },
+        "organization_id": organization_id,
         "message": "Service registered successfully"
     })))
 }
@@ -343,6 +422,7 @@ pub fn mint_service_token(
     state: &AppState,
     service_id: &str,
     principal_id: Option<&str>,
+    organization_id: Option<&str>,
     scopes: &[String],
     audience: &str,
     expires_in: i64,
@@ -354,6 +434,7 @@ pub fn mint_service_token(
         sub: format!("service:{}", service_id),
         principal_id: principal_id.map(str::to_string),
         principal_type: Some("service".to_string()),
+        organization_id: organization_id.map(str::to_string),
         iss: state.config.jwt_issuer.clone(),
         aud: audience.to_string(),
         scope: scopes.to_vec(),

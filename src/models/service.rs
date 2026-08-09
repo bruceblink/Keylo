@@ -12,6 +12,12 @@ pub struct ServiceClaims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal_type: Option<String>,
 
+    /// Signed tenant boundary for an organization-scoped service token.
+    /// Platform services omit this value; callers must never infer a tenant
+    /// from a missing claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+
     /// Issuer：签发方
     pub iss: String,
 
@@ -97,6 +103,8 @@ pub struct IntrospectResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
@@ -119,6 +127,7 @@ impl IntrospectResponse {
             sub: None,
             principal_id: None,
             principal_type: None,
+            organization_id: None,
             scope: None,
             role: None,
             aud: None,
@@ -135,6 +144,7 @@ impl IntrospectResponse {
             sub: Some(claims.sub.clone()),
             principal_id: claims.principal_id.clone(),
             principal_type: claims.principal_type.clone(),
+            organization_id: claims.organization_id.clone(),
             scope: Some(claims.scope.join(" ")),
             role: claims.role.clone(),
             aud: Some(claims.aud.clone()),
@@ -153,6 +163,9 @@ pub struct RegisterServiceRequest {
     pub service_secret: String,
     pub name: String,
     pub description: Option<String>,
+    /// Optional tenant owner. When present, the client is organization-scoped
+    /// and its service tokens carry this signed organization context.
+    pub organization_id: Option<String>,
     /// 允许该服务申请的 scope 列表
     pub allowed_scopes: Vec<String>,
     /// 允许该服务访问的目标 audience 列表（"*" 表示不限）
@@ -190,6 +203,10 @@ pub struct ServiceInfo {
     pub service_id: String,
     pub name: String,
     pub description: Option<String>,
+    /// Immutable boundary: `platform` or `organization`.
+    pub scope_kind: String,
+    /// Present only when `scope_kind` is `organization`.
+    pub organization_id: Option<String>,
     pub allowed_scopes: Vec<String>,
     pub allowed_audiences: Vec<String>,
     pub active: bool,

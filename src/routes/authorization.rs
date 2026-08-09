@@ -32,6 +32,15 @@ struct ResolvedAuthorizationTarget {
     kind: AuthorizationTargetKind,
 }
 
+/// Represents the live principal and its one signed authorization boundary.
+///
+/// Human access tokens and service tokens use different claim formats, but the
+/// authorization endpoints must make the same scope decision for both.
+struct AuthorizationIdentity {
+    principal: Principal,
+    organization_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AuthorizationRoleScope {
     Platform,
@@ -83,7 +92,7 @@ pub fn authorization_routes() -> Router<AppState> {
 async fn principal_from_bearer(
     state: &AppState,
     token: &str,
-) -> Result<(Principal, Option<Claims>), AuthError> {
+) -> Result<AuthorizationIdentity, AuthError> {
     if let Ok(claims) = state.jwt_keys.decode_token(token) {
         if claims.token_type == "access" {
             if let Some(db) = &state.db {
@@ -96,7 +105,10 @@ async fn principal_from_bearer(
             }
 
             let principal = resolve_access_principal(state, &claims).await?;
-            return Ok((principal, Some(claims)));
+            return Ok(AuthorizationIdentity {
+                principal,
+                organization_id: claims.organization_id,
+            });
         }
     }
 
@@ -120,24 +132,42 @@ async fn principal_from_bearer(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let principal = if let Some(principal_id) = service_claims.principal_id.as_deref() {
-        crate::db::get_principal_by_id(db, principal_id)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?
-    } else if let Some(service_id) = service_claims.sub.strip_prefix("service:") {
-        crate::db::get_principal_by_ref(db, "service", service_id)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?
-    } else {
-        None
+    let service_id = service_claims
+        .sub
+        .strip_prefix("service:")
+        .ok_or(AuthError::InvalidToken)?;
+    if service_claims.principal_type.as_deref() != Some("service") {
+        return Err(AuthError::InvalidToken);
     }
-    .ok_or(AuthError::Forbidden)?;
+    let principal_id = service_claims
+        .principal_id
+        .as_deref()
+        .ok_or(AuthError::InvalidToken)?;
+    let principal = crate::db::get_principal_by_id(db, principal_id)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        .ok_or(AuthError::Forbidden)?;
 
     if !principal.active {
         return Err(AuthError::Forbidden);
     }
 
-    Ok((principal, None))
+    let live = crate::db::service::service_token_context_is_active(
+        db,
+        service_id,
+        Some(principal_id),
+        service_claims.organization_id.as_deref(),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    if !live {
+        return Err(AuthError::Forbidden);
+    }
+
+    Ok(AuthorizationIdentity {
+        principal,
+        organization_id: service_claims.organization_id,
+    })
 }
 
 async fn resolve_access_principal(
@@ -184,9 +214,9 @@ async fn resolve_access_principal(
 async fn resolve_authorization_context(
     db: &sqlx::PgPool,
     principal: &Principal,
-    claims: Option<&Claims>,
+    organization_id: Option<&str>,
 ) -> Result<Option<String>, AuthError> {
-    let Some(organization_id) = claims.and_then(|claims| claims.organization_id.as_deref()) else {
+    let Some(organization_id) = organization_id else {
         return Ok(None);
     };
 
@@ -357,13 +387,21 @@ async fn authorize_check(
     Json(payload): Json<AuthorizeCheckRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     payload.validate().map_err(AuthError::InvalidRequest)?;
-    let (principal, claims) = principal_from_bearer(&state, bearer.token()).await?;
+    let identity = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let organization_id = resolve_authorization_context(db, &principal, claims.as_ref()).await?;
-    let result = check_one(db, &principal, &payload, organization_id.as_deref()).await?;
+    let organization_id =
+        resolve_authorization_context(db, &identity.principal, identity.organization_id.as_deref())
+            .await?;
+    let result = check_one(
+        db,
+        &identity.principal,
+        &payload,
+        organization_id.as_deref(),
+    )
+    .await?;
 
     Ok(Json(json!({
         "success": true,
@@ -377,15 +415,17 @@ async fn authorize_batch_check(
     Json(payload): Json<AuthorizeBatchCheckRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     payload.validate().map_err(AuthError::InvalidRequest)?;
-    let (principal, claims) = principal_from_bearer(&state, bearer.token()).await?;
+    let identity = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let organization_id = resolve_authorization_context(db, &principal, claims.as_ref()).await?;
+    let organization_id =
+        resolve_authorization_context(db, &identity.principal, identity.organization_id.as_deref())
+            .await?;
     let mut results = Vec::with_capacity(payload.checks.len());
     for check in &payload.checks {
-        results.push(check_one(db, &principal, check, organization_id.as_deref()).await?);
+        results.push(check_one(db, &identity.principal, check, organization_id.as_deref()).await?);
     }
 
     Ok(Json(json!({
@@ -398,32 +438,39 @@ async fn my_effective_permissions(
     State(state): State<AppState>,
     TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    let (principal, claims) = principal_from_bearer(&state, bearer.token()).await?;
+    let identity = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let organization_id = resolve_authorization_context(db, &principal, claims.as_ref()).await?;
+    let organization_id =
+        resolve_authorization_context(db, &identity.principal, identity.organization_id.as_deref())
+            .await?;
     let roles = match organization_id.as_deref() {
         Some(organization_id) => {
-            crate::db::get_principal_organization_roles(db, &principal.id, organization_id).await
+            crate::db::get_principal_organization_roles(db, &identity.principal.id, organization_id)
+                .await
         }
-        None => crate::db::get_principal_roles(db, &principal.id).await,
+        None => crate::db::get_principal_roles(db, &identity.principal.id).await,
     }
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
     let permissions = match organization_id.as_deref() {
         Some(organization_id) => {
-            crate::db::get_principal_organization_permissions(db, &principal.id, organization_id)
-                .await
+            crate::db::get_principal_organization_permissions(
+                db,
+                &identity.principal.id,
+                organization_id,
+            )
+            .await
         }
-        None => crate::db::get_principal_permissions(db, &principal.id).await,
+        None => crate::db::get_principal_permissions(db, &identity.principal.id).await,
     }
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
     Ok(Json(json!({
         "success": true,
         "data": PrincipalEffectivePermissionsResponse {
-            principal,
+            principal: identity.principal,
             roles,
             permissions,
         }
@@ -435,15 +482,17 @@ async fn my_resource_tree(
     TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
     Query(query): Query<ResourceTreeQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
-    let (principal, claims) = principal_from_bearer(&state, bearer.token()).await?;
+    let identity = principal_from_bearer(&state, bearer.token()).await?;
     let db = state
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let organization_id = resolve_authorization_context(db, &principal, claims.as_ref()).await?;
+    let organization_id =
+        resolve_authorization_context(db, &identity.principal, identity.organization_id.as_deref())
+            .await?;
     let tree = crate::db::authorized_resources_for_principal_in_organization(
         db,
-        &principal.id,
+        &identity.principal.id,
         organization_id.as_deref(),
         &query.app,
         &query.resource_type,

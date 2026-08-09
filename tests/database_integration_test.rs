@@ -580,6 +580,167 @@ mod database_tests {
         assert!(cross_scope_child.is_err());
     }
 
+    /// Verifies that every service client has one immutable authorization boundary.
+    #[tokio::test]
+    async fn test_service_clients_have_explicit_organization_scopes() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!("Skipping test_service_clients_have_explicit_organization_scopes: {msg}");
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization = db::create_organization(
+            &pool,
+            &format!("service-scope-{suffix}"),
+            "Service scope organization",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create service scope organization");
+        let organization_service_id = format!("service-scope-org-{suffix}");
+        let platform_service_id = format!("service-scope-platform-{suffix}");
+        let scopes = vec!["read".to_string()];
+        let audiences = vec!["admin-backend".to_string()];
+
+        db::create_service_client(
+            &pool,
+            db::CreateServiceClientParams {
+                service_id: &organization_service_id,
+                service_secret: "ServiceScopeOrganization#123",
+                name: "Organization service",
+                description: None,
+                organization_id: Some(&organization.id),
+                allowed_scopes: &scopes,
+                allowed_audiences: &audiences,
+                integration_type: "job",
+                introspection_allowed: true,
+                token_ttl_seconds: None,
+                owner: None,
+                contact: None,
+            },
+        )
+        .await
+        .expect("Failed to create organization-scoped service client");
+        db::create_service_client(
+            &pool,
+            db::CreateServiceClientParams {
+                service_id: &platform_service_id,
+                service_secret: "ServiceScopePlatform#123",
+                name: "Platform service",
+                description: None,
+                organization_id: None,
+                allowed_scopes: &scopes,
+                allowed_audiences: &audiences,
+                integration_type: "job",
+                introspection_allowed: true,
+                token_ttl_seconds: None,
+                owner: None,
+                contact: None,
+            },
+        )
+        .await
+        .expect("Failed to create platform-scoped service client");
+
+        let organization_client = db::get_service_client(&pool, &organization_service_id)
+            .await
+            .expect("Failed to load organization service client")
+            .expect("Organization service client should exist");
+        assert_eq!(organization_client.scope_kind, "organization");
+        assert_eq!(
+            organization_client.organization_id.as_deref(),
+            Some(organization.id.as_str())
+        );
+        let platform_client = db::get_service_client(&pool, &platform_service_id)
+            .await
+            .expect("Failed to load platform service client")
+            .expect("Platform service client should exist");
+        assert_eq!(platform_client.scope_kind, "platform");
+        assert!(platform_client.organization_id.is_none());
+
+        let organization_principal =
+            db::get_principal_by_ref(&pool, "service", &organization_service_id)
+                .await
+                .expect("Failed to load organization service principal")
+                .expect("Organization service principal should exist");
+        assert!(db::get_active_organization_membership(
+            &pool,
+            &organization.id,
+            &organization_principal.id,
+        )
+        .await
+        .expect("Failed to load organization service membership")
+        .is_some());
+        assert!(db::service_token_context_is_active(
+            &pool,
+            &organization_service_id,
+            Some(&organization_principal.id),
+            Some(&organization.id),
+        )
+        .await
+        .expect("Failed to validate organization service token context"));
+        assert!(!db::service_token_context_is_active(
+            &pool,
+            &organization_service_id,
+            Some(&organization_principal.id),
+            None,
+        )
+        .await
+        .expect("Failed to reject a mismatched platform token context"));
+
+        assert!(sqlx::query(
+            "UPDATE service_clients SET scope_kind = 'platform', organization_id = NULL WHERE service_id = $1",
+        )
+        .bind(&organization_service_id)
+        .execute(&pool)
+        .await
+        .is_err());
+
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &organization_principal.id,
+            "suspended",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to suspend organization service membership");
+        assert!(!db::service_token_context_is_active(
+            &pool,
+            &organization_service_id,
+            Some(&organization_principal.id),
+            Some(&organization.id),
+        )
+        .await
+        .expect("Failed to reject a suspended organization service"));
+
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &organization_principal.id,
+            "active",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to reactivate organization service membership");
+        db::set_organization_status(&pool, &organization.id, "disabled")
+            .await
+            .expect("Failed to disable organization service context")
+            .expect("Organization service context should exist");
+        assert!(!db::service_token_context_is_active(
+            &pool,
+            &organization_service_id,
+            Some(&organization_principal.id),
+            Some(&organization.id),
+        )
+        .await
+        .expect("Failed to reject a disabled organization service"));
+    }
+
     #[tokio::test]
     async fn test_platform_roles_require_internal_employee_and_fail_closed_for_legacy_bindings() {
         let _guard = DB_TEST_LOCK.lock().await;

@@ -80,6 +80,35 @@ fn ensure_service_claims(
     Ok(())
 }
 
+/// Revalidates a service JWT against the stored client and tenant boundary.
+///
+/// Service tokens carry a signed organization id, but organization status and
+/// machine membership can change after issuance. Every protected service route
+/// therefore checks the immutable client scope and current lifecycle state.
+async fn ensure_service_claims_live(
+    state: &AppState,
+    claims: &ServiceClaims,
+) -> Result<(), AuthError> {
+    let service_id = service_id_from_subject(&claims.sub).ok_or(AuthError::InvalidToken)?;
+    if claims.principal_id.is_none() || claims.principal_type.as_deref() != Some("service") {
+        return Err(AuthError::InvalidToken);
+    }
+
+    let db = state.db.as_deref().ok_or_else(|| {
+        AuthError::DatabaseError("Database required for service authentication".to_string())
+    })?;
+    let active = crate::db::service::service_token_context_is_active(
+        db,
+        service_id,
+        claims.principal_id.as_deref(),
+        claims.organization_id.as_deref(),
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("Service authorization failed".to_string()))?;
+
+    active.then_some(()).ok_or(AuthError::Forbidden)
+}
+
 /// Reject disabled Principals on every protected request so user disable takes effect immediately.
 async fn ensure_claim_principal_active(
     db: &sqlx::PgPool,
@@ -392,6 +421,10 @@ pub async fn service_auth_middleware(
         }
     }
 
+    if let Err(err) = ensure_service_claims_live(&state, &claims).await {
+        return Ok(err.into_response());
+    }
+
     request.extensions_mut().insert(claims);
     Ok(next.run(request).await)
 }
@@ -430,6 +463,10 @@ pub async fn service_integration_auth_middleware(
             }
             Ok(false) => {}
         }
+    }
+
+    if let Err(err) = ensure_service_claims_live(&state, &claims).await {
+        return Ok(err.into_response());
     }
 
     request.extensions_mut().insert(claims);

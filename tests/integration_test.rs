@@ -3166,6 +3166,275 @@ mod tests {
         assert_eq!(disabled_organization.status_code(), StatusCode::FORBIDDEN);
     }
 
+    /// Keeps an organization service token inside its signed tenant boundary.
+    #[tokio::test]
+    async fn test_organization_service_token_is_live_and_cross_tenant_safe() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let app = format!("tenant-service-{suffix}");
+        let organization_a = db::create_organization(
+            &pool,
+            &format!("tenant-service-a-{suffix}"),
+            "Tenant service A",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create service organization A");
+        let organization_b = db::create_organization(
+            &pool,
+            &format!("tenant-service-b-{suffix}"),
+            "Tenant service B",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create service organization B");
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Admin token should be present")
+            .to_string();
+        let service_id = format!("tenant-service-{suffix}");
+        let service_secret = "TenantService#123";
+
+        let registered = server
+            .post("/v1/admin/services")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": service_secret,
+                "name": "Tenant authorization service",
+                "organization_id": organization_a.id,
+                "allowed_scopes": ["read"],
+                "allowed_audiences": ["admin-backend"],
+                "integration_type": "job",
+                "introspection_allowed": true
+            }))
+            .await;
+        registered.assert_status_ok();
+        let registration: serde_json::Value = registered.json();
+        assert_eq!(registration["scope_kind"], "organization");
+        assert_eq!(registration["organization_id"], organization_a.id);
+
+        let service_info = server
+            .get(&format!("/v1/admin/services/{service_id}"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        service_info.assert_status_ok();
+        let service_info: serde_json::Value = service_info.json();
+        assert_eq!(service_info["scope_kind"], "organization");
+        assert_eq!(service_info["organization_id"], organization_a.id);
+
+        let service_principal = db::get_principal_by_ref(&pool, "service", &service_id)
+            .await
+            .expect("Failed to load organization service principal")
+            .expect("Organization service principal should exist");
+        assert!(db::get_active_organization_membership(
+            &pool,
+            &organization_a.id,
+            &service_principal.id,
+        )
+        .await
+        .expect("Failed to load organization service membership")
+        .is_some());
+
+        let permission = db::create_permission(
+            &pool,
+            &format!("tenant:service:read:{suffix}"),
+            Some("Read one tenant's service resources"),
+        )
+        .await
+        .expect("Failed to create service tenant permission");
+        let role = db::create_organization_role(
+            &pool,
+            &format!("tenant-service-reader-{suffix}"),
+            Some("Tenant service reader"),
+            "service",
+        )
+        .await
+        .expect("Failed to create service organization role");
+        db::assign_permission_to_role(&pool, &role.id, &permission.id)
+            .await
+            .expect("Failed to bind service tenant permission");
+        db::assign_organization_role(
+            &pool,
+            &organization_a.id,
+            &service_principal.id,
+            &role.id,
+            Some("integration-test"),
+        )
+        .await
+        .expect("Failed to bind service organization role");
+        let permission_ids = vec![permission.id.clone()];
+        db::create_resource_in_organization(
+            &pool,
+            Some(&organization_a.id),
+            db::CreateResourceParams {
+                app: &app,
+                resource_type: "menu",
+                code: "shared",
+                name: "Organization A service resource",
+                parent_id: None,
+                display_order: 0,
+                description: None,
+                metadata: None,
+                permission_ids: &permission_ids,
+            },
+        )
+        .await
+        .expect("Failed to create organization A service resource");
+        db::create_resource_in_organization(
+            &pool,
+            Some(&organization_b.id),
+            db::CreateResourceParams {
+                app: &app,
+                resource_type: "menu",
+                code: "only-b",
+                name: "Organization B service resource",
+                parent_id: None,
+                display_order: 0,
+                description: None,
+                metadata: None,
+                permission_ids: &permission_ids,
+            },
+        )
+        .await
+        .expect("Failed to create organization B service resource");
+
+        let service_login = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": service_secret,
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        service_login.assert_status_ok();
+        let service_token = service_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Service token should be present")
+            .to_string();
+        let claims = Keys::from_config(&test_config())
+            .expect("Test keys should load")
+            .decode_service_token(&service_token)
+            .expect("Service token should decode");
+        assert_eq!(
+            claims.organization_id.as_deref(),
+            Some(organization_a.id.as_str())
+        );
+        assert_eq!(
+            claims.principal_id.as_deref(),
+            Some(service_principal.id.as_str())
+        );
+
+        let direct_check = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {service_token}"))
+            .json(&json!({"permission": permission.name}))
+            .await;
+        direct_check.assert_status_ok();
+        assert_eq!(
+            direct_check.json::<serde_json::Value>()["data"]["allowed"],
+            true
+        );
+        let resource_check = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {service_token}"))
+            .json(&json!({
+                "app": app,
+                "resource_type": "menu",
+                "resource_code": "shared"
+            }))
+            .await;
+        resource_check.assert_status_ok();
+        assert_eq!(
+            resource_check.json::<serde_json::Value>()["data"]["allowed"],
+            true
+        );
+        let cross_tenant_batch = server
+            .post("/v1/authorize/batch-check")
+            .add_header("Authorization", format!("Bearer {service_token}"))
+            .json(&json!({
+                "checks": [
+                    {"permission": permission.name},
+                    {
+                        "app": app,
+                        "resource_type": "menu",
+                        "resource_code": "only-b"
+                    }
+                ]
+            }))
+            .await;
+        cross_tenant_batch.assert_status_ok();
+        let cross_tenant_batch: serde_json::Value = cross_tenant_batch.json();
+        assert_eq!(cross_tenant_batch["data"]["results"][0]["allowed"], true);
+        assert_eq!(cross_tenant_batch["data"]["results"][1]["allowed"], false);
+        assert_eq!(
+            cross_tenant_batch["data"]["results"][1]["reason"],
+            "permission_not_resolved"
+        );
+        let resource_tree = server
+            .get(&format!(
+                "/v1/principals/me/resource-tree?app={app}&type=menu"
+            ))
+            .add_header("Authorization", format!("Bearer {service_token}"))
+            .await;
+        resource_tree.assert_status_ok();
+        let resource_nodes = resource_tree.json::<serde_json::Value>()["data"]
+            .as_array()
+            .expect("Service resource tree should be an array")
+            .to_owned();
+        assert_eq!(resource_nodes.len(), 1);
+        assert_eq!(
+            resource_nodes[0]["resource"]["organization_id"],
+            organization_a.id
+        );
+
+        let caller_introspection = server
+            .post("/v1/service/introspect")
+            .add_header("Authorization", format!("Bearer {service_token}"))
+            .json(&json!({"token": service_token}))
+            .await;
+        assert_eq!(caller_introspection.status_code(), StatusCode::FORBIDDEN);
+
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &service_principal.id,
+            "suspended",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to suspend organization service membership");
+        let stale_token = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {service_token}"))
+            .json(&json!({"permission": permission.name}))
+            .await;
+        assert_eq!(stale_token.status_code(), StatusCode::FORBIDDEN);
+        let blocked_issuance = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": service_secret,
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        assert_eq!(blocked_issuance.status_code(), StatusCode::FORBIDDEN);
+    }
+
     /// Verifies that a password login can create a tenant-scoped refresh session
     /// and that organization or membership lifecycle changes revoke only that
     /// tenant session while preserving the user's platform session.
@@ -3471,6 +3740,7 @@ mod tests {
                 service_secret: "IntrospectionGuard#123",
                 name: "Introspection guard service",
                 description: None,
+                organization_id: None,
                 allowed_scopes: &service_scopes,
                 allowed_audiences: &service_audiences,
                 integration_type: "third_party",
