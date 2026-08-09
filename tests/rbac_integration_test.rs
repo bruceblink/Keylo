@@ -188,7 +188,7 @@ mod tests {
         let token = get_access_token(&server).await;
 
         let response = server
-            .get("/api/rbac/roles")
+            .get("/api/rbac/roles?limit=1&offset=0")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 
@@ -197,6 +197,8 @@ mod tests {
         let body: serde_json::Value = response.json();
         assert!(body["success"].as_bool().unwrap());
         assert!(body["data"].is_array());
+        assert_eq!(body["pagination"]["limit"], 1);
+        assert_eq!(body["pagination"]["offset"], 0);
     }
 
     #[tokio::test]
@@ -302,7 +304,7 @@ mod tests {
         let token = get_access_token(&server).await;
 
         let response = server
-            .get("/api/rbac/permissions")
+            .get("/api/rbac/permissions?limit=1&offset=0")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 
@@ -311,6 +313,8 @@ mod tests {
         let body: serde_json::Value = response.json();
         assert!(body["success"].as_bool().unwrap());
         assert!(body["data"].is_array());
+        assert_eq!(body["pagination"]["limit"], 1);
+        assert_eq!(body["pagination"]["offset"], 0);
     }
 
     #[tokio::test]

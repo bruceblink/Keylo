@@ -214,6 +214,24 @@ pub async fn get_all_roles(pool: &PgPool) -> Result<Vec<Role>> {
     Ok(roles)
 }
 
+/// Return a bounded role page while preserving the legacy unbounded helper.
+pub async fn get_roles_page(pool: &PgPool, limit: i64, offset: i64) -> Result<(Vec<Role>, bool)> {
+    let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
+    let mut roles = sqlx::query_as::<_, Role>(
+        "SELECT id, name, description, assignable_to, system, version, created_at, updated_at FROM roles ORDER BY name, id LIMIT $1 OFFSET $2",
+    )
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let has_more = roles.len() > limit as usize;
+    if has_more {
+        roles.truncate(limit as usize);
+    }
+    Ok((roles, has_more))
+}
+
 /// 根据ID获取角色
 pub async fn get_role_by_id(pool: &PgPool, role_id: &str) -> Result<Option<Role>> {
     let role = sqlx::query_as::<_, Role>(
@@ -432,6 +450,31 @@ pub async fn get_all_permissions(pool: &PgPool) -> Result<Vec<Permission>> {
     .await?;
 
     Ok(permissions)
+}
+
+/// Return a bounded permission page, optionally constrained by a name prefix.
+pub async fn get_permissions_page(
+    pool: &PgPool,
+    prefix: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<Permission>, bool)> {
+    let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
+    let pattern = prefix.map(|value| format!("{value}%"));
+    let mut permissions = sqlx::query_as::<_, Permission>(
+        "SELECT id, name, description, version, created_at, updated_at FROM permissions WHERE ($1::text IS NULL OR name LIKE $1) ORDER BY name, id LIMIT $2 OFFSET $3",
+    )
+    .bind(pattern)
+    .bind(limit + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let has_more = permissions.len() > limit as usize;
+    if has_more {
+        permissions.truncate(limit as usize);
+    }
+    Ok((permissions, has_more))
 }
 
 /// 按前缀获取权限

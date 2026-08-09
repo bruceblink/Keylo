@@ -158,21 +158,55 @@ fn role_update_error_response(err: &anyhow::Error) -> (StatusCode, Json<serde_js
     )
 }
 
-/// 获取所有角色
-async fn get_roles(State(state): State<AppState>) -> ApiResponse {
-    match get_all_roles(require_db(&state)?).await {
-        Ok(roles) => Ok(Json(json!({
-            "success": true,
-            "data": roles
-        }))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Failed to get roles: {}", e)
-            })),
-        )),
-    }
+/// Return roles with optional bounded pagination while preserving the legacy list shape.
+async fn get_roles(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ApiResponse {
+    let db = require_db(&state)?;
+    let has_explicit_pagination = params.contains_key("limit") || params.contains_key("offset");
+    let requested_limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let requested_offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let (roles, has_more, limit, offset) = if has_explicit_pagination {
+        let (roles, has_more) = get_roles_page(db, requested_limit, requested_offset)
+            .await
+            .map_err(|error| {
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "roles_list_failed",
+                    &format!("Failed to get roles: {error}"),
+                )
+            })?;
+        (roles, has_more, requested_limit, requested_offset)
+    } else {
+        let roles = get_all_roles(db).await.map_err(|error| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "roles_list_failed",
+                &format!("Failed to get roles: {error}"),
+            )
+        })?;
+        let count = roles.len() as i64;
+        (roles, false, count, 0)
+    };
+    Ok(Json(json!({
+        "success": true,
+        "data": roles,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 /// 创建角色
@@ -537,25 +571,55 @@ async fn get_permissions(
     Query(params): Query<HashMap<String, String>>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
-    let result = if let Some(prefix) = params.get("prefix") {
-        get_permissions_by_prefix(db, prefix).await
+    let has_explicit_pagination = params.contains_key("limit") || params.contains_key("offset");
+    let requested_limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let requested_offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let prefix = params.get("prefix").map(String::as_str);
+    let (permissions, has_more, limit, offset) = if has_explicit_pagination {
+        let (permissions, has_more) =
+            get_permissions_page(db, prefix, requested_limit, requested_offset)
+                .await
+                .map_err(|error| {
+                    error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "permissions_list_failed",
+                        &format!("Failed to get permissions: {error}"),
+                    )
+                })?;
+        (permissions, has_more, requested_limit, requested_offset)
     } else {
-        get_all_permissions(db).await
+        let permissions = match prefix {
+            Some(prefix) => get_permissions_by_prefix(db, prefix).await,
+            None => get_all_permissions(db).await,
+        }
+        .map_err(|error| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "permissions_list_failed",
+                &format!("Failed to get permissions: {error}"),
+            )
+        })?;
+        let count = permissions.len() as i64;
+        (permissions, false, count, 0)
     };
-
-    match result {
-        Ok(permissions) => Ok(Json(json!({
-            "success": true,
-            "data": permissions
-        }))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Failed to get permissions: {}", e)
-            })),
-        )),
-    }
+    Ok(Json(json!({
+        "success": true,
+        "data": permissions,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 /// 创建权限
