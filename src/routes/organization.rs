@@ -251,18 +251,22 @@ async fn list_organizations_handler(
     Query(query): Query<OrganizationListQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     let db = require_organization_db(&state)?;
-    let organizations = crate::db::list_organizations(
-        db,
-        query.status.as_deref(),
-        query.limit.unwrap_or(50),
-        query.offset.unwrap_or(0),
-    )
-    .await
-    .map_err(map_organization_error)?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (organizations, has_more) =
+        crate::db::list_organizations_page(db, query.status.as_deref(), limit, offset)
+            .await
+            .map_err(map_organization_error)?;
 
     Ok(Json(json!({
         "success": true,
         "data": organizations,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 

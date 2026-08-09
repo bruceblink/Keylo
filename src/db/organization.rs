@@ -347,19 +347,21 @@ pub async fn get_organization_by_slug(pool: &PgPool, slug: &str) -> Result<Optio
     .await?)
 }
 
-pub async fn list_organizations(
+/// List one organization page and report whether another page exists.
+pub async fn list_organizations_page(
     pool: &PgPool,
     status: Option<&str>,
     limit: i64,
     offset: i64,
-) -> Result<Vec<Organization>> {
+) -> Result<(Vec<Organization>, bool)> {
     if let Some(status) = status {
         if !is_valid_organization_status(status) {
             anyhow::bail!("invalid_organization_status");
         }
     }
 
-    Ok(sqlx::query_as::<_, Organization>(
+    let limit = limit.clamp(1, 200);
+    let mut organizations = sqlx::query_as::<_, Organization>(
         r#"
         SELECT id, slug, name, kind, status, created_at, updated_at
         FROM organizations
@@ -369,10 +371,24 @@ pub async fn list_organizations(
         "#,
     )
     .bind(status)
-    .bind(limit.clamp(1, 200))
+    .bind(limit + 1)
     .bind(offset.max(0))
     .fetch_all(pool)
-    .await?)
+    .await?;
+    let has_more = organizations.len() > limit as usize;
+    organizations.truncate(limit as usize);
+    Ok((organizations, has_more))
+}
+
+pub async fn list_organizations(
+    pool: &PgPool,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Organization>> {
+    Ok(list_organizations_page(pool, status, limit, offset)
+        .await?
+        .0)
 }
 
 /// Changes organization lifecycle state without ever deleting tenant records.

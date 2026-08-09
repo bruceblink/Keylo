@@ -3410,6 +3410,17 @@ mod tests {
         let organization: serde_json::Value = create.json();
         let organization_id = organization["data"]["id"].as_str().unwrap().to_string();
 
+        let organization_page = server
+            .get("/v1/admin/organizations?limit=1&offset=0")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        organization_page.assert_status_ok();
+        let organization_page_body: serde_json::Value = organization_page.json();
+        assert_eq!(organization_page_body["pagination"]["limit"], 1);
+        assert_eq!(organization_page_body["pagination"]["offset"], 0);
+        assert_eq!(organization_page_body["pagination"]["has_more"], true);
+        assert_eq!(organization_page_body["pagination"]["next_offset"], 1);
+
         let duplicate = server
             .post("/v1/admin/organizations")
             .add_header("Authorization", format!("Bearer {admin_token}"))

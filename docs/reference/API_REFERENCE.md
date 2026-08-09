@@ -625,7 +625,7 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/admin/organizations?status=&limit=&offset=` | 分页列出组织，可按状态过滤 |
+| GET | `/v1/admin/organizations?status=&limit=&offset=` | 分页列出组织，可按状态过滤；响应包含 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | POST | `/v1/admin/organizations` | 创建 customer 或 internal 组织 |
 | GET | `/v1/admin/organizations/{organization_id}` | 查询一个组织 |
 | PUT | `/v1/admin/organizations/{organization_id}/status` | 变更组织生命周期状态 |
