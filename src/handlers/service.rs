@@ -5,9 +5,10 @@ use crate::models::service::{
     ServiceClaims, ServiceInfo, ServiceTokenRequest, ServiceTokenResponse, UpdateServiceRequest,
 };
 use crate::state::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::Utc;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -193,14 +194,42 @@ fn require_db(state: &AppState) -> Result<&sqlx::PgPool, AuthError> {
 }
 
 /// GET /v1/admin/services
-pub async fn list_services(State(state): State<AppState>) -> Result<Json<Value>, AuthError> {
+pub async fn list_services(
+    State(state): State<AppState>,
+    Query(query): Query<ServiceListQuery>,
+) -> Result<Json<Value>, AuthError> {
     let db = require_db(&state)?;
+    if query
+        .scope_kind
+        .as_deref()
+        .is_some_and(|scope| !matches!(scope, "platform" | "organization"))
+    {
+        return Err(AuthError::InvalidRequest(
+            "scope_kind must be platform or organization".to_string(),
+        ));
+    }
 
-    let services = svc_db::list_service_clients(db)
-        .await
-        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    let services = svc_db::list_service_clients_filtered(
+        db,
+        query.organization_id.as_deref(),
+        query.scope_kind.as_deref(),
+        query.active,
+        query.limit.unwrap_or(50).clamp(1, 200),
+        query.offset.unwrap_or(0).max(0),
+    )
+    .await
+    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
     Ok(Json(json!({ "services": services })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceListQuery {
+    pub organization_id: Option<String>,
+    pub scope_kind: Option<String>,
+    pub active: Option<bool>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 /// POST /v1/admin/services

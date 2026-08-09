@@ -351,6 +351,19 @@ pub async fn get_service_client_in_organization(
 
 /// 列出所有服务客户端
 pub async fn list_service_clients(pool: &PgPool) -> Result<Vec<ServiceInfo>> {
+    list_service_clients_filtered(pool, None, None, None, i64::MAX, 0).await
+}
+
+/// List service clients with exact scope filters and bounded pagination for admin APIs.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_service_clients_filtered(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    scope_kind: Option<&str>,
+    active: Option<bool>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ServiceInfo>> {
     let rows = sqlx::query(
         "SELECT service_id, name, description, scope_kind, organization_id, allowed_scopes,
                 allowed_audiences, active, integration_type, introspection_allowed,
@@ -358,8 +371,17 @@ pub async fn list_service_clients(pool: &PgPool) -> Result<Vec<ServiceInfo>> {
                 extract(epoch from created_at)::bigint as created_at,
                 extract(epoch from updated_at)::bigint as updated_at
          FROM service_clients
-         ORDER BY created_at DESC",
+         WHERE ($1::text IS NULL OR organization_id = $1)
+           AND ($2::text IS NULL OR scope_kind = $2)
+           AND ($3::bool IS NULL OR active = $3)
+         ORDER BY created_at DESC, service_id
+         LIMIT $4 OFFSET $5",
     )
+    .bind(organization_id)
+    .bind(scope_kind)
+    .bind(active)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
     .await?;
 
@@ -371,22 +393,25 @@ pub async fn list_service_clients_in_organization(
     pool: &PgPool,
     organization_id: &str,
 ) -> Result<Vec<ServiceInfo>> {
-    let rows = sqlx::query(
-        "SELECT service_id, name, description, scope_kind, organization_id, allowed_scopes,
-                allowed_audiences, active, integration_type, introspection_allowed,
-                token_ttl_seconds, owner, contact,
-                extract(epoch from created_at)::bigint as created_at,
-                extract(epoch from updated_at)::bigint as updated_at
-         FROM service_clients
-         WHERE organization_id = $1
-           AND scope_kind = 'organization'
-         ORDER BY created_at DESC, service_id",
-    )
-    .bind(organization_id)
-    .fetch_all(pool)
-    .await?;
+    list_service_clients_in_organization_paginated(pool, organization_id, i64::MAX, 0).await
+}
 
-    Ok(rows.into_iter().map(service_info_from_row).collect())
+/// List only organization-scoped services with the same bounded pagination contract.
+pub async fn list_service_clients_in_organization_paginated(
+    pool: &PgPool,
+    organization_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ServiceInfo>> {
+    list_service_clients_filtered(
+        pool,
+        Some(organization_id),
+        Some(SERVICE_CLIENT_SCOPE_ORGANIZATION),
+        None,
+        limit,
+        offset,
+    )
+    .await
 }
 
 /// 更新服务客户端信息

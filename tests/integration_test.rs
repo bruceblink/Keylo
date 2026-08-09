@@ -4053,6 +4053,22 @@ mod tests {
         assert_eq!(registration["scope_kind"], "organization");
         assert_eq!(registration["organization_id"], organization_a.id);
 
+        let service_list = server
+            .get(&format!(
+                "/v1/admin/services?organization_id={}&scope_kind=organization&active=true&limit=1&offset=0",
+                organization_a.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        service_list.assert_status_ok();
+        let service_list: serde_json::Value = service_list.json();
+        assert_eq!(service_list["services"].as_array().unwrap().len(), 1);
+        assert_eq!(service_list["services"][0]["service_id"], service_id);
+        assert_eq!(
+            service_list["services"][0]["organization_id"],
+            organization_a.id
+        );
+
         let service_info = server
             .get(&format!("/v1/admin/services/{service_id}"))
             .add_header("Authorization", format!("Bearer {admin_token}"))

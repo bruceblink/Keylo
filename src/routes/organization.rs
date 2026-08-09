@@ -4,6 +4,7 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeSet;
 
@@ -615,14 +616,26 @@ async fn list_delegated_services_handler(
     claims: Claims,
     State(state): State<AppState>,
     Path(organization_id): Path<String>,
+    Query(query): Query<OrganizationServiceListQuery>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     require_delegated_manager(&state, &claims, &organization_id).await?;
     let db = require_organization_db(&state)?;
-    let services = svc_db::list_service_clients_in_organization(db, &organization_id)
-        .await
-        .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    let services = svc_db::list_service_clients_in_organization_paginated(
+        db,
+        &organization_id,
+        query.limit.unwrap_or(50).clamp(1, 200),
+        query.offset.unwrap_or(0).max(0),
+    )
+    .await
+    .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
 
     Ok(Json(json!({"success": true, "data": services})))
+}
+
+#[derive(Debug, Deserialize)]
+struct OrganizationServiceListQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 /// Creates an organization-scoped service without accepting a caller-selected tenant id.
