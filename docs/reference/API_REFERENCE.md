@@ -545,11 +545,11 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 | GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false&limit=&offset=` | Principal refresh session 列表；limit 默认 50、最大 200，offset 默认 0 |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions` | 撤销该 Principal 的所有 refresh session |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions/{session_id}` | 撤销单个 refresh session |
-| GET | `/v1/admin/principals/{principal_id}/api-keys?organization_id=` | 查询该 machine Principal 在精确 scope 内的 API key 元数据 |
+| GET | `/v1/admin/principals/{principal_id}/api-keys?organization_id=&limit=&offset=` | 查询该 machine Principal 在精确 scope 内的 API key 元数据；返回 `has_more/next_offset` |
 | POST | `/v1/admin/principals/{principal_id}/api-keys` | 创建 service/device API key；请求体显式提供可选 `organization_id` 和 capabilities |
 | POST | `/v1/admin/principals/{principal_id}/api-keys/{key_id}/rotate?organization_id=` | 创建重叠期 replacement key，旧 key 保持 active 直至显式撤销 |
 | DELETE | `/v1/admin/principals/{principal_id}/api-keys/{key_id}?organization_id=` | 请求体 `{ "reason": "..." }`，撤销一把 key |
-| GET | `/v1/admin/devices?organization_id=` | 查询 platform 或一个精确 organization scope 的 device Principal |
+| GET | `/v1/admin/devices?organization_id=&limit=&offset=` | 查询 platform 或一个精确 organization scope 的 device Principal；返回 `has_more/next_offset` |
 | POST | `/v1/admin/devices` | 创建 device；可选 `organization_id` 一旦写入不可变 |
 | GET | `/v1/admin/devices/{device_id}?organization_id=` | 查询一个精确 scope 的 device |
 | PUT | `/v1/admin/devices/{device_id}?organization_id=` | 更新 device display_name 或 active，不可迁移 scope |
