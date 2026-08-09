@@ -3,8 +3,9 @@ use crate::db::user::get_user_by_username;
 use crate::errors::{is_unique_violation, AuthError};
 use crate::models::{
     AuthBody, AuthPayload, BlacklistTokenRequest, Claims, CleanupAuditLogsRequest,
-    CreateClientRequest, IntrospectTokenRequest, KeyloConfiguration, MeResponse, Principal,
-    RefreshTokenRequest, RotateClientSecretRequest, TokenIntrospectResponse, UpdateClientRequest,
+    CreateClientRequest, IntrospectTokenRequest, KeyloConfiguration, MeResponse,
+    OrganizationContextRequest, Principal, RefreshTokenRequest, RotateClientSecretRequest,
+    TokenIntrospectResponse, UpdateClientRequest,
 };
 use crate::state::AppState;
 use crate::utils;
@@ -115,6 +116,7 @@ async fn access_claims_for_principal(
                 uid: Some(user.id),
                 principal_id: Some(principal.id.clone()),
                 principal_type: Some("user".to_string()),
+                organization_id: None,
                 iss: state.config.jwt_issuer.clone(),
                 aud: "admin-backend".to_string(),
                 scope: access_scope("user", is_admin_user),
@@ -139,6 +141,7 @@ async fn access_claims_for_principal(
                 uid: None,
                 principal_id: Some(principal.id.clone()),
                 principal_type: Some("client".to_string()),
+                organization_id: None,
                 iss: state.config.jwt_issuer.clone(),
                 aud: "admin-backend".to_string(),
                 scope: access_scope("client", true),
@@ -219,6 +222,7 @@ pub async fn issue_external_user_session(
         uid: Some(user.id.clone()),
         principal_id: Some(principal.id.clone()),
         principal_type: Some("user".to_string()),
+        organization_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope("user", is_admin_user),
@@ -233,6 +237,7 @@ pub async fn issue_external_user_session(
         uid: access_claims.uid.clone(),
         principal_id: Some(principal.id.clone()),
         principal_type: Some("user".to_string()),
+        organization_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -494,6 +499,7 @@ pub async fn auth_token(
         uid: user_id.clone(),
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("user".to_string()),
+        organization_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, is_admin_user),
@@ -511,6 +517,7 @@ pub async fn auth_token(
         uid: user_id.clone(),
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("user".to_string()),
+        organization_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -648,6 +655,7 @@ pub async fn admin_token(
         uid: None,
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("client".to_string()),
+        organization_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, true),
@@ -663,6 +671,7 @@ pub async fn admin_token(
         uid: None,
         principal_id: principal.as_ref().map(|value| value.id.clone()),
         principal_type: Some("client".to_string()),
+        organization_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -1065,6 +1074,7 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
         uid: claims.uid,
         principal_id: claims.principal_id,
         principal_type: claims.principal_type,
+        organization_id: claims.organization_id,
         scope: claims.scope,
         role: claims.role,
         aud: claims.aud,
@@ -1074,8 +1084,79 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
     }))
 }
 
+/// Re-issues a short-lived access token after verifying the caller's active
+/// membership. The signed claim, rather than a request header, is the only
+/// organization context consumed by delegated organization APIs.
+pub async fn auth_select_organization_context(
+    claims: Claims,
+    State(state): State<AppState>,
+    Json(payload): Json<OrganizationContextRequest>,
+) -> Result<Json<AuthBody>, AuthError> {
+    if claims.token_type != "access" || claims.principal_type.as_deref() != Some("user") {
+        return Err(AuthError::Forbidden);
+    }
+    let user_id = claims.uid.as_deref().ok_or(AuthError::InvalidToken)?;
+    let db = require_db(&state)?;
+    let principal = if let Some(principal_id) = claims.principal_id.as_deref() {
+        crate::db::get_principal_by_id(db, principal_id)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?
+    } else {
+        crate::db::get_principal_by_ref(db, "user", user_id)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?
+    };
+    let principal = principal.ok_or(AuthError::InvalidToken)?;
+    if principal.principal_type != "user" || principal.ref_id != user_id || !principal.active {
+        return Err(AuthError::InvalidToken);
+    }
+    let membership =
+        crate::db::get_active_organization_membership(db, &payload.organization_id, &principal.id)
+            .await
+            .map_err(|_| {
+                AuthError::DatabaseError("Failed to resolve organization membership".to_string())
+            })?
+            .ok_or(AuthError::Forbidden)?;
+
+    let now = Utc::now().timestamp();
+    let mut context_claims = claims;
+    context_claims.organization_id = Some(membership.organization_id.clone());
+    context_claims.iat = now;
+    context_claims.exp = now + state.config.token_expiry_seconds;
+    context_claims.jti = utils::generate_jti();
+    context_claims.token_type = "access".to_string();
+    let access_token = state.jwt_keys.sign_token(&context_claims)?;
+    audit_event(
+        &state,
+        "organization.context.selected",
+        Some(&principal.subject),
+        Some(&format!("organization_id={}", membership.organization_id)),
+    )
+    .await;
+
+    Ok(Json(AuthBody::new(
+        access_token,
+        None,
+        state.config.token_expiry_seconds,
+    )))
+}
+
 /// Resolve the current database state for a token so introspection does not advertise disabled identities as active.
 async fn introspected_claims_are_active(db: &sqlx::PgPool, claims: &Claims) -> bool {
+    if let Some(organization_id) = claims.organization_id.as_deref() {
+        if claims.principal_type.as_deref() != Some("user") {
+            return false;
+        }
+        let Some(principal_id) = claims.principal_id.as_deref() else {
+            return false;
+        };
+        if !matches!(
+            crate::db::get_active_organization_membership(db, organization_id, principal_id).await,
+            Ok(Some(_))
+        ) {
+            return false;
+        }
+    }
     let advertises_platform_admin = claims.has_role("admin") || claims.has_scope("admin");
     if let Some(principal_id) = claims.principal_id.as_deref() {
         let Ok(Some(principal)) = crate::db::get_principal_by_id(db, principal_id).await else {
@@ -1190,6 +1271,7 @@ pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloCon
             "uid".to_string(),
             "principal_id".to_string(),
             "principal_type".to_string(),
+            "organization_id".to_string(),
         ],
         supported_signing_algorithms: vec!["RS256".to_string()],
         supported_audiences: state.config.jwt_audiences.clone(),
@@ -1211,6 +1293,26 @@ pub async fn auth_refresh(
     };
 
     let db = require_db(&state)?;
+    if let Some(organization_id) = refresh_claims.organization_id.as_deref() {
+        if refresh_claims.principal_type.as_deref() != Some("user") {
+            return Err(AuthError::InvalidToken);
+        }
+        let principal_id = refresh_claims
+            .principal_id
+            .as_deref()
+            .ok_or(AuthError::InvalidToken)?;
+        let active_membership =
+            crate::db::get_active_organization_membership(db, organization_id, principal_id)
+                .await
+                .map_err(|_| {
+                    AuthError::DatabaseError(
+                        "Failed to resolve organization membership".to_string(),
+                    )
+                })?;
+        if active_membership.is_none() {
+            return Err(AuthError::InvalidToken);
+        }
+    }
     let now = Utc::now().timestamp();
     let access_jti = utils::generate_jti();
     let refresh_jti = utils::generate_jti();
@@ -1219,6 +1321,7 @@ pub async fn auth_refresh(
         uid: refresh_claims.uid.clone(),
         principal_id: refresh_claims.principal_id.clone(),
         principal_type: refresh_claims.principal_type.clone(),
+        organization_id: refresh_claims.organization_id.clone(),
         iss: state.config.jwt_issuer.clone(),
         aud: refresh_claims.aud.clone(),
         scope: vec!["refresh".into()],
@@ -1247,8 +1350,9 @@ pub async fn auth_refresh(
                 .map_err(|_| AuthError::DatabaseError("Failed to get principal".to_string()))?
                 .filter(|principal| principal.active)
                 .ok_or(AuthError::InvalidToken)?;
-            let access_claims =
+            let mut access_claims =
                 access_claims_for_principal(&state, db, &principal, now, access_jti).await?;
+            access_claims.organization_id = refresh_claims.organization_id.clone();
             let access_token = state.jwt_keys.sign_token(&access_claims)?;
 
             audit_event(
@@ -1298,6 +1402,7 @@ pub async fn auth_refresh(
         uid: None,
         principal_id: Some(principal.id.clone()),
         principal_type: Some("client".to_string()),
+        organization_id: None,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],

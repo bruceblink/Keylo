@@ -2479,9 +2479,13 @@ mod tests {
         let membership = server
             .put(&membership_path)
             .add_header("Authorization", format!("Bearer {admin_token}"))
-            .json(&json!({"status": "active"}))
+            .json(&json!({"status": "active", "management_role": "owner"}))
             .await;
         membership.assert_status_ok();
+        assert_eq!(
+            membership.json::<serde_json::Value>()["data"]["management_role"],
+            "owner"
+        );
 
         let suspended = server
             .put(&membership_path)
@@ -2591,6 +2595,212 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_organization_owner_admin_api_requires_active_context_and_live_membership() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+
+        let owner = db::create_user(
+            &pool,
+            &format!("http-org-owner-{suffix}"),
+            &format!("http-org-owner-{suffix}@example.test"),
+            Some("HttpOrgOwner#123"),
+        )
+        .await
+        .expect("Failed to create organization owner");
+        db::promote_user_to_internal_employee(&pool, &owner.id, Some("test-admin"))
+            .await
+            .expect("Failed to promote organization owner")
+            .expect("Organization owner should exist");
+        let owner_principal = db::get_principal_by_ref(&pool, "user", &owner.id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let member = db::create_user(
+            &pool,
+            &format!("http-org-member-{suffix}"),
+            &format!("http-org-member-{suffix}@example.test"),
+            Some("HttpOrgMember#123"),
+        )
+        .await
+        .expect("Failed to create organization member");
+        db::set_user_class(
+            &pool,
+            &member.id,
+            keylo::models::USER_CLASS_INTERNAL_EMPLOYEE,
+            Some("test-admin"),
+        )
+        .await
+        .expect("Failed to promote organization member class")
+        .expect("Organization member should exist");
+        let member_principal = db::get_principal_by_ref(&pool, "user", &member.id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let owner_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": owner.username,
+                "client_secret": "HttpOrgOwner#123"
+            }))
+            .await;
+        owner_login.assert_status_ok();
+        let owner_token = owner_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let owner_context = server
+            .post("/v1/auth/organization-context")
+            .add_header("Authorization", format!("Bearer {owner_token}"))
+            .json(&json!({"organization_id": "org-internal"}))
+            .await;
+        owner_context.assert_status_ok();
+        let owner_context_token = owner_context.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let invite_path = "/v1/organizations/org-internal/memberships/invitations";
+        let invite = server
+            .post(invite_path)
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .json(&json!({"principal_id": member_principal.id}))
+            .await;
+        invite.assert_status_ok();
+        assert_eq!(
+            invite.json::<serde_json::Value>()["data"]["status"],
+            "pending"
+        );
+
+        let repeated_invite = server
+            .post(invite_path)
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .json(&json!({"principal_id": member_principal.id}))
+            .await;
+        repeated_invite.assert_status_ok();
+
+        let cross_org = server
+            .get("/v1/organizations/other-org/memberships")
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .await;
+        assert_eq!(cross_org.status_code(), StatusCode::FORBIDDEN);
+
+        let member_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": member.username,
+                "client_secret": "HttpOrgMember#123"
+            }))
+            .await;
+        member_login.assert_status_ok();
+        let member_token = member_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let join_path = format!(
+            "/v1/organizations/org-internal/memberships/{}/join",
+            member_principal.id
+        );
+        let join = server
+            .post(&join_path)
+            .add_header("Authorization", format!("Bearer {member_token}"))
+            .await;
+        join.assert_status_ok();
+
+        let member_context = server
+            .post("/v1/auth/organization-context")
+            .add_header("Authorization", format!("Bearer {member_token}"))
+            .json(&json!({"organization_id": "org-internal"}))
+            .await;
+        member_context.assert_status_ok();
+        let member_context_token = member_context.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let member_cannot_manage = server
+            .get("/v1/organizations/org-internal/memberships")
+            .add_header("Authorization", format!("Bearer {member_context_token}"))
+            .await;
+        assert_eq!(member_cannot_manage.status_code(), StatusCode::FORBIDDEN);
+
+        let promote_member = server
+            .put(&format!(
+                "/v1/organizations/org-internal/memberships/{}",
+                member_principal.id
+            ))
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .json(&json!({"status": "active", "management_role": "admin"}))
+            .await;
+        promote_member.assert_status_ok();
+
+        let organization_role = db::create_organization_role(
+            &pool,
+            &format!("http-org-role-{suffix}"),
+            Some("HTTP organization role"),
+            "user",
+        )
+        .await
+        .expect("Failed to create organization role");
+        let assigned = server
+            .post(&format!(
+                "/v1/organizations/org-internal/memberships/{}/roles",
+                member_principal.id
+            ))
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .json(&json!({"role_id": organization_role.id.clone()}))
+            .await;
+        assigned.assert_status_ok();
+
+        let listed_roles = server
+            .get(&format!(
+                "/v1/organizations/org-internal/memberships/{}/roles",
+                member_principal.id
+            ))
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .await;
+        listed_roles.assert_status_ok();
+        assert_eq!(
+            listed_roles.json::<serde_json::Value>()["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let revoked = server
+            .delete(&format!(
+                "/v1/organizations/org-internal/memberships/{}/roles/{}",
+                member_principal.id, organization_role.id
+            ))
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .await;
+        revoked.assert_status_ok();
+        assert_eq!(revoked.json::<serde_json::Value>()["data"]["revoked"], true);
+
+        let suspended = server
+            .put(&format!(
+                "/v1/organizations/org-internal/memberships/{}",
+                member_principal.id
+            ))
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .json(&json!({"status": "suspended"}))
+            .await;
+        suspended.assert_status_ok();
+        let suspended_context = server
+            .post("/v1/auth/organization-context")
+            .add_header("Authorization", format!("Bearer {member_token}"))
+            .json(&json!({"organization_id": "org-internal"}))
+            .await;
+        assert_eq!(suspended_context.status_code(), StatusCode::FORBIDDEN);
+
+        assert_eq!(owner_principal.principal_type, "user");
+    }
+
+    #[tokio::test]
     async fn test_external_customer_with_admin_claims_cannot_access_platform_organizations() {
         let Some(pool) = setup_organization_test_pool().await else {
             return;
@@ -2617,6 +2827,7 @@ mod tests {
                 uid: Some(user.id),
                 principal_id: Some(principal.id),
                 principal_type: Some("user".to_string()),
+                organization_id: None,
                 iss: test_config().jwt_issuer,
                 aud: "admin-backend".to_string(),
                 scope: vec!["read".to_string(), "write".to_string(), "admin".to_string()],

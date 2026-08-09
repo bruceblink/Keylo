@@ -3,7 +3,8 @@ use crate::handlers::{
     admin_token, auth_blacklist_token, auth_cleanup_audit_logs, auth_create_client,
     auth_get_audit_logs, auth_get_blacklisted_tokens, auth_introspect, auth_jwks,
     auth_list_clients, auth_logout, auth_logout_refresh_token, auth_me, auth_refresh,
-    auth_rotate_client_secret, auth_token, auth_update_client, keylo_configuration,
+    auth_rotate_client_secret, auth_select_organization_context, auth_token, auth_update_client,
+    keylo_configuration,
 };
 use crate::state::AppState;
 use axum::routing::{get, post, put};
@@ -13,6 +14,10 @@ pub fn protected_router() -> Router<AppState> {
     Router::new()
         .route("/v1/auth/logout", post(auth_logout))
         .route("/v1/auth/me", get(auth_me))
+        .route(
+            "/v1/auth/organization-context",
+            post(auth_select_organization_context),
+        )
 }
 
 pub fn admin_router() -> Router<AppState> {

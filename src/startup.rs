@@ -291,6 +291,7 @@ fn protected_routes(app_state: &AppState) -> Router<AppState> {
                     auth::platform_admin_authorization_middleware,
                 )),
         )
+        .merge(routes::organization::organization_member_routes())
         .nest(
             "/api/oauth",
             routes::oauth::oauth_admin_routes().route_layer(middleware::from_fn_with_state(

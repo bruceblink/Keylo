@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::{get, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use serde_json::json;
@@ -9,8 +9,10 @@ use serde_json::json;
 use crate::{
     errors::{is_unique_violation, AuthError},
     models::{
-        Claims, CreateOrganizationRequest, OrganizationListQuery, UpdateOrganizationStatusRequest,
-        UpsertOrganizationMembershipRequest,
+        Claims, CreateOrganizationRequest, InviteOrganizationMemberRequest, OrganizationListQuery,
+        OrganizationRoleBindingRequest, Principal, UpdateOrganizationMembershipRequest,
+        UpdateOrganizationStatusRequest, UpsertOrganizationMembershipRequest,
+        USER_CLASS_EXTERNAL_CUSTOMER, USER_CLASS_INTERNAL_EMPLOYEE,
     },
     state::AppState,
 };
@@ -40,6 +42,36 @@ pub fn organization_admin_routes() -> Router<AppState> {
         )
 }
 
+/// Mounts organization owner/admin endpoints. These routes use the signed
+/// active-organization claim and never grant authority from role bindings.
+pub fn organization_member_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/v1/organizations/{organization_id}/memberships",
+            get(list_delegated_memberships_handler),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/memberships/invitations",
+            post(invite_delegated_member_handler),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/memberships/{principal_id}",
+            put(update_delegated_membership_handler),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/memberships/{principal_id}/join",
+            post(join_delegated_membership_handler),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/memberships/{principal_id}/roles",
+            get(list_delegated_roles_handler).post(assign_delegated_role_handler),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/memberships/{principal_id}/roles/{role_id}",
+            delete(revoke_delegated_role_handler),
+        )
+}
+
 fn map_organization_error(error: anyhow::Error) -> AuthError {
     let message = error.to_string();
     match message.as_str() {
@@ -52,7 +84,11 @@ fn map_organization_error(error: anyhow::Error) -> AuthError {
         | "invalid_organization_kind"
         | "invalid_organization_status"
         | "invalid_organization_status_transition"
-        | "invalid_organization_membership_status" => AuthError::InvalidRequest(message),
+        | "invalid_organization_membership_status"
+        | "invalid_organization_management_role"
+        | "role_not_organization_scoped"
+        | "role_not_assignable_to_principal_type"
+        | "invalid_role_assignable_to" => AuthError::InvalidRequest(message),
         _ if is_unique_violation(error.as_ref()) => {
             AuthError::Conflict("Organization or membership already exists".to_string())
         }
@@ -65,6 +101,114 @@ fn require_organization_db(state: &AppState) -> Result<&sqlx::PgPool, AuthError>
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))
+}
+
+fn map_delegated_error(error: anyhow::Error) -> AuthError {
+    let message = error.to_string();
+    if message.starts_with("role_not_assignable_to_principal_type")
+        || message.starts_with("invalid_role_assignable_to")
+    {
+        return AuthError::InvalidRequest(message);
+    }
+    match message.as_str() {
+        // Delegated callers must not learn whether another tenant or member
+        // exists merely by changing a path parameter.
+        "organization_not_found"
+        | "organization_not_active"
+        | "organization_manager_principal_not_found"
+        | "organization_target_principal_not_found"
+        | "organization_manager_membership_not_found"
+        | "organization_manager_membership_not_active"
+        | "organization_manager_principal_inactive"
+        | "organization_manager_requires_user_principal"
+        | "organization_manager_user_not_found"
+        | "organization_manager_user_class_invalid"
+        | "organization_manager_role_required"
+        | "organization_target_membership_not_found"
+        | "organization_target_membership_not_active"
+        | "organization_target_principal_inactive"
+        | "organization_target_user_not_found"
+        | "organization_target_user_class_invalid"
+        | "organization_invitation_not_found"
+        | "organization_membership_not_joinable"
+        | "organization_join_requires_user_principal"
+        | "organization_membership_or_role_not_found_or_inactive"
+        | "organization_management_role_requires_user_principal"
+        | "organization_owner_role_required" => AuthError::Forbidden,
+        "organization_role_not_found" => AuthError::NotFound,
+        _ => map_organization_error(error),
+    }
+}
+
+/// Resolves the human Principal represented by a signed access token. The
+/// database lookup keeps legacy tokens compatible while refusing stale users.
+async fn resolve_delegated_principal(
+    db: &sqlx::PgPool,
+    claims: &Claims,
+) -> Result<Principal, AuthError> {
+    if claims.token_type != "access" || claims.principal_type.as_deref() != Some("user") {
+        return Err(AuthError::Forbidden);
+    }
+    let user_id = claims.uid.as_deref().ok_or(AuthError::InvalidToken)?;
+    let principal = match claims.principal_id.as_deref() {
+        Some(principal_id) => crate::db::get_principal_by_id(db, principal_id)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?,
+        None => crate::db::get_principal_by_ref(db, "user", user_id)
+            .await
+            .map_err(|_| AuthError::DatabaseError("Failed to resolve principal".to_string()))?,
+    }
+    .ok_or(AuthError::InvalidToken)?;
+    if principal.principal_type != "user" || principal.ref_id != user_id || !principal.active {
+        return Err(AuthError::Forbidden);
+    }
+    let user = crate::db::user::get_user_by_id(db, user_id)
+        .await
+        .map_err(|_| AuthError::DatabaseError("Failed to resolve user".to_string()))?
+        .filter(|user| {
+            user.active
+                && matches!(
+                    user.user_class.as_str(),
+                    USER_CLASS_INTERNAL_EMPLOYEE | USER_CLASS_EXTERNAL_CUSTOMER
+                )
+        })
+        .ok_or(AuthError::Forbidden)?;
+    if user.id != principal.ref_id {
+        return Err(AuthError::Forbidden);
+    }
+    Ok(principal)
+}
+
+fn require_active_organization_context(
+    claims: &Claims,
+    organization_id: &str,
+) -> Result<(), AuthError> {
+    if claims.organization_id.as_deref() == Some(organization_id) {
+        Ok(())
+    } else {
+        Err(AuthError::Forbidden)
+    }
+}
+
+/// Rechecks the live manager membership after matching the signed context.
+async fn require_delegated_manager(
+    state: &AppState,
+    claims: &Claims,
+    organization_id: &str,
+) -> Result<Principal, AuthError> {
+    let db = require_organization_db(state)?;
+    require_active_organization_context(claims, organization_id)?;
+    let principal = resolve_delegated_principal(db, claims).await?;
+    crate::db::require_organization_manager(db, organization_id, &principal.id)
+        .await
+        .map_err(map_delegated_error)?;
+    Ok(principal)
+}
+
+async fn require_delegated_mfa(state: &AppState, claims: &Claims) -> Result<(), AuthError> {
+    crate::routes::mfa::require_recent_mfa_for_user_claims(state, claims)
+        .await
+        .map_err(|_| AuthError::Forbidden)
 }
 
 /// Preserves a successful lifecycle change when audit persistence is temporarily unavailable.
@@ -230,6 +374,7 @@ async fn upsert_membership_handler(
         &principal_id,
         &payload.status,
         Some(&claims.sub),
+        payload.management_role.as_deref(),
     )
     .await
     .map_err(map_organization_error)?;
@@ -248,4 +393,200 @@ async fn upsert_membership_handler(
         "success": true,
         "data": membership,
     })))
+}
+
+async fn list_delegated_memberships_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    Query(query): Query<OrganizationListQuery>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    require_delegated_manager(&state, &claims, &organization_id).await?;
+    let db = require_organization_db(&state)?;
+    let memberships = crate::db::list_organization_memberships(
+        db,
+        &organization_id,
+        query.status.as_deref(),
+        query.limit.unwrap_or(50),
+        query.offset.unwrap_or(0),
+    )
+    .await
+    .map_err(map_delegated_error)?;
+
+    Ok(Json(json!({"success": true, "data": memberships})))
+}
+
+async fn invite_delegated_member_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    Json(payload): Json<InviteOrganizationMemberRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let actor = require_delegated_manager(&state, &claims, &organization_id).await?;
+    require_delegated_mfa(&state, &claims).await?;
+    let db = require_organization_db(&state)?;
+    let membership = crate::db::invite_organization_member_as_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        &payload.principal_id,
+        payload.management_role.as_deref(),
+    )
+    .await
+    .map_err(map_delegated_error)?;
+    audit_organization_event(
+        db,
+        "organization.membership.invited",
+        Some(&claims.sub),
+        format!(
+            "organization_id={}, principal_id={}, management_role={}",
+            membership.organization_id, membership.principal_id, membership.management_role
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({"success": true, "data": membership})))
+}
+
+async fn update_delegated_membership_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, principal_id)): Path<(String, String)>,
+    Json(payload): Json<UpdateOrganizationMembershipRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let actor = require_delegated_manager(&state, &claims, &organization_id).await?;
+    require_delegated_mfa(&state, &claims).await?;
+    let db = require_organization_db(&state)?;
+    let membership = crate::db::update_organization_membership_as_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        &principal_id,
+        &payload.status,
+        payload.management_role.as_deref(),
+    )
+    .await
+    .map_err(map_delegated_error)?;
+    audit_organization_event(
+        db,
+        "organization.membership.updated",
+        Some(&claims.sub),
+        format!(
+            "organization_id={}, principal_id={}, status={}, management_role={}",
+            membership.organization_id,
+            membership.principal_id,
+            membership.status,
+            membership.management_role
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({"success": true, "data": membership})))
+}
+
+async fn join_delegated_membership_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, target_principal_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let db = require_organization_db(&state)?;
+    let principal = resolve_delegated_principal(db, &claims).await?;
+    if principal.id != target_principal_id {
+        return Err(AuthError::Forbidden);
+    }
+    if let Some(context_organization_id) = claims.organization_id.as_deref() {
+        if context_organization_id != organization_id {
+            return Err(AuthError::Forbidden);
+        }
+    }
+    require_delegated_mfa(&state, &claims).await?;
+    let membership = crate::db::join_organization_membership(db, &organization_id, &principal.id)
+        .await
+        .map_err(map_delegated_error)?;
+    audit_organization_event(
+        db,
+        "organization.membership.joined",
+        Some(&claims.sub),
+        format!(
+            "organization_id={}, principal_id={}",
+            membership.organization_id, membership.principal_id
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({"success": true, "data": membership})))
+}
+
+async fn list_delegated_roles_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, principal_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    require_delegated_manager(&state, &claims, &organization_id).await?;
+    let db = require_organization_db(&state)?;
+    let bindings = crate::db::get_organization_role_bindings(db, &organization_id, &principal_id)
+        .await
+        .map_err(map_delegated_error)?;
+    Ok(Json(json!({"success": true, "data": bindings})))
+}
+
+async fn assign_delegated_role_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, principal_id)): Path<(String, String)>,
+    Json(payload): Json<OrganizationRoleBindingRequest>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let actor = require_delegated_manager(&state, &claims, &organization_id).await?;
+    require_delegated_mfa(&state, &claims).await?;
+    let db = require_organization_db(&state)?;
+    let binding = crate::db::assign_organization_role_as_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        &principal_id,
+        &payload.role_id,
+    )
+    .await
+    .map_err(map_delegated_error)?;
+    audit_organization_event(
+        db,
+        "organization.role_binding.assigned",
+        Some(&claims.sub),
+        format!(
+            "organization_id={}, principal_id={}, role_id={}",
+            binding.organization_id, binding.principal_id, binding.role_id
+        ),
+    )
+    .await;
+    Ok(Json(json!({"success": true, "data": binding})))
+}
+
+async fn revoke_delegated_role_handler(
+    claims: Claims,
+    State(state): State<AppState>,
+    Path((organization_id, principal_id, role_id)): Path<(String, String, String)>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let actor = require_delegated_manager(&state, &claims, &organization_id).await?;
+    require_delegated_mfa(&state, &claims).await?;
+    let db = require_organization_db(&state)?;
+    let revoked = crate::db::revoke_organization_role_as_manager(
+        db,
+        &organization_id,
+        &actor.id,
+        &principal_id,
+        &role_id,
+    )
+    .await
+    .map_err(map_delegated_error)?;
+    audit_organization_event(
+        db,
+        "organization.role_binding.revoked",
+        Some(&claims.sub),
+        format!(
+            "organization_id={}, principal_id={}, role_id={}, revoked={revoked}",
+            organization_id, principal_id, role_id
+        ),
+    )
+    .await;
+    Ok(Json(json!({"success": true, "data": {"revoked": revoked}})))
 }

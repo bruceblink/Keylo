@@ -13,6 +13,9 @@ pub const USER_CLASS_INTERNAL_EMPLOYEE: &str = "internal_employee";
 pub const USER_CLASS_EXTERNAL_CUSTOMER: &str = "external_customer";
 pub const ROLE_SCOPE_PLATFORM: &str = "platform";
 pub const ROLE_SCOPE_ORGANIZATION: &str = "organization";
+pub const ORGANIZATION_MANAGEMENT_ROLE_MEMBER: &str = "member";
+pub const ORGANIZATION_MANAGEMENT_ROLE_ADMIN: &str = "admin";
+pub const ORGANIZATION_MANAGEMENT_ROLE_OWNER: &str = "owner";
 
 #[derive(Debug, Deserialize)]
 pub struct OrganizationListQuery {
@@ -36,6 +39,32 @@ pub struct UpdateOrganizationStatusRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpsertOrganizationMembershipRequest {
     pub status: String,
+    #[serde(default)]
+    pub management_role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InviteOrganizationMemberRequest {
+    pub principal_id: String,
+    #[serde(default)]
+    pub management_role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateOrganizationMembershipRequest {
+    pub status: String,
+    #[serde(default)]
+    pub management_role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OrganizationRoleBindingRequest {
+    pub role_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OrganizationContextRequest {
+    pub organization_id: String,
 }
 
 pub fn is_valid_organization_kind(kind: &str) -> bool {
@@ -77,6 +106,7 @@ pub struct OrganizationMembership {
     pub status: String,
     pub joined_at: NaiveDateTime,
     pub invited_by: Option<String>,
+    pub management_role: String,
     pub updated_at: NaiveDateTime,
 }
 

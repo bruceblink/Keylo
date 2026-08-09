@@ -79,7 +79,7 @@
 仍待完成：
 
 - [x] 将 user_class 纳入 provision 与角色作用域校验；external_customer 不能获得 platform/global role，类别本身不直接授予权限；普通/批量/Principal/provision 写入、权限读取、资源树、管理 Token 与 introspection 均按 live user class 和 role scope 失败关闭。身份源映射仍需在后续接入切片中显式声明允许创建的 user_class。
-- [ ] 为组织 owner/admin 提供限定本组织的邀请、加入、成员管理和组织角色绑定 API；在授权引擎接入前，不得把 organization_role_bindings 解释为已经生效的角色。
+- [x] 为组织 owner/admin 提供限定本组织的邀请、加入、成员管理和组织角色绑定 API；在授权引擎接入前，不得把 organization_role_bindings 解释为已经生效的角色。
 - 将人类与机器主体分开建模：`user` 继续使用 `user_class`，`service` 保持现有服务 Principal，新增 `device` 作为设备/边缘代理/无人值守任务的机器 Principal；机器主体没有 user_class、密码登录、浏览器会话或人类 MFA 要求。
 - 新增 MachineCredential/API key 记录：principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by、allowed_scopes、allowed_audiences；原始 key 只在创建或轮换响应中显示一次。
 - 为用户、OIDC client、service client、identity source、resource、refresh session 和授权审计逐项定义 organization_id 归属；当前这些既有对象仍为 platform-scoped，不能仅加 nullable 列而不同时完成查询过滤、唯一约束和授权路径。
@@ -91,7 +91,7 @@
 
 - [x] 提供平台级组织创建、查询、停用、归档和恢复 API；组织 slug 唯一且不可作为 secret。状态只允许 `active -> disabled/archived`、`disabled -> active/archived`、`archived -> active` 或同状态幂等写入。
 - [x] 提供平台级成员状态管理 API，支持 pending、active、suspended、removed；敏感成员操作沿用近期 MFA 并写审计。
-- [ ] 提供组织 owner/admin 管理成员、邀请和加入的 API；这些接口必须被限制在其 active organization 内。
+- [x] 提供组织 owner/admin 管理成员、邀请和加入的 API；这些接口必须被限制在其 active organization 内。
 - internal_employee 可以使用平台作用域，或加入 kind=internal 的内部组织；external_customer 只有加入 kind=customer 的 active organization 后才能进入客户资源，未归属或 pending 状态不得创建组织上下文。
 - 身份源必须声明允许创建的 user_class 和组织归属策略；外部 OIDC/社交登录默认只能创建 external_customer，不得通过邮箱或 claim 自动获得 internal_employee。
 - 组织切换必须重新校验 membership 并签发新的 active organization context；不能信任任意 X-Organization-Id 请求头。

@@ -36,6 +36,10 @@ pub struct Claims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal_type: Option<String>,
 
+    /// Active organization context selected after a live membership check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+
     /// Issuer：签发方
     pub iss: String,
 
@@ -306,6 +310,7 @@ mod tests {
             uid: Some("user-1".to_string()),
             principal_id: Some("user-user-1".to_string()),
             principal_type: Some("user".to_string()),
+            organization_id: None,
             iss: state.config.jwt_issuer.clone(),
             aud: "admin-backend".to_string(),
             scope: vec!["read".to_string(), "write".to_string()],

@@ -195,6 +195,7 @@ mod database_tests {
             &external_principal.id,
             "active",
             Some("test-admin"),
+            None,
         )
         .await
         .is_err());
@@ -204,6 +205,7 @@ mod database_tests {
             &external_principal.id,
             "active",
             Some("test-admin"),
+            None,
         )
         .await
         .expect("External customer should join a customer organization");
@@ -246,6 +248,7 @@ mod database_tests {
             &principal.id,
             "active",
             Some("test-admin"),
+            None,
         )
         .await
         .expect("Failed to create organization membership");
@@ -319,6 +322,7 @@ mod database_tests {
             &principal.id,
             "active",
             Some("test-admin"),
+            None,
         )
         .await
         .is_err());
@@ -1130,5 +1134,160 @@ mod database_tests {
         assert!(deleted >= 1);
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].decision, "allow");
+    }
+
+    #[tokio::test]
+    async fn test_organization_managers_are_scoped_and_membership_writes_are_idempotent() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_organization_managers_are_scoped_and_membership_writes_are_idempotent: {msg}"
+                );
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+
+        let owner = db::create_user(
+            &pool,
+            &format!("org-owner-{suffix}"),
+            &format!("org-owner-{suffix}@example.test"),
+            Some("OrgOwner#123"),
+        )
+        .await
+        .expect("Failed to create organization owner");
+        db::promote_user_to_internal_employee(&pool, &owner.id, Some("test-admin"))
+            .await
+            .expect("Failed to promote organization owner")
+            .expect("Organization owner should exist");
+        let owner_principal = db::ensure_user_principal(&pool, &owner.id)
+            .await
+            .expect("Failed to resolve owner principal")
+            .expect("Owner principal should exist");
+
+        let member = db::create_user(
+            &pool,
+            &format!("org-member-{suffix}"),
+            &format!("org-member-{suffix}@example.test"),
+            Some("OrgMember#123"),
+        )
+        .await
+        .expect("Failed to create organization member");
+        db::set_user_class(
+            &pool,
+            &member.id,
+            keylo::models::USER_CLASS_INTERNAL_EMPLOYEE,
+            Some("test-admin"),
+        )
+        .await
+        .expect("Failed to promote member class")
+        .expect("Member should exist");
+        let member_principal = db::ensure_user_principal(&pool, &member.id)
+            .await
+            .expect("Failed to resolve member principal")
+            .expect("Member principal should exist");
+
+        let invited = db::invite_organization_member_as_manager(
+            &pool,
+            "org-internal",
+            &owner_principal.id,
+            &member_principal.id,
+            None,
+        )
+        .await
+        .expect("Owner should invite a member");
+        assert_eq!(invited.status, "pending");
+        assert_eq!(invited.management_role, "member");
+        let repeated_invite = db::invite_organization_member_as_manager(
+            &pool,
+            "org-internal",
+            &owner_principal.id,
+            &member_principal.id,
+            None,
+        )
+        .await
+        .expect("Repeated invite should be idempotent");
+        assert_eq!(repeated_invite.status, "pending");
+        assert_eq!(repeated_invite.joined_at, invited.joined_at);
+
+        let joined = db::join_organization_membership(&pool, "org-internal", &member_principal.id)
+            .await
+            .expect("Member should accept the invitation");
+        assert_eq!(joined.status, "active");
+        let repeated_join =
+            db::join_organization_membership(&pool, "org-internal", &member_principal.id)
+                .await
+                .expect("Repeated join should be idempotent");
+        assert_eq!(repeated_join.joined_at, joined.joined_at);
+
+        db::update_organization_membership_as_manager(
+            &pool,
+            "org-internal",
+            &owner_principal.id,
+            &member_principal.id,
+            "active",
+            Some("admin"),
+        )
+        .await
+        .expect("Owner should promote a member to organization admin");
+        assert!(db::update_organization_membership_as_manager(
+            &pool,
+            "org-internal",
+            &member_principal.id,
+            &owner_principal.id,
+            "suspended",
+            None,
+        )
+        .await
+        .is_err());
+
+        let role = db::create_organization_role(
+            &pool,
+            &format!("org-manager-role-{suffix}"),
+            Some("Organization role binding"),
+            "user",
+        )
+        .await
+        .expect("Failed to create organization role");
+        let binding = db::assign_organization_role_as_manager(
+            &pool,
+            "org-internal",
+            &owner_principal.id,
+            &member_principal.id,
+            &role.id,
+        )
+        .await
+        .expect("Owner should assign organization role");
+        assert_eq!(binding.scope, "organization");
+        assert!(db::revoke_organization_role_as_manager(
+            &pool,
+            "org-internal",
+            &owner_principal.id,
+            &member_principal.id,
+            &role.id,
+        )
+        .await
+        .expect("Owner should revoke organization role"));
+        assert!(!db::revoke_organization_role_as_manager(
+            &pool,
+            "org-internal",
+            &owner_principal.id,
+            &member_principal.id,
+            &role.id,
+        )
+        .await
+        .expect("Repeated role revoke should be idempotent"));
+
+        assert!(db::invite_organization_member_as_manager(
+            &pool,
+            "org-does-not-exist",
+            &owner_principal.id,
+            &member_principal.id,
+            None,
+        )
+        .await
+        .is_err());
     }
 }

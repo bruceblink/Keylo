@@ -114,7 +114,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
   "user_token_endpoint": "http://127.0.0.1:2345/v1/auth/token",
   "admin_token_endpoint": "http://127.0.0.1:2345/v1/admin/token",
   "supported_token_types": ["access", "refresh", "service_access"],
-  "supported_claims": ["iss", "sub", "aud", "exp", "iat", "jti", "scope", "role", "token_type", "uid", "principal_id", "principal_type"],
+  "supported_claims": ["iss", "sub", "aud", "exp", "iat", "jti", "scope", "role", "token_type", "uid", "principal_id", "principal_type", "organization_id"],
   "supported_signing_algorithms": ["RS256"],
   "supported_audiences": ["admin-backend", "crawler"],
   "documentation_uri": "http://127.0.0.1:2345/docs/integrations/THIRD_PARTY_INTEGRATION.md"
@@ -182,7 +182,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 - **GET** `/v1/auth/me`
 - 鉴权：是（access）
-- 响应字段：`sub`、`uid`、`principal_id`、`principal_type`、`scope[]`、`role[]`、`aud`、`exp`、`iss`、`jti`
+- 响应字段：`sub`、`uid`、`principal_id`、`principal_type`、`organization_id`、`scope[]`、`role[]`、`aud`、`exp`、`iss`、`jti`
 - 字段说明：`uid` 为 `users` 表主键（稳定用户 ID），`principal_id` 为 Keylo 2.0 统一 Principal 主键，`sub` 为主体标识字符串。
 
 ### 3.5 退出登录
@@ -574,7 +574,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 ### 7.5 平台组织与成员状态管理
 
-> 这些是平台管理员接口，不是组织 owner/admin 自服务接口。当前没有 active organization Token context，组织角色绑定也尚未进入授权决策；因此这些端点不能被解释为已经完成租户资源隔离。
+> 这些是平台管理员接口，不是组织 owner/admin 自服务接口。组织角色绑定仍未进入通用授权决策；因此这些端点不能被解释为已经完成租户资源隔离。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -598,9 +598,31 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 `kind` 只能是 `customer` 或 `internal`，`slug` 全局唯一，且不是认证凭据。组织不会被物理删除。状态写入请求为 `{ "status": "active|disabled|archived" }`，只允许 `active -> disabled/archived`、`disabled -> active/archived`、`archived -> active` 或同状态重试；不允许的转换返回 `400 invalid_request`。
 
-成员状态写入请求为 `{ "status": "pending|active|suspended|removed" }`。对同一 `(organization_id, principal_id)` 的重复请求不会创建重复关系。external_customer 不能加入 internal 组织；disabled 或 archived 组织不能创建 pending/active 成员关系。成功写入正常会产生 `organization.created`、`organization.status_changed` 或 `organization.membership_changed` 审计事件。
+成员状态写入请求为 `{ "status": "pending|active|suspended|removed", "management_role": "member|admin|owner" }`；`management_role` 可由平台管理员用于显式设置组织初始 owner/admin，省略时保持已有管理角色或默认为 `member`。对同一 `(organization_id, principal_id)` 的重复请求不会创建重复关系。external_customer 不能加入 internal 组织；disabled 或 archived 组织不能创建 pending/active 成员关系。成功写入正常会产生 `organization.created`、`organization.status_changed` 或 `organization.membership_changed` 审计事件。
 
-### 7.6 Refresh Session 与会话策略
+### 7.6 组织 owner/admin 自服务成员 API
+
+组织管理员只能操作签名 access token 中的当前 `organization_id`，服务端不会信任 `X-Organization-Id` 或仅凭路径参数授权。先通过以下端点选择组织上下文：
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| POST | `/v1/auth/organization-context` | user access token | 校验 active membership 后重新签发带 `organization_id` 的短期 access token |
+
+除首次接受邀请的 join 请求外，以下接口都要求 token 中的 `organization_id` 与路径一致，并实时确认调用者是该组织 active membership 的 `admin` 或 `owner`。人类写操作沿用近期 MFA 规则；机器 client、普通 member、pending/suspended/removed 成员和跨组织路径统一拒绝。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/organizations/{organization_id}/memberships?status=&limit=&offset=` | 查询当前组织成员 |
+| POST | `/v1/organizations/{organization_id}/memberships/invitations` | `{ "principal_id": "...", "management_role": "member|admin|owner" }`，创建或重复刷新 pending 邀请 |
+| PUT | `/v1/organizations/{organization_id}/memberships/{principal_id}` | 更新成员状态和管理角色；admin 不能授予或修改 owner |
+| POST | `/v1/organizations/{organization_id}/memberships/{principal_id}/join` | 仅目标本人接受 pending 邀请；重复 join 幂等 |
+| GET | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles` | 查询组织角色绑定 |
+| POST | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles` | `{ "role_id": "..." }`，只接受 organization-scoped role |
+| DELETE | `/v1/organizations/{organization_id}/memberships/{principal_id}/roles/{role_id}` | 幂等撤销组织角色绑定 |
+
+`organization_role_bindings` 在当前版本只作为显式绑定存储，不会自动转化为通用平台权限；跨组织、停用组织、非 active membership 和平台角色绑定均失败关闭。成功写操作会分别写入 `organization.membership.invited`、`organization.membership.updated`、`organization.membership.joined`、`organization.role_binding.assigned` 或 `organization.role_binding.revoked` 审计事件。
+
+### 7.7 Refresh Session 与会话策略
 
 Keylo 2.0 使用 refresh session 作为稳定会话索引：
 
