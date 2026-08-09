@@ -380,10 +380,12 @@ async fn list_principal_refresh_sessions_handler(
         return Err(AuthError::NotFound);
     }
 
-    let sessions = crate::db::list_refresh_sessions_for_principal(
+    let sessions = crate::db::list_refresh_sessions_for_principal_paginated(
         db,
         &principal_id,
         query.include_revoked.unwrap_or(false),
+        query.limit.unwrap_or(50).clamp(1, 200),
+        query.offset.unwrap_or(0).max(0),
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;

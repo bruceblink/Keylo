@@ -534,7 +534,7 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 | POST | `/v1/admin/principals/{principal_id}/roles` | 给 Principal 绑定角色 |
 | DELETE | `/v1/admin/principals/{principal_id}/roles/{role_id}` | 撤销 Principal 角色 |
 | GET | `/v1/admin/principals/{principal_id}/effective-permissions` | Principal 最终权限 |
-| GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false` | Principal refresh session 列表 |
+| GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false&limit=&offset=` | Principal refresh session 列表；limit 默认 50、最大 200，offset 默认 0 |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions` | 撤销该 Principal 的所有 refresh session |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions/{session_id}` | 撤销单个 refresh session |
 | GET | `/v1/admin/principals/{principal_id}/api-keys?organization_id=` | 查询该 machine Principal 在精确 scope 内的 API key 元数据 |

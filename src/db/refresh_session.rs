@@ -429,49 +429,30 @@ pub async fn list_refresh_sessions_for_principal(
     principal_id: &str,
     include_revoked: bool,
 ) -> Result<Vec<RefreshSessionInfo>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT
-            id,
-            principal_id,
-            client_id,
-            organization_id,
-            login_ip,
-            user_agent,
-            current_access_jti,
-            extract(epoch from issued_at)::bigint AS issued_at,
-            extract(epoch from rotated_at)::bigint AS rotated_at,
-            extract(epoch from expires_at)::bigint AS expires_at,
-            extract(epoch from revoked_at)::bigint AS revoked_at,
-            revoke_reason
-        FROM refresh_sessions
-        WHERE principal_id = $1
-          AND ($2 OR revoked_at IS NULL)
-        ORDER BY issued_at DESC
-        "#,
-    )
-    .bind(principal_id)
-    .bind(include_revoked)
-    .fetch_all(pool)
-    .await?;
+    list_refresh_sessions_for_principal_paginated(pool, principal_id, include_revoked, i64::MAX, 0)
+        .await
+}
 
-    Ok(rows
-        .into_iter()
-        .map(|row| RefreshSessionInfo {
-            id: row.get("id"),
-            principal_id: row.get("principal_id"),
-            client_id: row.get("client_id"),
-            organization_id: row.get("organization_id"),
-            login_ip: row.get("login_ip"),
-            user_agent: row.get("user_agent"),
-            current_access_jti: row.get("current_access_jti"),
-            issued_at: row.get("issued_at"),
-            rotated_at: row.get("rotated_at"),
-            expires_at: row.get("expires_at"),
-            revoked_at: row.get("revoked_at"),
-            revoke_reason: row.get("revoke_reason"),
-        })
-        .collect())
+/// List one Principal's refresh sessions with the same bounded pagination contract as the
+/// global session endpoint. The compatibility wrapper above keeps existing callers unbounded.
+pub async fn list_refresh_sessions_for_principal_paginated(
+    pool: &PgPool,
+    principal_id: &str,
+    include_revoked: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<RefreshSessionInfo>> {
+    list_refresh_sessions_in_organization(
+        pool,
+        None,
+        include_revoked,
+        Some(principal_id),
+        None,
+        None,
+        limit,
+        offset,
+    )
+    .await
 }
 
 pub async fn list_refresh_sessions(
@@ -530,7 +511,7 @@ pub async fn list_refresh_sessions_in_organization(
           AND ($3::text IS NULL OR principal_id = $3)
           AND ($4::text IS NULL OR client_id = $4)
           AND ($5::text IS NULL OR login_ip = $5)
-        ORDER BY issued_at DESC
+        ORDER BY issued_at DESC, id DESC
         LIMIT $6 OFFSET $7
         "#,
     )

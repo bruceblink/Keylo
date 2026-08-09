@@ -5380,6 +5380,42 @@ mod tests {
             "KeyloIntegrationTest/1.0"
         );
 
+        let second_login = server
+            .post("/v1/auth/token")
+            .add_header("User-Agent", "KeyloIntegrationTest/2.0")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": password
+            }))
+            .await;
+        second_login.assert_status_ok();
+
+        let all_sessions_resp = server
+            .get(&format!(
+                "/v1/admin/principals/{}/refresh-sessions",
+                principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        all_sessions_resp.assert_status_ok();
+        let all_sessions_body: serde_json::Value = all_sessions_resp.json();
+        assert!(all_sessions_body["data"].as_array().unwrap().len() >= 2);
+
+        let paged_sessions_resp = server
+            .get(&format!(
+                "/v1/admin/principals/{}/refresh-sessions?limit=1&offset=1",
+                principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        paged_sessions_resp.assert_status_ok();
+        let paged_sessions_body: serde_json::Value = paged_sessions_resp.json();
+        assert_eq!(paged_sessions_body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            paged_sessions_body["data"][0]["id"],
+            all_sessions_body["data"][1]["id"]
+        );
+
         let global_sessions_resp = server
             .get(&format!(
                 "/v1/admin/refresh-sessions?principal_id={}",
