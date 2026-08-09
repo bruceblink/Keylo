@@ -774,7 +774,7 @@ Keylo 2.0 使用 refresh session 作为稳定会话索引：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/admin/identity-sources` | 身份源列表 |
+| GET | `/v1/admin/identity-sources?limit=&offset=` | 身份源列表（敏感配置不会回显）；响应包含 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | POST | `/v1/admin/identity-sources` | 注册身份源 |
 | GET | `/v1/admin/identity-sources/{source_id}` | 身份源详情 |
 | PUT | `/v1/admin/identity-sources/{source_id}` | 更新身份源 |

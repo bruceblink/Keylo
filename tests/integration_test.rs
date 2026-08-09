@@ -2704,6 +2704,16 @@ mod tests {
             .unwrap()
             .iter()
             .any(|source| source["id"] == source_id));
+
+        let page_resp = server
+            .get("/v1/admin/identity-sources?limit=1&offset=0")
+            .add_header("Authorization", format!("Bearer {}", admin_access_token))
+            .await;
+        page_resp.assert_status_ok();
+        let page_body: serde_json::Value = page_resp.json();
+        assert_eq!(page_body["pagination"]["limit"], 1);
+        assert_eq!(page_body["pagination"]["offset"], 0);
+        assert!(page_body["pagination"]["has_more"].is_boolean());
     }
 
     #[tokio::test]

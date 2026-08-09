@@ -159,6 +159,7 @@
 - [x] 用户管理列表提供真实 `has_more`、稳定 `next_offset` 和显式 `limit/offset` 元数据；后续列表切片沿用同一契约。
 - [x] Principal 管理列表复用同一真实分页元数据契约，过滤条件不改变排序和续页语义。
 - [x] 管理客户端列表支持有界 `limit/offset` 与真实 `has_more/next_offset`，无参数调用保持兼容。
+- [x] 身份源列表支持同一有界分页元数据，同时保留无参数调用和敏感配置去除。
 - 统一 list/filter/pagination、幂等更新、稳定错误码和变更原因字段。
 - 明确 admin client、user principal、service principal 和 future delegated admin 的权限边界；危险操作继续要求近期 MFA。
 - 优先改进客户端、服务、用户、身份源、Principal、RBAC、资源和审计接口的排障反馈，不先开发完整管理后台。

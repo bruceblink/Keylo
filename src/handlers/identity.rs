@@ -14,6 +14,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::time::Duration;
 
 const SUPPORTED_SOURCE_TYPES: [&str; 4] = ["local_password", "oauth2", "oidc_upstream", "ldap"];
@@ -611,17 +612,45 @@ async fn resolve_oidc_upstream_user(
 
 pub async fn list_identity_sources(
     State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, AuthError> {
     let db = require_db(&state)?;
-    let sources = identity_db::list_identity_sources(db)
-        .await
-        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+    let has_explicit_pagination = params.contains_key("limit") || params.contains_key("offset");
+    let requested_limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let requested_offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let (sources, has_more, limit, offset) = if has_explicit_pagination {
+        let (sources, has_more) =
+            identity_db::list_identity_sources_page(db, requested_limit, requested_offset)
+                .await
+                .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        (sources, has_more, requested_limit, requested_offset)
+    } else {
+        let sources = identity_db::list_identity_sources(db)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        let count = sources.len() as i64;
+        (sources, false, count, 0)
+    };
 
     Ok(Json(json!({
         "identity_sources": sources
             .into_iter()
             .map(IdentitySource::redacted_for_response)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 

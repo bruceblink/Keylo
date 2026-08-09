@@ -135,6 +135,33 @@ pub async fn create_identity_source(
     Ok(source)
 }
 
+/// List one identity-source page and report whether another page exists.
+pub async fn list_identity_sources_page(
+    pool: &PgPool,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<IdentitySource>, bool)> {
+    let limit = limit.max(0);
+    let mut sources = sqlx::query_as::<_, IdentitySource>(
+        r#"
+        SELECT id, name, source_type, display_name, description, config, claim_mapping,
+               jit_enabled, auto_link_enabled, active, allowed_user_class,
+               organization_strategy, organization_id, created_at, updated_at
+        FROM identity_sources
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit + 1)
+    .bind(offset.max(0))
+    .fetch_all(pool)
+    .await?;
+
+    let has_more = sources.len() > limit as usize;
+    sources.truncate(limit as usize);
+    Ok((sources, has_more))
+}
+
 pub async fn list_identity_sources(pool: &PgPool) -> Result<Vec<IdentitySource>> {
     let sources = sqlx::query_as::<_, IdentitySource>(
         r#"
