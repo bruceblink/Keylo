@@ -731,7 +731,7 @@ wwIDAQAB
         );
         assert_eq!(
             body["claims_supported"],
-            serde_json::json!(["sub", "name", "email", "email_verified"])
+            serde_json::json!(["sub", "name", "email", "email_verified", "organization_id"])
         );
         assert_eq!(body["authorization_response_iss_parameter_supported"], true);
     }
