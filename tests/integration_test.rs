@@ -2634,6 +2634,54 @@ mod tests {
             .add_header("Authorization", format!("Bearer {token}"))
             .await;
         assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+
+        let generic_admin_response = server
+            .get("/api/rbac/roles")
+            .add_header("Authorization", format!("Bearer {token}"))
+            .await;
+        assert_eq!(generic_admin_response.status_code(), StatusCode::FORBIDDEN);
+
+        let service_id = format!("introspection-guard-{suffix}");
+        let service_scopes = vec!["read".to_string()];
+        let service_audiences = vec!["admin-backend".to_string()];
+        db::create_service_client(
+            &pool,
+            db::CreateServiceClientParams {
+                service_id: &service_id,
+                service_secret: "IntrospectionGuard#123",
+                name: "Introspection guard service",
+                description: None,
+                allowed_scopes: &service_scopes,
+                allowed_audiences: &service_audiences,
+                integration_type: "third_party",
+                introspection_allowed: true,
+                token_ttl_seconds: None,
+                owner: None,
+                contact: None,
+            },
+        )
+        .await
+        .unwrap();
+        let service_login = server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": "IntrospectionGuard#123",
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await;
+        service_login.assert_status_ok();
+        let service_login_body: serde_json::Value = service_login.json();
+        let service_token = service_login_body["access_token"].as_str().unwrap();
+        let introspection = server
+            .post("/v1/auth/introspect")
+            .add_header("Authorization", format!("Bearer {service_token}"))
+            .json(&json!({ "token": token }))
+            .await;
+        introspection.assert_status_ok();
+        let introspection_body: serde_json::Value = introspection.json();
+        assert_eq!(introspection_body["active"], false);
     }
 
     #[tokio::test]

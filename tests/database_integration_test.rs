@@ -198,6 +198,32 @@ mod database_tests {
         )
         .await
         .is_err());
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &external_principal.id,
+            "active",
+            Some("test-admin"),
+        )
+        .await
+        .expect("External customer should join a customer organization");
+        let customer_role = db::create_organization_role(
+            &pool,
+            &format!("customer-member-{suffix}"),
+            Some("Customer organization member role"),
+            "user",
+        )
+        .await
+        .expect("Failed to create customer organization role");
+        db::assign_organization_role(
+            &pool,
+            &organization.id,
+            &external_principal.id,
+            &customer_role.id,
+            Some("test-admin"),
+        )
+        .await
+        .expect("External customer should receive organization role");
 
         let user = db::set_user_class(
             &pool,
@@ -275,8 +301,11 @@ mod database_tests {
         let bindings = db::get_organization_role_bindings(&pool, &organization.id, &principal.id)
             .await
             .expect("Failed to list organization role bindings");
-        assert_eq!(bindings.len(), 1);
-        assert_eq!(bindings[0].role_id, role.id);
+        assert_eq!(bindings.len(), 2);
+        assert!(bindings
+            .iter()
+            .any(|binding| binding.role_id == customer_role.id));
+        assert!(bindings.iter().any(|binding| binding.role_id == role.id));
 
         let disabled = db::set_organization_status(&pool, &organization.id, "disabled")
             .await
@@ -302,6 +331,218 @@ mod database_tests {
         )
         .await
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_platform_roles_require_internal_employee_and_fail_closed_for_legacy_bindings() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_platform_roles_require_internal_employee_and_fail_closed_for_legacy_bindings: {msg}"
+                );
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let platform_role = db::create_role_with_options(
+            &pool,
+            "admin",
+            Some("Platform administrator"),
+            "user",
+            false,
+        )
+        .await
+        .expect("Failed to create platform role");
+        let permission = db::create_permission(
+            &pool,
+            &format!("platform.read.{suffix}"),
+            Some("Platform permission"),
+        )
+        .await
+        .expect("Failed to create platform permission");
+        db::assign_permission_to_role(&pool, &platform_role.id, &permission.id)
+            .await
+            .expect("Failed to bind platform permission");
+
+        let external = db::create_user(
+            &pool,
+            &format!("external-platform-{suffix}"),
+            &format!("external-platform-{suffix}@example.test"),
+            Some("ExternalPlatform#123"),
+        )
+        .await
+        .expect("Failed to create external user");
+        let external_principal = db::ensure_user_principal(&pool, &external.id)
+            .await
+            .expect("Failed to resolve external principal")
+            .expect("External principal should exist");
+
+        let user_assignment_error = db::assign_role_to_user(&pool, &external.id, &platform_role.id)
+            .await
+            .expect_err("External customer must not receive a platform role");
+        assert!(user_assignment_error
+            .to_string()
+            .starts_with("external_customer_cannot_receive_platform_role"));
+        let principal_assignment_error =
+            db::assign_role_to_principal(&pool, &external_principal.id, &platform_role.id)
+                .await
+                .expect_err("External principal must not receive a platform role");
+        assert!(principal_assignment_error
+            .to_string()
+            .starts_with("external_customer_cannot_receive_platform_role"));
+        let denied_user_role_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM user_roles WHERE user_id = $1")
+                .bind(&external.id)
+                .fetch_one(&pool)
+                .await
+                .expect("Failed to count denied user roles");
+        let denied_principal_role_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM principal_roles WHERE principal_id = $1")
+                .bind(&external_principal.id)
+                .fetch_one(&pool)
+                .await
+                .expect("Failed to count denied principal roles");
+        assert_eq!(denied_user_role_count, 0);
+        assert_eq!(denied_principal_role_count, 0);
+
+        // Simulate a pre-bound legacy customer account: read paths must deny it
+        // even though the old rows still exist for administrators to inspect.
+        sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)")
+            .bind(&external.id)
+            .bind(&platform_role.id)
+            .execute(&pool)
+            .await
+            .expect("Failed to seed legacy user role");
+        sqlx::query("INSERT INTO principal_roles (principal_id, role_id) VALUES ($1, $2)")
+            .bind(&external_principal.id)
+            .bind(&platform_role.id)
+            .execute(&pool)
+            .await
+            .expect("Failed to seed legacy principal role");
+        assert!(!db::user_is_platform_admin(&pool, &external.id)
+            .await
+            .expect("Failed to resolve legacy user admin status"));
+        assert!(
+            !db::user_has_permission(&pool, &external.id, &permission.name)
+                .await
+                .expect("Failed to check legacy user permission")
+        );
+        assert!(
+            !db::principal_has_permission(&pool, &external_principal.id, &permission.name,)
+                .await
+                .expect("Failed to check legacy principal permission")
+        );
+        let _resource = db::create_resource(
+            &pool,
+            db::CreateResourceParams {
+                app: "legacy-guard",
+                resource_type: "menu",
+                code: &format!("platform.read.{suffix}"),
+                name: "Legacy guard resource",
+                parent_id: None,
+                display_order: 0,
+                description: None,
+                metadata: None,
+                permission_ids: std::slice::from_ref(&permission.id),
+            },
+        )
+        .await
+        .expect("Failed to create legacy guard resource");
+        let visible_resources = db::authorized_resources_for_principal(
+            &pool,
+            &external_principal.id,
+            "legacy-guard",
+            "menu",
+        )
+        .await
+        .expect("Failed to resolve legacy resource tree");
+        assert!(visible_resources.is_empty());
+        assert!(db::set_user_class(
+            &pool,
+            &external.id,
+            keylo::models::USER_CLASS_INTERNAL_EMPLOYEE,
+            Some("test-admin"),
+        )
+        .await
+        .expect_err("Dirty platform bindings must block promotion")
+        .to_string()
+        .starts_with("cannot_promote_user_with_existing_platform_roles"));
+
+        let internal = db::create_user(
+            &pool,
+            &format!("internal-platform-{suffix}"),
+            &format!("internal-platform-{suffix}@example.test"),
+            Some("InternalPlatform#123"),
+        )
+        .await
+        .expect("Failed to create internal candidate");
+        db::set_user_class(
+            &pool,
+            &internal.id,
+            keylo::models::USER_CLASS_INTERNAL_EMPLOYEE,
+            Some("test-admin"),
+        )
+        .await
+        .expect("Failed to promote internal candidate");
+        db::assign_role_to_user(&pool, &internal.id, &platform_role.id)
+            .await
+            .expect("Internal employee should receive platform role");
+        assert!(db::user_is_platform_admin(&pool, &internal.id)
+            .await
+            .expect("Failed to resolve internal admin status"));
+        assert!(db::set_user_class(
+            &pool,
+            &internal.id,
+            keylo::models::USER_CLASS_EXTERNAL_CUSTOMER,
+            Some("test-admin"),
+        )
+        .await
+        .expect_err("Platform role must be revoked before demotion")
+        .to_string()
+        .starts_with("cannot_demote_user_with_platform_roles"));
+        let internal_principal = db::get_principal_by_ref(&pool, "user", &internal.id)
+            .await
+            .expect("Failed to load internal principal")
+            .expect("Internal principal should exist");
+        assert!(
+            db::revoke_role_from_principal(&pool, &internal_principal.id, &platform_role.id,)
+                .await
+                .expect("Failed to revoke role through Principal path")
+        );
+        assert!(!db::user_is_platform_admin(&pool, &internal.id)
+            .await
+            .expect("Failed to resolve revoked admin status"));
+        assert!(
+            !db::user_has_permission(&pool, &internal.id, &permission.name)
+                .await
+                .expect("Failed to resolve revoked user permission")
+        );
+        assert!(
+            !db::principal_has_permission(&pool, &internal_principal.id, &permission.name)
+                .await
+                .expect("Failed to resolve revoked principal permission")
+        );
+        db::assign_role_to_principal(&pool, &internal_principal.id, &platform_role.id)
+            .await
+            .expect("Failed to restore platform role through Principal path");
+        assert!(db::user_is_platform_admin(&pool, &internal.id)
+            .await
+            .expect("Principal grant should restore user admin status"));
+        assert!(
+            db::revoke_role_from_user(&pool, &internal.id, &platform_role.id)
+                .await
+                .expect("Failed to revoke role through user path")
+        );
+        assert!(!db::user_is_platform_admin(&pool, &internal.id)
+            .await
+            .expect("Failed to resolve second revoked admin status"));
+        assert!(
+            !db::principal_has_permission(&pool, &internal_principal.id, &permission.name)
+                .await
+                .expect("Failed to resolve second revoked principal permission")
+        );
     }
 
     #[tokio::test]

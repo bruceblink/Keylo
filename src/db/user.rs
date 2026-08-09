@@ -151,6 +151,47 @@ pub async fn set_user_class(
     }
 
     let mut transaction = pool.begin().await?;
+    // Serialize classification changes with platform-role assignment. A user
+    // may not become an external customer while retaining platform authority.
+    let current_user_class: Option<String> =
+        sqlx::query("SELECT user_class FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .map(|row| row.get("user_class"));
+    let Some(current_user_class) = current_user_class else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    if current_user_class != user_class {
+        let has_platform_role = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM user_roles ur
+                INNER JOIN roles r ON r.id = ur.role_id
+                WHERE ur.user_id = $1 AND r.scope = 'platform'
+            ) OR EXISTS (
+                SELECT 1
+                FROM principals p
+                INNER JOIN principal_roles pr ON pr.principal_id = p.id
+                INNER JOIN roles r ON r.id = pr.role_id
+                WHERE p.principal_type = 'user'
+                  AND p.ref_id = $1
+                  AND r.scope = 'platform'
+            )
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if has_platform_role {
+            if user_class == USER_CLASS_EXTERNAL_CUSTOMER {
+                anyhow::bail!("cannot_demote_user_with_platform_roles");
+            }
+            anyhow::bail!("cannot_promote_user_with_existing_platform_roles");
+        }
+    }
     let user = sqlx::query_as::<_, User>(
         r#"
         UPDATE users
@@ -768,6 +809,37 @@ pub async fn provision_user_with_roles(
     Vec<crate::models::Role>,
     Vec<crate::models::Permission>,
 )> {
+    provision_user_with_roles_as_class(
+        pool,
+        username,
+        email,
+        password,
+        USER_CLASS_EXTERNAL_CUSTOMER,
+        role_ids,
+        role_names,
+    )
+    .await
+}
+
+/// Atomically provisions one human account and validates every requested role
+/// against its explicit account class before any binding can be committed.
+pub async fn provision_user_with_roles_as_class(
+    pool: &PgPool,
+    username: &str,
+    email: &str,
+    password: Option<&str>,
+    user_class: &str,
+    role_ids: &[String],
+    role_names: &[String],
+) -> Result<(
+    User,
+    Vec<crate::models::Role>,
+    Vec<crate::models::Permission>,
+)> {
+    let user_class = user_class.trim();
+    if !is_valid_user_class(user_class) {
+        anyhow::bail!("invalid_user_class");
+    }
     let mut tx = pool.begin().await?;
 
     let user_id = Uuid::new_v4().to_string();
@@ -788,11 +860,24 @@ pub async fn provision_user_with_roles(
     .bind(&user_id)
     .bind(username)
     .bind(email)
-    .bind(USER_CLASS_EXTERNAL_CUSTOMER)
+    .bind(user_class)
     .bind(password_hash)
     .bind(now)
     .bind(now)
     .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO principals (id, principal_type, subject, ref_id, display_name, active)
+        VALUES ($1, 'user', $2, $3, $4, TRUE)
+        "#,
+    )
+    .bind(format!("user-{}", user_id))
+    .bind(format!("user:{}", user_id))
+    .bind(&user_id)
+    .bind(username)
+    .execute(&mut *tx)
     .await?;
 
     let mut normalized_role_ids: Vec<String> = role_ids
@@ -834,7 +919,7 @@ pub async fn provision_user_with_roles(
     if !normalized_role_ids.is_empty() {
         let rows = sqlx::query(
             r#"
-            SELECT id, assignable_to
+            SELECT id, assignable_to, scope
             FROM roles
             WHERE id = ANY($1)
             "#,
@@ -843,22 +928,28 @@ pub async fn provision_user_with_roles(
         .fetch_all(&mut *tx)
         .await?;
 
-        let mut assignable_by_role_id = std::collections::HashMap::new();
+        let mut role_attributes_by_id = std::collections::HashMap::new();
         for row in rows {
             let role_id: String = row.get("id");
             let assignable_to: String = row.get("assignable_to");
-            assignable_by_role_id.insert(role_id, assignable_to);
+            let scope: String = row.get("scope");
+            role_attributes_by_id.insert(role_id, (assignable_to, scope));
         }
 
         for role_id in &normalized_role_ids {
-            let Some(assignable_to) = assignable_by_role_id.get(role_id) else {
+            let Some((assignable_to, scope)) = role_attributes_by_id.get(role_id) else {
                 anyhow::bail!("role_not_bound: role id not found: {}", role_id);
             };
-            crate::db::ensure_role_assignable_to_principal_type(role_id, assignable_to, "user")?;
+            crate::db::ensure_user_can_receive_platform_role(
+                role_id,
+                assignable_to,
+                scope,
+                user_class,
+            )?;
         }
     }
 
-    for role_id in normalized_role_ids {
+    for role_id in &normalized_role_ids {
         sqlx::query(
             "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
         )
@@ -866,11 +957,16 @@ pub async fn provision_user_with_roles(
         .bind(role_id)
         .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            "INSERT INTO principal_roles (principal_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(format!("user-{}", user_id))
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;
-
-    crate::db::sync_user_roles_to_principal(pool, &user_id).await?;
 
     let roles = crate::db::get_user_roles(pool, &user_id).await?;
     let permissions = crate::db::get_user_permissions(pool, &user_id).await?;

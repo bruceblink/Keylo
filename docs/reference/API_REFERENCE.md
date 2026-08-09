@@ -19,7 +19,7 @@
 
 ### 1.2 受保护接口中间件规则
 
-- 管理接口：`role` 包含 `admin`，`scope` 包含 `admin`，`aud=admin-backend`
+- 管理接口：`role` 包含 `admin`，`scope` 包含 `admin`，`aud=admin-backend`，且服务端实时确认 user Principal 仍是 active 的 `internal_employee` 并拥有 platform-scoped `admin`/`super_admin` 角色；active admin client 也会实时复核。旧的或手工构造的 admin JWT 不会绕过该检查。
 - 平台组织管理接口：除管理 Token 条件外，人类主体必须实时为 `internal_employee`；client 主体必须仍是 active admin client。人类非 GET 请求继续适用近期 MFA 规则。
 - 用户自助接口：`role` 包含 `user`，`scope` 包含 `write`，`aud=admin-backend`
 - 服务内省接口：`role=service`，`scope` 包含 `read`
@@ -305,6 +305,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
   "username": "alice",
   "email": "alice@example.com",
   "password": "Alice#12345",
+  "user_class": "external_customer",
   "role_ids": ["role-id-1"],
   "role_names": ["ssc_dispatcher"]
 }
@@ -369,7 +370,7 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 }
 ```
 
-`assignable_to` 可选，支持 `user`、`service`、`client`、`all`，默认 `all`。它用于限制角色可以绑定到哪类 Principal。
+`assignable_to` 可选，支持 `user`、`service`、`client`、`all`，默认 `all`。它用于限制角色可以绑定到哪类 Principal。当前通过用户角色、Principal 角色接口和 provision 写入的都是 platform scope；organization scope 角色只能通过组织成员关系绑定。`external_customer` 不能绑定 platform/global role，`provision` 若要创建并绑定平台角色必须显式设置 `user_class: "internal_employee"`；省略时默认为 `external_customer`。
 
 ### 6.2 权限管理
 
@@ -393,6 +394,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 | POST | `/api/rbac/users/{user_id}/roles` |
 | POST | `/api/rbac/users/{user_id}/roles/batch` |
 | DELETE | `/api/rbac/users/{user_id}/roles/{role_id}` |
+
+用户角色写入会在同一事务中预检全部角色。外部客户或 organization-scoped 角色会返回 `400 invalid_role_assignment`，批量请求失败时不会留下前半批绑定；历史不符合当前类别规则的绑定在权限查询、资源树和 Token introspection 中默认失败关闭。
 
 ### 6.4 角色权限管理
 
@@ -514,6 +517,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
   "role_id": "role-id"
 }
 ```
+
+对 `user` Principal 的 platform role 写入会与 user-role 关系在同一事务中同步；从任一用户或 Principal 管理接口撤销都会清理两侧绑定。`external_customer` 及 organization-scoped role 均不能使用该平台绑定接口。
 
 更新角色时可提供读取结果中的 `expected_version`。版本不一致返回 `409 role_version_conflict`；省略该字段保持兼容更新。
 `change_reason` 可选，提供时会进入角色结构化变更历史；通过 `GET /api/rbac/roles/{role_id}/changes?limit=&offset=` 查询版本、操作者、原因和前后快照。

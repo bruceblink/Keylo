@@ -97,7 +97,7 @@ Principal 是 Keylo 的统一安全主体。人类用户、服务/设备机器�
 | Principal | `user`、`service`、`device`、`client` 的统一身份；当前代码已有 `user/service/client`，`device` 属于后续机器主体扩展 | subject 稳定进入 JWT sub；禁用主体默认拒绝 |
 | User class | user Principal 的账户类别 | 当前至少为 internal_employee、external_customer；类别只约束入驻和可分配作用域，不直接授予权限 |
 | Machine credential | 绑定到 service/device Principal 的 service secret 或 API key | 凭证不等于权限；API key 只用于机器调用，必须经过状态、组织、scope/audience 和 RBAC 校验 |
-| Role | 可绑定给适用类型 Principal 的权限集合 | assignable_to 限制绑定对象；系统角色不可被普通操作破坏 |
+| Role | 可绑定给适用类型 Principal 的权限集合 | `scope=platform` 角色用于全局能力；`scope=organization` 角色只能经 organization membership binding 生效；assignable_to 限制绑定对象；系统角色不可被普通操作破坏 |
 | Permission | 对外稳定的业务权限点 | 推荐命名为 {app}:{resource}:{action}，例如 keystone:system:user:list |
 | Resource | 菜单、按钮、API、服务能力或数据范围的统一表达 | 资源树用于展示和预检，不替代服务端最终授权 |
 
@@ -137,7 +137,7 @@ Spring、Node、Go、Rust 样例与授权决策契约见 [第三方系统与服�
 
 Organization 是 SaaS 租户边界，但不是新的认证协议或 Realm 层级。Keylo 先采用单部署、多组织、共享运行时的模型；所有组织拥有的数据和关系必须显式带 organization_id，平台级对象才允许为空。
 
-当前实现状态（2026-08-09）：组织、用户类别、成员关系和组织角色绑定已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。Token 的 active organization context、组织角色授权决策、资源组织归属和跨组织拒绝仍未实现；在这些链路完成前，组织表只是一层安全基础，不能被当作隔离保证。
+当前实现状态（2026-08-09）：组织、用户类别、成员关系和组织角色绑定已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台角色写入统一校验 `user_class` 与 role scope：external_customer 不能通过 user、Principal、provision 或批量接口获得 platform/global role，organization role 只能进入 organization_role_bindings；对 user Principal 的授予和撤销同步维护两张角色关系表。历史脏绑定在同步、权限、资源树、管理 Token 和 introspection 读取侧默认失败关闭，并会阻止将该账户提升为 internal_employee，直到管理员显式清理绑定。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。Token 的 active organization context、组织角色授权决策、资源组织归属和跨组织拒绝仍未实现；在这些链路完成前，组织表只是一层安全基础，不能被当作隔离保证。
 
 用户至少分为两类：
 

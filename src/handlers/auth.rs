@@ -58,12 +58,9 @@ fn claim_role(subject_prefix: &str, is_admin_client: bool) -> Vec<String> {
 }
 
 async fn is_user_admin(db: &sqlx::PgPool, user_id: &str) -> bool {
-    crate::db::user_has_role(db, user_id, "super_admin")
+    crate::db::user_is_platform_admin(db, user_id)
         .await
         .unwrap_or(false)
-        || crate::db::user_has_role(db, user_id, "admin")
-            .await
-            .unwrap_or(false)
 }
 
 fn require_admin_scope(claims: &Claims) -> Result<(), AuthError> {
@@ -239,7 +236,8 @@ pub async fn issue_external_user_session(
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
-        role: claim_role("user", is_admin_user),
+        // Refresh tokens are not authorization artifacts and never carry roles.
+        role: Vec::new(),
         iat: now,
         exp: now + state.config.refresh_token_expiry_seconds,
         jti: utils::generate_jti(),
@@ -516,7 +514,8 @@ pub async fn auth_token(
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
-        role: claim_role(subject_prefix, is_admin_user),
+        // Refresh tokens are not authorization artifacts and never carry roles.
+        role: Vec::new(),
         iat: now,
         exp: now + state.config.refresh_token_expiry_seconds,
         jti: utils::generate_jti(),
@@ -667,7 +666,8 @@ pub async fn admin_token(
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
-        role: claim_role(subject_prefix, true),
+        // Refresh tokens are not authorization artifacts and never carry roles.
+        role: Vec::new(),
         iat: now,
         exp: now + state.config.refresh_token_expiry_seconds,
         jti: utils::generate_jti(),
@@ -1076,18 +1076,43 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
 
 /// Resolve the current database state for a token so introspection does not advertise disabled identities as active.
 async fn introspected_claims_are_active(db: &sqlx::PgPool, claims: &Claims) -> bool {
+    let advertises_platform_admin = claims.has_role("admin") || claims.has_scope("admin");
     if let Some(principal_id) = claims.principal_id.as_deref() {
-        return matches!(
-            crate::db::get_principal_by_id(db, principal_id).await,
-            Ok(Some(principal)) if principal.active
-        );
+        let Ok(Some(principal)) = crate::db::get_principal_by_id(db, principal_id).await else {
+            return false;
+        };
+        if !principal.active {
+            return false;
+        }
+        return match principal.principal_type.as_str() {
+            "user" if advertises_platform_admin => {
+                crate::db::user_is_platform_admin(db, &principal.ref_id)
+                    .await
+                    .unwrap_or(false)
+            }
+            "client" if advertises_platform_admin => {
+                matches!(
+                    crate::db::get_client_auth_info(db, &principal.ref_id).await,
+                    Ok(Some((_, true)))
+                )
+            }
+            _ => true,
+        };
     }
     if claims.principal_type.as_deref() == Some("user") {
         if let Some(user_id) = claims.uid.as_deref() {
-            return matches!(
-                crate::db::get_user_by_id(db, user_id).await,
-                Ok(Some(user)) if user.active
-            );
+            let Ok(Some(user)) = crate::db::get_user_by_id(db, user_id).await else {
+                return false;
+            };
+            if !user.active {
+                return false;
+            }
+            if advertises_platform_admin {
+                return crate::db::user_is_platform_admin(db, user_id)
+                    .await
+                    .unwrap_or(false);
+            }
+            return true;
         }
     }
     // Keep pre-Principal client tokens compatible; newer tokens always carry principal_id.
@@ -1197,7 +1222,8 @@ pub async fn auth_refresh(
         iss: state.config.jwt_issuer.clone(),
         aud: refresh_claims.aud.clone(),
         scope: vec!["refresh".into()],
-        role: refresh_claims.role.clone(),
+        // Recompute access authority from live database state after rotation.
+        role: Vec::new(),
         iat: now,
         exp: refresh_claims.exp,
         jti: refresh_jti.clone(),
@@ -1275,7 +1301,8 @@ pub async fn auth_refresh(
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
-        role: claim_role("client", true),
+        // Refresh tokens are not authorization artifacts and never carry roles.
+        role: Vec::new(),
         iat: now,
         exp: now + state.config.refresh_token_expiry_seconds,
         jti: refresh_jti,

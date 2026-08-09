@@ -182,11 +182,17 @@ async fn provision_user_handler(
         return Err(invalid_password_response(msg));
     }
 
-    match provision_user_with_roles(
+    let user_class = req
+        .user_class
+        .as_deref()
+        .unwrap_or(USER_CLASS_EXTERNAL_CUSTOMER);
+
+    match provision_user_with_roles_as_class(
         db,
         &req.username,
         &req.email,
         req.password.as_deref(),
+        user_class,
         &req.role_ids,
         &req.role_names,
     )
@@ -198,8 +204,9 @@ async fn provision_user_handler(
                 "user.provisioned",
                 Some(&claims.sub),
                 Some(&format!(
-                    "user_id={}, role_ids={}, role_names={}",
+                    "user_id={}, user_class={}, role_ids={}, role_names={}",
                     user.id,
+                    user.user_class,
                     req.role_ids.join(","),
                     req.role_names.join(",")
                 )),
@@ -236,8 +243,19 @@ async fn provision_user_handler(
                         "message": message,
                     })),
                 ))
+            } else if message == "invalid_user_class" {
+                Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "success": false,
+                        "error": "invalid_user_class",
+                        "message": "user_class must be internal_employee or external_customer",
+                    })),
+                ))
             } else if message.starts_with("role_not_assignable_to_principal_type")
                 || message.starts_with("invalid_role_assignable_to")
+                || message.starts_with("external_customer_cannot_receive_platform_role")
+                || message.starts_with("organization_role_requires_organization_binding")
             {
                 Err((
                     StatusCode::BAD_REQUEST,

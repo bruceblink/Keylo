@@ -176,17 +176,56 @@ pub async fn admin_authorization_middleware(
         return Ok(err.into_response());
     }
 
-    if request.method() != Method::GET && claims.principal_type.as_deref() == Some("user") {
-        if let Some(user_id) = claims.uid.as_deref() {
-            let db = match state.db.as_deref() {
-                Some(db) => db,
-                None => {
+    // Recheck live authority rather than trusting a still-signed admin claim.
+    // This closes access immediately when a human is reclassified or a client
+    // loses its admin flag.
+    let db = match state.db.as_deref() {
+        Some(db) => db,
+        None => {
+            return Ok(AuthError::DatabaseError(
+                "Database unavailable for platform access check".to_string(),
+            )
+            .into_response())
+        }
+    };
+    let live_admin = match claims.principal_type.as_deref() {
+        Some("user") => {
+            let Some(user_id) = claims.uid.as_deref() else {
+                return Ok(AuthError::InvalidToken.into_response());
+            };
+            match crate::db::user_is_platform_admin(db, user_id).await {
+                Ok(allowed) => allowed,
+                Err(_) => {
                     return Ok(AuthError::DatabaseError(
-                        "Database unavailable for MFA check".to_string(),
+                        "Database error during platform access check".to_string(),
                     )
                     .into_response())
                 }
+            }
+        }
+        Some("client") => {
+            let Some(client_id) = claims.sub.strip_prefix("client:") else {
+                return Ok(AuthError::InvalidToken.into_response());
             };
+            match crate::db::get_client_auth_info(db, client_id).await {
+                Ok(Some((_, is_admin))) => is_admin,
+                Ok(None) => false,
+                Err(_) => {
+                    return Ok(AuthError::DatabaseError(
+                        "Database error during platform access check".to_string(),
+                    )
+                    .into_response())
+                }
+            }
+        }
+        _ => return Ok(AuthError::InsufficientRole.into_response()),
+    };
+    if !live_admin {
+        return Ok(AuthError::InsufficientRole.into_response());
+    }
+
+    if request.method() != Method::GET && claims.principal_type.as_deref() == Some("user") {
+        if let Some(user_id) = claims.uid.as_deref() {
             let mfa_enabled = match crate::db::get_totp_credential(db, user_id).await {
                 Ok(credential) => {
                     credential.is_some_and(|credential| credential.enabled_at.is_some())

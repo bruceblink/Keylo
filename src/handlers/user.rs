@@ -118,12 +118,9 @@ fn push_failed_result(
 }
 
 async fn is_user_admin(db: &sqlx::PgPool, user_id: &str) -> bool {
-    crate::db::user_has_role(db, user_id, "super_admin")
+    crate::db::user_is_platform_admin(db, user_id)
         .await
         .unwrap_or(false)
-        || crate::db::user_has_role(db, user_id, "admin")
-            .await
-            .unwrap_or(false)
 }
 
 async fn run_third_party_import(

@@ -124,12 +124,18 @@ fn role_assignment_error_response(err: &anyhow::Error) -> (StatusCode, Json<serd
     let message = err.to_string();
     if message.starts_with("role_not_assignable_to_principal_type")
         || message.starts_with("invalid_role_assignable_to")
+        || message.starts_with("external_customer_cannot_receive_platform_role")
+        || message.starts_with("organization_role_requires_organization_binding")
     {
         return error_response(StatusCode::BAD_REQUEST, "invalid_role_assignment", &message);
     }
 
     if message == "role_not_found" {
         return error_response(StatusCode::NOT_FOUND, "role_not_found", "Role not found");
+    }
+
+    if message == "user_not_found" {
+        return error_response(StatusCode::NOT_FOUND, "user_not_found", "User not found");
     }
 
     error_response(
@@ -1122,13 +1128,7 @@ async fn assign_roles_to_user_batch_handler(
                 "message": "Roles assigned to user successfully"
             })))
         }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "error": format!("Failed to assign roles to user: {}", e)
-            })),
-        )),
+        Err(e) => Err(role_assignment_error_response(&e)),
     }
 }
 

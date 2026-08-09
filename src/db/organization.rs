@@ -408,6 +408,41 @@ pub async fn promote_user_to_internal_employee(
     actor: Option<&str>,
 ) -> Result<Option<User>> {
     let mut transaction = pool.begin().await?;
+    let existing_user = sqlx::query("SELECT user_class FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    let Some(existing_user) = existing_user else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let existing_user_class: String = existing_user.get("user_class");
+    if existing_user_class == USER_CLASS_EXTERNAL_CUSTOMER {
+        let has_platform_role = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM user_roles ur
+                INNER JOIN roles r ON r.id = ur.role_id
+                WHERE ur.user_id = $1 AND r.scope = 'platform'
+            ) OR EXISTS (
+                SELECT 1
+                FROM principals p
+                INNER JOIN principal_roles pr ON pr.principal_id = p.id
+                INNER JOIN roles r ON r.id = pr.role_id
+                WHERE p.principal_type = 'user'
+                  AND p.ref_id = $1
+                  AND r.scope = 'platform'
+            )
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if has_platform_role {
+            anyhow::bail!("cannot_promote_user_with_existing_platform_roles");
+        }
+    }
     let user = sqlx::query_as::<_, User>(
         r#"
         UPDATE users

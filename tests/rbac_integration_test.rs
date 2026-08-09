@@ -382,6 +382,7 @@ mod tests {
                 "username": username,
                 "email": email,
                 "password": "ProvisionPass123!",
+                "user_class": "internal_employee",
                 "role_ids": [role_id]
             }))
             .await;
@@ -506,6 +507,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_external_users_cannot_receive_platform_roles_or_partial_batches() {
+        let Some(server) = setup_test_server().await else {
+            return;
+        };
+        let token = get_access_token(&server).await;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let role_resp = server
+            .post("/api/rbac/roles")
+            .add_header("Authorization", format!("Bearer {token}"))
+            .json(&json!({
+                "name": format!("platform_operator_{}", ts),
+                "description": "Platform operator role"
+            }))
+            .await;
+        role_resp.assert_status_ok();
+        let role_id = role_resp.json::<serde_json::Value>()["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let rejected_provision = server
+            .post("/v1/admin/users/provision")
+            .add_header("Authorization", format!("Bearer {token}"))
+            .json(&json!({
+                "username": format!("external-platform-{}", ts),
+                "email": format!("external-platform-{}@example.test", ts),
+                "password": "ExternalPlatform#123",
+                "role_ids": [role_id.clone()]
+            }))
+            .await;
+        assert_eq!(
+            rejected_provision.status_code(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        let rejected_body: serde_json::Value = rejected_provision.json();
+        assert_eq!(rejected_body["error"], "invalid_role_assignment");
+
+        let external_provision = server
+            .post("/v1/admin/users/provision")
+            .add_header("Authorization", format!("Bearer {token}"))
+            .json(&json!({
+                "username": format!("external-target-{}", ts),
+                "email": format!("external-target-{}@example.test", ts),
+                "password": "ExternalTarget#123"
+            }))
+            .await;
+        external_provision.assert_status_ok();
+        let external_body: serde_json::Value = external_provision.json();
+        let external_user_id = external_body["data"]["user"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            external_body["data"]["user"]["user_class"],
+            "external_customer"
+        );
+
+        let rejected_batch = server
+            .post(&format!("/api/rbac/users/{external_user_id}/roles/batch"))
+            .add_header("Authorization", format!("Bearer {token}"))
+            .json(&json!({ "role_ids": [role_id.clone(), "missing-role"] }))
+            .await;
+        assert_eq!(
+            rejected_batch.status_code(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        let roles_after_batch = server
+            .get(&format!("/api/rbac/users/{external_user_id}/roles"))
+            .add_header("Authorization", format!("Bearer {token}"))
+            .await;
+        roles_after_batch.assert_status_ok();
+        let roles_after_batch_body: serde_json::Value = roles_after_batch.json();
+        assert!(roles_after_batch_body["data"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let internal_provision = server
+            .post("/v1/admin/users/provision")
+            .add_header("Authorization", format!("Bearer {token}"))
+            .json(&json!({
+                "username": format!("internal-target-{}", ts),
+                "email": format!("internal-target-{}@example.test", ts),
+                "password": "InternalTarget#123",
+                "user_class": "internal_employee",
+                "role_ids": [role_id]
+            }))
+            .await;
+        internal_provision.assert_status_ok();
+        let internal_body: serde_json::Value = internal_provision.json();
+        assert_eq!(
+            internal_body["data"]["user"]["user_class"],
+            "internal_employee"
+        );
+        assert_eq!(internal_body["data"]["roles"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn test_role_assignable_to_update_rejects_existing_incompatible_bindings() {
         let Some(server) = setup_test_server().await else {
             return;
@@ -537,6 +639,7 @@ mod tests {
                 "username": format!("role_update_target_{}", ts),
                 "email": format!("role_update_target_{}@example.com", ts),
                 "password": "ProvisionPass123!",
+                "user_class": "internal_employee",
                 "role_ids": [role_id.clone()]
             }))
             .await;
@@ -988,6 +1091,7 @@ mod tests {
                 "username": username,
                 "email": email,
                 "password": password,
+                "user_class": "internal_employee",
                 "role_ids": [role_id]
             }))
             .await;
@@ -1107,6 +1211,7 @@ mod tests {
                 "username": username,
                 "email": email,
                 "password": password,
+                "user_class": "internal_employee",
                 "role_ids": [role_id]
             }))
             .await;

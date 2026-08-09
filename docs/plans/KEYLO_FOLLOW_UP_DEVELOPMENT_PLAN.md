@@ -78,7 +78,7 @@
 
 仍待完成：
 
-- [ ] 将 user_class 纳入入驻、身份源映射和角色作用域校验；类别本身不得直接授予权限。
+- [x] 将 user_class 纳入 provision 与角色作用域校验；external_customer 不能获得 platform/global role，类别本身不直接授予权限；普通/批量/Principal/provision 写入、权限读取、资源树、管理 Token 与 introspection 均按 live user class 和 role scope 失败关闭。身份源映射仍需在后续接入切片中显式声明允许创建的 user_class。
 - [ ] 为组织 owner/admin 提供限定本组织的邀请、加入、成员管理和组织角色绑定 API；在授权引擎接入前，不得把 organization_role_bindings 解释为已经生效的角色。
 - 将人类与机器主体分开建模：`user` 继续使用 `user_class`，`service` 保持现有服务 Principal，新增 `device` 作为设备/边缘代理/无人值守任务的机器 Principal；机器主体没有 user_class、密码登录、浏览器会话或人类 MFA 要求。
 - 新增 MachineCredential/API key 记录：principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by、allowed_scopes、allowed_audiences；原始 key 只在创建或轮换响应中显示一次。

@@ -171,35 +171,68 @@ pub async fn assign_role_to_principal(
     principal_id: &str,
     role_id: &str,
 ) -> Result<()> {
-    let row = sqlx::query(
-        r#"
-        SELECT p.principal_type, r.assignable_to
-        FROM principals p
-        CROSS JOIN roles r
-        WHERE p.id = $1 AND r.id = $2
-        "#,
-    )
-    .bind(principal_id)
-    .bind(role_id)
-    .fetch_optional(pool)
-    .await?;
+    let mut transaction = pool.begin().await?;
+    let principal = sqlx::query("SELECT principal_type, ref_id FROM principals WHERE id = $1")
+        .bind(principal_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
 
-    let Some(row) = row else {
+    let Some(principal) = principal else {
         anyhow::bail!("principal_or_role_not_found");
     };
 
-    let principal_type: String = row.get("principal_type");
+    let principal_type: String = principal.get("principal_type");
+    let principal_ref_id: String = principal.get("ref_id");
+    // User-role assignment locks this same row before it reads role metadata.
+    // Follow the same order here to avoid a user/principal API deadlock.
+    let user_class = if principal_type == "user" {
+        sqlx::query("SELECT user_class FROM users WHERE id = $1 FOR UPDATE")
+            .bind(&principal_ref_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .map(|row| row.get::<String, _>("user_class"))
+    } else {
+        None
+    };
+    let row = sqlx::query("SELECT assignable_to, scope FROM roles WHERE id = $1 FOR SHARE")
+        .bind(role_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    let Some(row) = row else {
+        anyhow::bail!("principal_or_role_not_found");
+    };
     let assignable_to: String = row.get("assignable_to");
-    crate::db::ensure_role_assignable_to_principal_type(role_id, &assignable_to, &principal_type)?;
+    let scope: String = row.get("scope");
+    crate::db::ensure_platform_role_assignment(role_id, &assignable_to, &scope, &principal_type)?;
+    if principal_type == "user" {
+        crate::db::ensure_user_can_receive_platform_role(
+            role_id,
+            &assignable_to,
+            &scope,
+            user_class
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("user_not_found: {}", principal_ref_id))?,
+        )?;
+    }
 
+    if principal_type == "user" {
+        sqlx::query(
+            "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(&principal_ref_id)
+        .bind(role_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
     sqlx::query(
         "INSERT INTO principal_roles (principal_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(principal_id)
     .bind(role_id)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
 
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -214,8 +247,11 @@ pub async fn sync_user_roles_to_principal(pool: &PgPool, user_id: &str) -> Resul
         SELECT $1, ur.role_id, ur.assigned_at
         FROM user_roles ur
         INNER JOIN roles r ON r.id = ur.role_id
+        INNER JOIN users u ON u.id = ur.user_id
         WHERE ur.user_id = $2
           AND r.assignable_to IN ('all', 'user')
+          AND r.scope = 'platform'
+          AND u.user_class = 'internal_employee'
         ON CONFLICT DO NOTHING
         "#,
     )
@@ -232,23 +268,60 @@ pub async fn revoke_role_from_principal(
     principal_id: &str,
     role_id: &str,
 ) -> Result<bool> {
-    let result =
+    let mut transaction = pool.begin().await?;
+    let principal = sqlx::query("SELECT principal_type, ref_id FROM principals WHERE id = $1")
+        .bind(principal_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    let Some(principal) = principal else {
+        transaction.commit().await?;
+        return Ok(false);
+    };
+    let principal_type: String = principal.get("principal_type");
+    let ref_id: String = principal.get("ref_id");
+    if principal_type == "user" {
+        // Keep the same user-first lock order as every human role writer.
+        let user_exists = sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+            .bind(&ref_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some();
+        if !user_exists {
+            anyhow::bail!("user_not_found: {}", ref_id);
+        }
+    }
+    let principal_result =
         sqlx::query("DELETE FROM principal_roles WHERE principal_id = $1 AND role_id = $2")
             .bind(principal_id)
             .bind(role_id)
-            .execute(pool)
+            .execute(&mut *transaction)
             .await?;
+    let user_rows_affected = if principal_type == "user" {
+        sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2")
+            .bind(&ref_id)
+            .bind(role_id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected()
+    } else {
+        0
+    };
+    transaction.commit().await?;
 
-    Ok(result.rows_affected() > 0)
+    Ok(principal_result.rows_affected() > 0 || user_rows_affected > 0)
 }
 
 pub async fn get_principal_roles(pool: &PgPool, principal_id: &str) -> Result<Vec<Role>> {
     Ok(sqlx::query_as::<_, Role>(
         r#"
-        SELECT r.id, r.name, r.description, r.assignable_to, r.system, r.created_at, r.updated_at
+        SELECT r.id, r.name, r.description, r.assignable_to, r.system, r.version, r.created_at, r.updated_at
         FROM roles r
         INNER JOIN principal_roles pr ON pr.role_id = r.id
+        INNER JOIN principals principal ON principal.id = pr.principal_id
+        LEFT JOIN users u ON principal.principal_type = 'user' AND u.id = principal.ref_id
         WHERE pr.principal_id = $1
+          AND r.scope = 'platform'
+          AND (principal.principal_type <> 'user' OR u.user_class = 'internal_employee')
         ORDER BY r.name
         "#,
     )
@@ -267,7 +340,12 @@ pub async fn get_principal_permissions(
         FROM permissions p
         INNER JOIN role_permissions rp ON rp.permission_id = p.id
         INNER JOIN principal_roles pr ON pr.role_id = rp.role_id
+        INNER JOIN roles r ON r.id = pr.role_id
+        INNER JOIN principals principal ON principal.id = pr.principal_id
+        LEFT JOIN users u ON principal.principal_type = 'user' AND u.id = principal.ref_id
         WHERE pr.principal_id = $1
+          AND r.scope = 'platform'
+          AND (principal.principal_type <> 'user' OR u.user_class = 'internal_employee')
         ORDER BY p.name
         "#,
     )
@@ -285,9 +363,15 @@ pub async fn principal_has_permission(
         r#"
         SELECT 1
         FROM principal_roles pr
+        INNER JOIN roles r ON r.id = pr.role_id
+        INNER JOIN principals principal ON principal.id = pr.principal_id
+        LEFT JOIN users u ON principal.principal_type = 'user' AND u.id = principal.ref_id
         INNER JOIN role_permissions rp ON rp.role_id = pr.role_id
         INNER JOIN permissions p ON p.id = rp.permission_id
-        WHERE pr.principal_id = $1 AND (p.name = $2 OR p.name = '*:*:*')
+        WHERE pr.principal_id = $1
+          AND r.scope = 'platform'
+          AND (principal.principal_type <> 'user' OR u.user_class = 'internal_employee')
+          AND (p.name = $2 OR p.name = '*:*:*')
         LIMIT 1
         "#,
     )
@@ -304,9 +388,15 @@ pub async fn principal_has_wildcard_permission(pool: &PgPool, principal_id: &str
         r#"
         SELECT 1
         FROM principal_roles pr
+        INNER JOIN roles r ON r.id = pr.role_id
+        INNER JOIN principals principal ON principal.id = pr.principal_id
+        LEFT JOIN users u ON principal.principal_type = 'user' AND u.id = principal.ref_id
         INNER JOIN role_permissions rp ON rp.role_id = pr.role_id
         INNER JOIN permissions p ON p.id = rp.permission_id
-        WHERE pr.principal_id = $1 AND p.name = '*:*:*'
+        WHERE pr.principal_id = $1
+          AND r.scope = 'platform'
+          AND (principal.principal_type <> 'user' OR u.user_class = 'internal_employee')
+          AND p.name = '*:*:*'
         LIMIT 1
         "#,
     )

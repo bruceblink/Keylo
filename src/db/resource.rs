@@ -333,7 +333,12 @@ pub async fn authorized_resources_for_principal(
                 INNER JOIN resource_permissions rperm ON rperm.resource_id = r.id
                 INNER JOIN role_permissions rp ON rp.permission_id = rperm.permission_id
                 INNER JOIN principal_roles pr ON pr.role_id = rp.role_id
+                INNER JOIN roles role ON role.id = pr.role_id
+                INNER JOIN principals principal ON principal.id = pr.principal_id
+                LEFT JOIN users u ON principal.principal_type = 'user' AND u.id = principal.ref_id
                 WHERE pr.principal_id = $1
+                  AND role.scope = 'platform'
+                  AND (principal.principal_type <> 'user' OR u.user_class = 'internal_employee')
                   AND r.app = $2
                   AND r.resource_type = $3
                   AND r.active = TRUE

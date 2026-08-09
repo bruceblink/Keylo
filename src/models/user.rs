@@ -31,6 +31,9 @@ pub struct ProvisionUserRequest {
     pub username: String,
     pub email: String,
     pub password: Option<String>,
+    /// Human account classification. Omitted values remain external customers.
+    #[serde(default)]
+    pub user_class: Option<String>,
     #[serde(default)]
     pub role_ids: Vec<String>,
     #[serde(default)]
