@@ -6,14 +6,24 @@ use uuid::Uuid;
 use crate::models::{
     is_valid_organization_kind, is_valid_organization_status, Organization, OrganizationMembership,
     OrganizationRoleBinding, Principal, User, ORGANIZATION_KIND_CUSTOMER,
-    ORGANIZATION_STATUS_ACTIVE, ROLE_SCOPE_ORGANIZATION, USER_CLASS_EXTERNAL_CUSTOMER,
-    USER_CLASS_INTERNAL_EMPLOYEE,
+    ORGANIZATION_STATUS_ACTIVE, ORGANIZATION_STATUS_ARCHIVED, ORGANIZATION_STATUS_DISABLED,
+    ROLE_SCOPE_ORGANIZATION, USER_CLASS_EXTERNAL_CUSTOMER, USER_CLASS_INTERNAL_EMPLOYEE,
 };
 
 const MEMBERSHIP_STATUS_PENDING: &str = "pending";
 const MEMBERSHIP_STATUS_ACTIVE: &str = "active";
 const MEMBERSHIP_STATUS_SUSPENDED: &str = "suspended";
 const MEMBERSHIP_STATUS_REMOVED: &str = "removed";
+
+/// Captures the stored state that preceded an organization lifecycle update.
+///
+/// The route layer uses this value to write an audit record that explains both
+/// sides of a transition without doing a second, race-prone status lookup.
+#[derive(Debug, Clone)]
+pub struct OrganizationStatusChange {
+    pub previous_status: String,
+    pub organization: Organization,
+}
 
 fn is_valid_membership_status(status: &str) -> bool {
     matches!(
@@ -23,6 +33,19 @@ fn is_valid_membership_status(status: &str) -> bool {
             | MEMBERSHIP_STATUS_SUSPENDED
             | MEMBERSHIP_STATUS_REMOVED
     )
+}
+
+/// Allows only reversible lifecycle steps and makes archive restoration explicit.
+pub fn is_valid_organization_status_transition(current: &str, next: &str) -> bool {
+    current == next
+        || matches!(
+            (current, next),
+            (ORGANIZATION_STATUS_ACTIVE, ORGANIZATION_STATUS_DISABLED)
+                | (ORGANIZATION_STATUS_ACTIVE, ORGANIZATION_STATUS_ARCHIVED)
+                | (ORGANIZATION_STATUS_DISABLED, ORGANIZATION_STATUS_ACTIVE)
+                | (ORGANIZATION_STATUS_DISABLED, ORGANIZATION_STATUS_ARCHIVED)
+                | (ORGANIZATION_STATUS_ARCHIVED, ORGANIZATION_STATUS_ACTIVE)
+        )
 }
 
 fn required_value(field: &str, value: &str) -> Result<String> {
@@ -117,17 +140,34 @@ pub async fn list_organizations(
 }
 
 /// Changes organization lifecycle state without ever deleting tenant records.
+///
+/// The status row stays locked for the check-and-write sequence so concurrent
+/// callers cannot bypass the lifecycle transition rules.
 pub async fn set_organization_status(
     pool: &PgPool,
     organization_id: &str,
     status: &str,
-) -> Result<Option<Organization>> {
+) -> Result<Option<OrganizationStatusChange>> {
     let status = status.trim();
     if !is_valid_organization_status(status) {
         anyhow::bail!("invalid_organization_status");
     }
 
-    Ok(sqlx::query_as::<_, Organization>(
+    let mut transaction = pool.begin().await?;
+    let current_status = sqlx::query("SELECT status FROM organizations WHERE id = $1 FOR UPDATE")
+        .bind(organization_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(|row| row.get::<String, _>("status"));
+    let Some(previous_status) = current_status else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    if !is_valid_organization_status_transition(&previous_status, status) {
+        anyhow::bail!("invalid_organization_status_transition");
+    }
+
+    let organization = sqlx::query_as::<_, Organization>(
         r#"
         UPDATE organizations
         SET status = $2,
@@ -139,8 +179,14 @@ pub async fn set_organization_status(
     .bind(organization_id)
     .bind(status)
     .bind(Local::now().naive_utc())
-    .fetch_optional(pool)
-    .await?)
+    .fetch_one(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+
+    Ok(Some(OrganizationStatusChange {
+        previous_status,
+        organization,
+    }))
 }
 
 /// Inserts or updates one explicit membership; callers decide whether it is an invite or activation.
@@ -236,6 +282,38 @@ pub async fn get_organization_membership(
     .bind(organization_id)
     .bind(principal_id)
     .fetch_optional(pool)
+    .await?)
+}
+
+/// Lists memberships for one organization while keeping pagination bounded.
+pub async fn list_organization_memberships(
+    pool: &PgPool,
+    organization_id: &str,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<OrganizationMembership>> {
+    if let Some(status) = status {
+        if !is_valid_membership_status(status) {
+            anyhow::bail!("invalid_organization_membership_status");
+        }
+    }
+
+    Ok(sqlx::query_as::<_, OrganizationMembership>(
+        r#"
+        SELECT organization_id, principal_id, status, joined_at, invited_by, updated_at
+        FROM organization_memberships
+        WHERE organization_id = $1
+          AND ($2::TEXT IS NULL OR status = $2)
+        ORDER BY joined_at, principal_id
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(organization_id)
+    .bind(status)
+    .bind(limit.clamp(1, 200))
+    .bind(offset.max(0))
+    .fetch_all(pool)
     .await?)
 }
 
@@ -398,4 +476,29 @@ pub async fn promote_user_to_internal_employee(
 
     transaction.commit().await?;
     Ok(Some(user))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn organization_status_transitions_are_explicit() {
+        assert!(is_valid_organization_status_transition(
+            "active", "disabled"
+        ));
+        assert!(is_valid_organization_status_transition(
+            "disabled", "archived"
+        ));
+        assert!(is_valid_organization_status_transition(
+            "archived", "active"
+        ));
+        assert!(is_valid_organization_status_transition("active", "active"));
+        assert!(!is_valid_organization_status_transition(
+            "archived", "disabled"
+        ));
+        assert!(!is_valid_organization_status_transition(
+            "unknown", "active"
+        ));
+    }
 }

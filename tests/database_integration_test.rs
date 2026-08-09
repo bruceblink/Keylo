@@ -282,7 +282,8 @@ mod database_tests {
             .await
             .expect("Failed to disable organization")
             .expect("Organization should exist");
-        assert_eq!(disabled.status, "disabled");
+        assert_eq!(disabled.previous_status, "active");
+        assert_eq!(disabled.organization.status, "disabled");
         assert!(db::upsert_organization_membership(
             &pool,
             &organization.id,

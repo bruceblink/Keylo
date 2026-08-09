@@ -14,6 +14,30 @@ pub const USER_CLASS_EXTERNAL_CUSTOMER: &str = "external_customer";
 pub const ROLE_SCOPE_PLATFORM: &str = "platform";
 pub const ROLE_SCOPE_ORGANIZATION: &str = "organization";
 
+#[derive(Debug, Deserialize)]
+pub struct OrganizationListQuery {
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateOrganizationRequest {
+    pub slug: String,
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateOrganizationStatusRequest {
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpsertOrganizationMembershipRequest {
+    pub status: String,
+}
+
 pub fn is_valid_organization_kind(kind: &str) -> bool {
     matches!(
         kind,

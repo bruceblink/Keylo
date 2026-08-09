@@ -51,6 +51,7 @@ wwIDAQAB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use keylo::models::{Claims, Keys};
     use openidconnect::{
         core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
         reqwest as oidc_reqwest, AuthorizationCode, ClientId, CsrfToken, IssuerUrl, Nonce,
@@ -108,6 +109,35 @@ mod tests {
                 TestServer::new(app)
             }
         }
+    }
+
+    /// Opens and migrates the database used by organization HTTP tests.
+    ///
+    /// An explicitly configured test database must be reachable; otherwise a
+    /// test could accidentally exercise the in-memory fallback router instead.
+    async fn setup_organization_test_pool() -> Option<sqlx::PgPool> {
+        let explicit_database_url = std::env::var("TEST_DATABASE_URL").ok();
+        let database_url = explicit_database_url
+            .clone()
+            .unwrap_or_else(|| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = match db::init_db_pool(&database_url).await {
+            Ok(pool) => pool,
+            Err(error) if explicit_database_url.is_some() => {
+                panic!("TEST_DATABASE_URL must be reachable for organization tests: {error}")
+            }
+            Err(error) => {
+                eprintln!("Skipping organization HTTP test without PostgreSQL: {error}");
+                return None;
+            }
+        };
+        if let Err(error) = db::run_migrations(&pool).await {
+            if explicit_database_url.is_some() {
+                panic!("TEST_DATABASE_URL migrations must succeed for organization tests: {error}");
+            }
+            eprintln!("Skipping organization HTTP test without current migrations: {error}");
+            return None;
+        }
+        Some(pool)
     }
 
     /// Run Keylo on a real loopback port so an unmodified standard OIDC client can use Discovery.
@@ -2372,6 +2402,238 @@ mod tests {
 
         let list_resp = server.get("/v1/admin/identity-sources").await;
         assert_eq!(list_resp.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_organization_admin_lifecycle_api_is_scoped_and_idempotent() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+
+        let invalid_create = server
+            .post("/v1/admin/organizations")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "slug": " ",
+                "name": " ",
+                "kind": "customer"
+            }))
+            .await;
+        assert_eq!(invalid_create.status_code(), StatusCode::BAD_REQUEST);
+
+        let create = server
+            .post("/v1/admin/organizations")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "slug": format!("api-customer-{suffix}"),
+                "name": "API customer organization",
+                "kind": "customer"
+            }))
+            .await;
+        create.assert_status_ok();
+        let organization: serde_json::Value = create.json();
+        let organization_id = organization["data"]["id"].as_str().unwrap().to_string();
+
+        let duplicate = server
+            .post("/v1/admin/organizations")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "slug": format!("api-customer-{suffix}"),
+                "name": "Duplicate API customer organization",
+                "kind": "customer"
+            }))
+            .await;
+        assert_eq!(duplicate.status_code(), StatusCode::CONFLICT);
+
+        let user = db::create_user(
+            &pool,
+            &format!("organization-api-user-{suffix}"),
+            &format!("organization-api-user-{suffix}@example.test"),
+            Some("OrganizationApiUser#123"),
+        )
+        .await
+        .unwrap();
+        let principal = db::get_principal_by_ref(&pool, "user", &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let membership_path = format!(
+            "/v1/admin/organizations/{organization_id}/memberships/{}",
+            principal.id
+        );
+        let membership = server
+            .put(&membership_path)
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "active"}))
+            .await;
+        membership.assert_status_ok();
+
+        let suspended = server
+            .put(&membership_path)
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "suspended"}))
+            .await;
+        suspended.assert_status_ok();
+        let repeated_suspension = server
+            .put(&membership_path)
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "suspended"}))
+            .await;
+        repeated_suspension.assert_status_ok();
+        let repeated_suspension_body: serde_json::Value = repeated_suspension.json();
+        assert_eq!(repeated_suspension_body["data"]["status"], "suspended");
+
+        let members = server
+            .get(&format!(
+                "/v1/admin/organizations/{organization_id}/memberships"
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        members.assert_status_ok();
+        let members_body: serde_json::Value = members.json();
+        assert_eq!(members_body["data"].as_array().unwrap().len(), 1);
+
+        let internal = server
+            .post("/v1/admin/organizations")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "slug": format!("api-internal-{suffix}"),
+                "name": "API internal organization",
+                "kind": "internal"
+            }))
+            .await;
+        internal.assert_status_ok();
+        let internal_body: serde_json::Value = internal.json();
+        let internal_organization_id = internal_body["data"]["id"].as_str().unwrap();
+        let external_membership_rejected = server
+            .put(&format!(
+                "/v1/admin/organizations/{internal_organization_id}/memberships/{}",
+                principal.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "pending"}))
+            .await;
+        assert_eq!(
+            external_membership_rejected.status_code(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let invalid_status = server
+            .put(&format!("/v1/admin/organizations/{organization_id}/status"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "deleted"}))
+            .await;
+        assert_eq!(invalid_status.status_code(), StatusCode::BAD_REQUEST);
+
+        let disabled = server
+            .put(&format!("/v1/admin/organizations/{organization_id}/status"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "disabled"}))
+            .await;
+        disabled.assert_status_ok();
+
+        let rejected_reactivation = server
+            .put(&membership_path)
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "active"}))
+            .await;
+        assert_eq!(rejected_reactivation.status_code(), StatusCode::BAD_REQUEST);
+
+        let archived = server
+            .put(&format!("/v1/admin/organizations/{organization_id}/status"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "archived"}))
+            .await;
+        archived.assert_status_ok();
+
+        let archived_to_disabled = server
+            .put(&format!("/v1/admin/organizations/{organization_id}/status"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "disabled"}))
+            .await;
+        assert_eq!(archived_to_disabled.status_code(), StatusCode::BAD_REQUEST);
+
+        let restored = server
+            .put(&format!("/v1/admin/organizations/{organization_id}/status"))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({"status": "active"}))
+            .await;
+        restored.assert_status_ok();
+
+        let audit_events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_logs WHERE detail LIKE $1 AND event_type LIKE 'organization.%'",
+        )
+        .bind(format!("%organization_id={organization_id}%"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(audit_events >= 6, "organization changes must be audited");
+
+        let unauthenticated = server
+            .get(&format!("/v1/admin/organizations/{organization_id}"))
+            .await;
+        assert_eq!(unauthenticated.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_external_customer_with_admin_claims_cannot_access_platform_organizations() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let user = db::create_user(
+            &pool,
+            &format!("external-platform-guard-{suffix}"),
+            &format!("external-platform-guard-{suffix}@example.test"),
+            Some("ExternalPlatformGuard#123"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(user.user_class, keylo::models::USER_CLASS_EXTERNAL_CUSTOMER);
+        let principal = db::get_principal_by_ref(&pool, "user", &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let token = Keys::from_config(&test_config())
+            .unwrap()
+            .sign_token(&Claims {
+                sub: format!("user:{}", user.username),
+                uid: Some(user.id),
+                principal_id: Some(principal.id),
+                principal_type: Some("user".to_string()),
+                iss: test_config().jwt_issuer,
+                aud: "admin-backend".to_string(),
+                scope: vec!["read".to_string(), "write".to_string(), "admin".to_string()],
+                role: vec!["admin".to_string()],
+                iat: now,
+                exp: now + 60,
+                jti: uuid::Uuid::new_v4().to_string(),
+                token_type: "access".to_string(),
+            })
+            .unwrap();
+
+        let server = setup_test_server().await;
+        let response = server
+            .get("/v1/admin/organizations")
+            .add_header("Authorization", format!("Bearer {token}"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

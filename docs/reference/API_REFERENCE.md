@@ -20,6 +20,7 @@
 ### 1.2 受保护接口中间件规则
 
 - 管理接口：`role` 包含 `admin`，`scope` 包含 `admin`，`aud=admin-backend`
+- 平台组织管理接口：除管理 Token 条件外，人类主体必须实时为 `internal_employee`；client 主体必须仍是 active admin client。人类非 GET 请求继续适用近期 MFA 规则。
 - 用户自助接口：`role` 包含 `user`，`scope` 包含 `write`，`aud=admin-backend`
 - 服务内省接口：`role=service`，`scope` 包含 `read`
 - 授权中心集成内省：`role=service`，`scope` 包含 `read`，`aud=admin-backend`
@@ -32,6 +33,10 @@
 - `missing_credentials`
 - `invalid_token`
 - `expired_token`
+- `not_found`
+- `forbidden`
+- `conflict`
+- `invalid_request`
 - `insufficient_scope`
 - `insufficient_role`
 - `invalid_audience`
@@ -562,7 +567,35 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 资源通过 `resource_permissions` 绑定到权限点。`/v1/principals/me/resource-tree` 只返回当前 Principal 通过角色权限可见的资源节点，并包含必要祖先节点。若 Principal 拥有 `*:*:*` 权限，则返回指定 `app` 和 `type` 下的全部 active 资源。资源树响应会保留 `metadata`。
 
-### 7.5 Refresh Session 与会话策略
+### 7.5 平台组织与成员状态管理
+
+> 这些是平台管理员接口，不是组织 owner/admin 自服务接口。当前没有 active organization Token context，组织角色绑定也尚未进入授权决策；因此这些端点不能被解释为已经完成租户资源隔离。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/admin/organizations?status=&limit=&offset=` | 分页列出组织，可按状态过滤 |
+| POST | `/v1/admin/organizations` | 创建 customer 或 internal 组织 |
+| GET | `/v1/admin/organizations/{organization_id}` | 查询一个组织 |
+| PUT | `/v1/admin/organizations/{organization_id}/status` | 变更组织生命周期状态 |
+| GET | `/v1/admin/organizations/{organization_id}/memberships?status=&limit=&offset=` | 列出组织成员关系，可按成员状态过滤 |
+| GET | `/v1/admin/organizations/{organization_id}/memberships/{principal_id}` | 查询一个成员关系 |
+| PUT | `/v1/admin/organizations/{organization_id}/memberships/{principal_id}` | 幂等写入成员状态 |
+
+创建组织请求：
+
+```json
+{
+  "slug": "acme",
+  "name": "Acme Corporation",
+  "kind": "customer"
+}
+```
+
+`kind` 只能是 `customer` 或 `internal`，`slug` 全局唯一，且不是认证凭据。组织不会被物理删除。状态写入请求为 `{ "status": "active|disabled|archived" }`，只允许 `active -> disabled/archived`、`disabled -> active/archived`、`archived -> active` 或同状态重试；不允许的转换返回 `400 invalid_request`。
+
+成员状态写入请求为 `{ "status": "pending|active|suspended|removed" }`。对同一 `(organization_id, principal_id)` 的重复请求不会创建重复关系。external_customer 不能加入 internal 组织；disabled 或 archived 组织不能创建 pending/active 成员关系。成功写入正常会产生 `organization.created`、`organization.status_changed` 或 `organization.membership_changed` 审计事件。
+
+### 7.6 Refresh Session 与会话策略
 
 Keylo 2.0 使用 refresh session 作为稳定会话索引：
 

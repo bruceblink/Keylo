@@ -1,6 +1,6 @@
 use crate::errors::AuthError;
 use crate::models::service::ServiceClaims;
-use crate::models::Claims;
+use crate::models::{Claims, USER_CLASS_INTERNAL_EMPLOYEE};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::State;
@@ -232,6 +232,71 @@ pub async fn admin_authorization_middleware(
                 }
             }
         }
+    }
+
+    Ok(next.run(request).await)
+}
+
+/// Restricts platform-wide organization management to platform operators.
+///
+/// Human account class is loaded from the database on every request so moving
+/// an account out of the internal workforce takes effect before its JWT expires.
+pub async fn platform_admin_authorization_middleware(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let claims = match request.extensions().get::<Claims>() {
+        Some(claims) => claims.clone(),
+        None => return Ok(AuthError::Unauthorized.into_response()),
+    };
+    let db = match state.db.as_deref() {
+        Some(db) => db,
+        None => {
+            return Ok(AuthError::DatabaseError(
+                "Database unavailable for platform access check".to_string(),
+            )
+            .into_response())
+        }
+    };
+
+    let access_allowed = match claims.principal_type.as_deref() {
+        Some("user") => {
+            let Some(user_id) = claims.uid.as_deref() else {
+                return Ok(AuthError::InvalidToken.into_response());
+            };
+            match crate::db::get_user_by_id(db, user_id).await {
+                Ok(Some(user)) if user.active => user.user_class == USER_CLASS_INTERNAL_EMPLOYEE,
+                Ok(Some(_)) => return Ok(AuthError::InvalidToken.into_response()),
+                Ok(None) => return Ok(AuthError::InvalidToken.into_response()),
+                Err(_) => {
+                    return Ok(AuthError::DatabaseError(
+                        "Database error during platform access check".to_string(),
+                    )
+                    .into_response())
+                }
+            }
+        }
+        Some("client") => {
+            let Some(client_id) = claims.sub.strip_prefix("client:") else {
+                return Ok(AuthError::InvalidToken.into_response());
+            };
+            match crate::db::get_client_auth_info(db, client_id).await {
+                Ok(Some((_, is_admin_client))) => is_admin_client,
+                Ok(None) => return Ok(AuthError::InvalidToken.into_response()),
+                Err(_) => {
+                    return Ok(AuthError::DatabaseError(
+                        "Database error during platform access check".to_string(),
+                    )
+                    .into_response())
+                }
+            }
+        }
+        _ => return Ok(AuthError::InsufficientRole.into_response()),
+    };
+
+    if !access_allowed {
+        return Ok(AuthError::Forbidden.into_response());
     }
 
     Ok(next.run(request).await)

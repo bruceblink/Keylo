@@ -280,6 +280,17 @@ fn protected_routes(app_state: &AppState) -> Router<AppState> {
         .merge(routes::resource::resource_admin_routes().route_layer(
             middleware::from_fn_with_state(app_state.clone(), auth::admin_authorization_middleware),
         ))
+        .merge(
+            routes::organization::organization_admin_routes()
+                .route_layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    auth::admin_authorization_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    auth::platform_admin_authorization_middleware,
+                )),
+        )
         .nest(
             "/api/oauth",
             routes::oauth::oauth_admin_routes().route_layer(middleware::from_fn_with_state(

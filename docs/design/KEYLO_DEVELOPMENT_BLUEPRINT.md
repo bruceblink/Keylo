@@ -81,7 +81,7 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 | 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、邮箱变化记录、启停和会话撤销 | identity source 的 ldap 类型目前只是注册元数据，不包含 LDAP bind、同步、组映射或故障切换 |
 | 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`，服务 Principal 可参与 RBAC | 当前没有直接 `X-API-Key` 鉴权、独立 device Principal、多 key 生命周期或机器凭证的组织归属 |
 | 授权 | Principal 类型 user/service/client；角色、权限、资源树；单点/批量 check；服务 scope/audience 白名单；授权审计、版本和回滚 | 组织领域数据已落库，但当前授权仍只读取 platform 角色；尚未有组织上下文、组织角色决策、资源组织过滤、组、composite role 或细粒度 delegated admin |
-| SaaS 组织基础 | `organizations`、`user_class`、成员关系和组织角色绑定已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织 | 尚未提供组织/成员管理 HTTP API；组织角色绑定尚未参与授权，客户数据表仍是 platform-scoped，因此不能把该基础层视为已完成的租户隔离 |
+| SaaS 组织基础 | `organizations`、`user_class`、成员关系和组织角色绑定已迁移；新用户默认 external_customer，bootstrap super admin 显式归为 internal_employee 并加入内部组织；平台组织与成员状态管理 API 已可用 | 组织 role binding 尚未参与授权，Token 也没有 active organization context；客户数据表仍是 platform-scoped，因此不能把该基础层视为已完成的租户隔离 |
 | Token 与会话 | RS256/JWKS、access/refresh/service_access、内省、黑名单、refresh session 原子轮换、重放撤销、主体/客户端/单会话撤销 | JWKS 当前只包含一把活动公钥；没有新旧 key 并行的无感轮换 |
 | 运行和首启 | PostgreSQL SQLx migrations、Redis 生产就绪校验、healthz/readyz、固定基数 metrics、审计清理、密文配置、setup wizard | 尚未承诺多实例一致性、outbox/webhook、OpenTelemetry 或跨区域恢复 |
 | 管理体验 | API-first 的用户、客户端、服务、身份源、Principal、RBAC、资源和审计接口；setup wizard 只做首启诊断 | 没有 Admin Console、Account Console、主题系统或管理 CLI |
@@ -137,7 +137,7 @@ Spring、Node、Go、Rust 样例与授权决策契约见 [第三方系统与服�
 
 Organization 是 SaaS 租户边界，但不是新的认证协议或 Realm 层级。Keylo 先采用单部署、多组织、共享运行时的模型；所有组织拥有的数据和关系必须显式带 organization_id，平台级对象才允许为空。
 
-当前实现状态（2026-08-09）：组织、用户类别、成员关系和组织角色绑定已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。组织管理 API、Token 的 active organization context、组织角色授权决策、资源组织归属和跨组织拒绝仍未实现；在这些链路完成前，组织表只是一层安全基础，不能被当作隔离保证。
+当前实现状态（2026-08-09）：组织、用户类别、成员关系和组织角色绑定已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。Token 的 active organization context、组织角色授权决策、资源组织归属和跨组织拒绝仍未实现；在这些链路完成前，组织表只是一层安全基础，不能被当作隔离保证。
 
 用户至少分为两类：
 

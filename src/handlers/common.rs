@@ -267,11 +267,16 @@ mod tests {
 
     #[tokio::test]
     async fn readiness_rejects_an_invalid_configured_redis_url() {
-        let config = Config {
-            allow_in_memory_fallback: true,
-            enable_setup_wizard: false,
-            redis_url: Some("http://localhost:6379".to_string()),
-            ..Config::default()
+        let config = {
+            // Config defaults read process-wide environment variables, which
+            // config tests temporarily modify while checking secret sources.
+            let _environment_guard = crate::config::test_process_env_lock();
+            Config {
+                allow_in_memory_fallback: true,
+                enable_setup_wizard: false,
+                redis_url: Some("http://localhost:6379".to_string()),
+                ..Config::default()
+            }
         };
         let state = AppState::new(config, None).expect("test state should use valid JWT keys");
 
