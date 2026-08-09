@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 pub mod customer_support;
 pub mod identity;
+pub mod machine;
 pub mod mfa;
 pub mod oauth;
 pub mod oidc;
@@ -25,6 +26,7 @@ pub mod user;
 
 pub use customer_support::*;
 pub use identity::*;
+pub use machine::*;
 pub use mfa::*;
 pub use oauth::*;
 pub use oidc::*;

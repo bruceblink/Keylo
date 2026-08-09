@@ -741,6 +741,191 @@ mod database_tests {
         .expect("Failed to reject a disabled organization service"));
     }
 
+    /// Verifies that device keys keep one tenant boundary and fail closed as it changes.
+    #[tokio::test]
+    async fn test_device_machine_credentials_are_scoped_hashed_and_live() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_device_machine_credentials_are_scoped_hashed_and_live: {msg}"
+                );
+                return;
+            }
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization_a = db::create_organization(
+            &pool,
+            &format!("machine-a-{suffix}"),
+            "Machine organization A",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create machine organization A");
+        let organization_b = db::create_organization(
+            &pool,
+            &format!("machine-b-{suffix}"),
+            "Machine organization B",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create machine organization B");
+        let device = db::create_device(
+            &pool,
+            db::CreateDeviceParams {
+                device_id: &format!("edge-{suffix}"),
+                display_name: "Warehouse edge agent",
+                organization_id: Some(&organization_a.id),
+            },
+        )
+        .await
+        .expect("Failed to create organization-scoped device");
+        assert_eq!(device.scope_kind, "organization");
+        assert_eq!(
+            device.organization_id.as_deref(),
+            Some(organization_a.id.as_str())
+        );
+        assert!(db::get_active_organization_membership(
+            &pool,
+            &organization_a.id,
+            &device.principal_id,
+        )
+        .await
+        .expect("Failed to query device membership")
+        .is_some());
+
+        let scopes = vec![keylo::models::MACHINE_AUTHORIZATION_SCOPE.to_string()];
+        let audiences = vec![keylo::models::MACHINE_AUTHORIZATION_AUDIENCE.to_string()];
+        let created = db::create_machine_credential(
+            &pool,
+            db::CreateMachineCredentialParams {
+                principal_id: &device.principal_id,
+                organization_id: Some(&organization_a.id),
+                created_by_principal_id: None,
+                expires_at: None,
+                allowed_scopes: &scopes,
+                allowed_audiences: &audiences,
+            },
+        )
+        .await
+        .expect("Failed to create device API key");
+        assert!(created.api_key.starts_with("keylo."));
+        let secret_hash: String =
+            sqlx::query_scalar("SELECT secret_hash FROM machine_credentials WHERE key_id = $1")
+                .bind(&created.credential.key_id)
+                .fetch_one(&pool)
+                .await
+                .expect("Failed to read persisted API key hash");
+        assert_ne!(
+            secret_hash, created.api_key,
+            "Raw API key must never be persisted"
+        );
+
+        let verified = db::verify_machine_credential(
+            &pool,
+            &created.api_key,
+            keylo::models::MACHINE_AUTHORIZATION_SCOPE,
+            keylo::models::MACHINE_AUTHORIZATION_AUDIENCE,
+        )
+        .await
+        .expect("Failed to verify device API key");
+        let db::MachineCredentialVerification::Authorized(context) = verified else {
+            panic!("Active API key should verify");
+        };
+        assert_eq!(context.principal.id, device.principal_id);
+        assert_eq!(
+            context.credential.organization_id.as_deref(),
+            Some(organization_a.id.as_str())
+        );
+        assert!(context.credential.last_used_at.is_some());
+        assert!(matches!(
+            db::verify_machine_credential(
+                &pool,
+                &created.api_key,
+                "other_scope",
+                keylo::models::MACHINE_AUTHORIZATION_AUDIENCE,
+            )
+            .await
+            .expect("Mismatched scope verification should complete"),
+            db::MachineCredentialVerification::Invalid
+        ));
+
+        assert!(db::create_machine_credential(
+            &pool,
+            db::CreateMachineCredentialParams {
+                principal_id: &device.principal_id,
+                organization_id: Some(&organization_b.id),
+                created_by_principal_id: None,
+                expires_at: None,
+                allowed_scopes: &scopes,
+                allowed_audiences: &audiences,
+            },
+        )
+        .await
+        .is_err());
+        assert!(sqlx::query(
+            "UPDATE device_principal_scopes SET organization_id = $1 WHERE principal_id = $2",
+        )
+        .bind(&organization_b.id)
+        .bind(&device.principal_id)
+        .execute(&pool)
+        .await
+        .is_err());
+
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &device.principal_id,
+            "suspended",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to suspend device membership");
+        assert!(matches!(
+            db::verify_machine_credential(
+                &pool,
+                &created.api_key,
+                keylo::models::MACHINE_AUTHORIZATION_SCOPE,
+                keylo::models::MACHINE_AUTHORIZATION_AUDIENCE,
+            )
+            .await
+            .expect("Suspended credential verification should complete"),
+            db::MachineCredentialVerification::Invalid
+        ));
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &device.principal_id,
+            "active",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to reactivate device membership");
+        assert!(db::revoke_machine_credential_in_scope(
+            &pool,
+            &device.principal_id,
+            Some(&organization_a.id),
+            &created.credential.key_id,
+            Some("test revocation"),
+        )
+        .await
+        .expect("Failed to revoke device API key"));
+        assert!(matches!(
+            db::verify_machine_credential(
+                &pool,
+                &created.api_key,
+                keylo::models::MACHINE_AUTHORIZATION_SCOPE,
+                keylo::models::MACHINE_AUTHORIZATION_AUDIENCE,
+            )
+            .await
+            .expect("Revoked credential verification should complete"),
+            db::MachineCredentialVerification::Invalid
+        ));
+    }
+
     #[tokio::test]
     async fn test_platform_roles_require_internal_employee_and_fail_closed_for_legacy_bindings() {
         let _guard = DB_TEST_LOCK.lock().await;

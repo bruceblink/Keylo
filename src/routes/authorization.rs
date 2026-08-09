@@ -1,5 +1,6 @@
 use axum::{
-    extract::{Query, State},
+    extract::{OriginalUri, Query, State},
+    http::{header::AUTHORIZATION, HeaderMap},
     response::Json,
     routing::{get, post},
     Router,
@@ -39,6 +40,7 @@ struct ResolvedAuthorizationTarget {
 struct AuthorizationIdentity {
     principal: Principal,
     organization_id: Option<String>,
+    machine_credential_key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +110,7 @@ async fn principal_from_bearer(
             return Ok(AuthorizationIdentity {
                 principal,
                 organization_id: claims.organization_id,
+                machine_credential_key_id: None,
             });
         }
     }
@@ -167,7 +170,121 @@ async fn principal_from_bearer(
     Ok(AuthorizationIdentity {
         principal,
         organization_id: service_claims.organization_id,
+        machine_credential_key_id: None,
     })
+}
+
+/// Authenticates a direct machine call only for the explicit authorization APIs.
+///
+/// A MachineCredential is a bounded capability, not a replacement for general
+/// bearer authentication. The database verifier rechecks scope, audience,
+/// Principal state, and organization membership before returning this identity.
+async fn principal_from_api_key(
+    state: &AppState,
+    raw_api_key: &str,
+) -> Result<AuthorizationIdentity, AuthError> {
+    let db = state.db.as_deref().ok_or_else(|| {
+        AuthError::DatabaseError("Database required for API key authentication".to_string())
+    })?;
+    let verification = crate::db::verify_machine_credential(
+        db,
+        raw_api_key,
+        crate::models::MACHINE_AUTHORIZATION_SCOPE,
+        crate::models::MACHINE_AUTHORIZATION_AUDIENCE,
+    )
+    .await
+    .map_err(|_| AuthError::DatabaseError("API key verification failed".to_string()))?;
+    let crate::db::MachineCredentialVerification::Authorized(context) = verification else {
+        let _ = crate::db::create_audit_log(
+            db,
+            "machine.api_key.authentication_failed",
+            None,
+            Some("route=authorization"),
+        )
+        .await;
+        return Err(AuthError::InvalidToken);
+    };
+
+    let credential_bucket = format!("machine-api-key:{}", context.credential.key_id);
+    if !state
+        .allow_auth_request_pair(
+            &credential_bucket,
+            state.config.auth_rate_limit_max_requests,
+            "machine-api-key:authorization-global",
+            state.config.auth_global_rate_limit_max_requests,
+            state.config.auth_rate_limit_window_seconds,
+        )
+        .await
+    {
+        let _ = crate::db::create_audit_log(
+            db,
+            "machine.api_key.rate_limited",
+            Some(&context.principal.id),
+            Some(&format!(
+                "key_id={},route=authorization",
+                context.credential.key_id
+            )),
+        )
+        .await;
+        return Err(AuthError::TooManyRequests);
+    }
+
+    let _ = crate::db::create_audit_log(
+        db,
+        "machine.api_key.authenticated",
+        Some(&context.principal.id),
+        Some(&format!(
+            "key_id={},principal_id={},organization_id={},route=authorization",
+            context.credential.key_id,
+            context.principal.id,
+            context.credential.organization_id.as_deref().unwrap_or("-")
+        )),
+    )
+    .await;
+    Ok(AuthorizationIdentity {
+        principal: context.principal,
+        organization_id: context.credential.organization_id,
+        machine_credential_key_id: Some(context.credential.key_id),
+    })
+}
+
+/// Resolves the sole supported credential transport for a machine-aware route.
+fn api_key_in_query(query: Option<&str>) -> bool {
+    query.is_some_and(|query| {
+        url::form_urlencoded::parse(query.as_bytes()).any(|(name, _)| {
+            name.eq_ignore_ascii_case("api_key") || name.eq_ignore_ascii_case("x-api-key")
+        })
+    })
+}
+
+async fn principal_from_authorization_headers(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Result<AuthorizationIdentity, AuthError> {
+    if api_key_in_query(query) {
+        return Err(AuthError::InvalidToken);
+    }
+    let bearer = headers.get(AUTHORIZATION);
+    let api_key = headers.get("x-api-key");
+    match (bearer, api_key) {
+        (Some(_), Some(_)) => Err(AuthError::InvalidToken),
+        (Some(value), None) => {
+            let value = value.to_str().map_err(|_| AuthError::InvalidToken)?;
+            let token = value
+                .strip_prefix("Bearer ")
+                .ok_or(AuthError::InvalidToken)?;
+            if token.trim().is_empty() {
+                return Err(AuthError::InvalidToken);
+            }
+            principal_from_bearer(state, token).await
+        }
+        (None, Some(value)) => {
+            let api_key = value.to_str().map_err(|_| AuthError::InvalidToken)?;
+            principal_from_api_key(state, api_key).await
+        }
+        (None, None) => Err(AuthError::Unauthorized),
+    }
 }
 
 async fn resolve_access_principal(
@@ -305,6 +422,7 @@ async fn check_one(
     principal: &Principal,
     request: &AuthorizeCheckRequest,
     organization_id: Option<&str>,
+    machine_credential_key_id: Option<&str>,
 ) -> Result<AuthorizeCheckResponse, AuthError> {
     let target = resolve_permission_target(db, request, organization_id).await?;
     let role_scope = target.kind.role_scope(organization_id);
@@ -362,12 +480,15 @@ async fn check_one(
         exposed_permission,
         exposed_resource_id,
         Some(&format!(
-            "reason={reason},scope={}",
+            "reason={reason},scope={}{}",
             match role_scope {
                 AuthorizationRoleScope::Platform => "platform",
                 AuthorizationRoleScope::Organization(_) => "organization",
                 AuthorizationRoleScope::CrossOrganization => "cross_organization",
-            }
+            },
+            machine_credential_key_id
+                .map(|key_id| format!(",machine_key_id={key_id}"))
+                .unwrap_or_default(),
         )),
     )
     .await;
@@ -383,11 +504,12 @@ async fn check_one(
 
 async fn authorize_check(
     State(state): State<AppState>,
-    TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
     Json(payload): Json<AuthorizeCheckRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     payload.validate().map_err(AuthError::InvalidRequest)?;
-    let identity = principal_from_bearer(&state, bearer.token()).await?;
+    let identity = principal_from_authorization_headers(&state, &headers, uri.query()).await?;
     let db = state
         .db
         .as_deref()
@@ -400,6 +522,7 @@ async fn authorize_check(
         &identity.principal,
         &payload,
         organization_id.as_deref(),
+        identity.machine_credential_key_id.as_deref(),
     )
     .await?;
 
@@ -411,11 +534,12 @@ async fn authorize_check(
 
 async fn authorize_batch_check(
     State(state): State<AppState>,
-    TypedHeader(Authorization(bearer)): TypedHeader<Authorization<Bearer>>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
     Json(payload): Json<AuthorizeBatchCheckRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     payload.validate().map_err(AuthError::InvalidRequest)?;
-    let identity = principal_from_bearer(&state, bearer.token()).await?;
+    let identity = principal_from_authorization_headers(&state, &headers, uri.query()).await?;
     let db = state
         .db
         .as_deref()
@@ -425,7 +549,16 @@ async fn authorize_batch_check(
             .await?;
     let mut results = Vec::with_capacity(payload.checks.len());
     for check in &payload.checks {
-        results.push(check_one(db, &identity.principal, check, organization_id.as_deref()).await?);
+        results.push(
+            check_one(
+                db,
+                &identity.principal,
+                check,
+                organization_id.as_deref(),
+                identity.machine_credential_key_id.as_deref(),
+            )
+            .await?,
+        );
     }
 
     Ok(Json(json!({

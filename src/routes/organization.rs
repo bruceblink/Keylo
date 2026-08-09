@@ -207,7 +207,7 @@ fn require_active_organization_context(
 }
 
 /// Rechecks the live manager membership after matching the signed context.
-async fn require_delegated_manager(
+pub(crate) async fn require_delegated_manager(
     state: &AppState,
     claims: &Claims,
     organization_id: &str,
@@ -221,7 +221,10 @@ async fn require_delegated_manager(
     Ok(principal)
 }
 
-async fn require_delegated_mfa(state: &AppState, claims: &Claims) -> Result<(), AuthError> {
+pub(crate) async fn require_delegated_mfa(
+    state: &AppState,
+    claims: &Claims,
+) -> Result<(), AuthError> {
     crate::routes::mfa::require_recent_mfa_for_user_claims(state, claims)
         .await
         .map_err(|_| AuthError::Forbidden)

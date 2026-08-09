@@ -81,8 +81,8 @@
 - [x] 将 user_class 纳入 provision 与角色作用域校验；external_customer 不能获得 platform/global role，类别本身不直接授予权限；普通/批量/Principal/provision 写入、权限读取、资源树、管理 Token 与 introspection 均按 live user class 和 role scope 失败关闭。身份源映射仍需在后续接入切片中显式声明允许创建的 user_class。
 - [x] 为组织 owner/admin 提供限定本组织的邀请、加入、成员管理和组织角色绑定 API；组织角色仅在相同 signed active organization context 的授权决策中生效，绝不提升为 platform 权限。
 - [x] 人类密码登录可显式创建 organization-scoped refresh session；scope 同时写入 access/refresh JWT 与会话记录，刷新实时重验 session scope、组织和 membership，组织停用/归档或成员变为 pending/suspended/removed 时原子撤销对应 session。
-- 将人类与机器主体分开建模：`user` 继续使用 `user_class`，`service` 保持现有服务 Principal，新增 `device` 作为设备/边缘代理/无人值守任务的机器 Principal；机器主体没有 user_class、密码登录、浏览器会话或人类 MFA 要求。
-- 新增 MachineCredential/API key 记录：principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by、allowed_scopes、allowed_audiences；原始 key 只在创建或轮换响应中显示一次。
+- [x] 将人类与机器主体分开建模：`user` 继续使用 `user_class`，`service` 保持现有服务 Principal，新增 `device` 作为设备/边缘代理/无人值守任务的机器 Principal；机器主体没有 user_class、密码登录、浏览器会话或人类 MFA 要求。
+- [x] 新增 MachineCredential/API key 记录：principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by、allowed_scopes、allowed_audiences；原始 key 只在创建或轮换响应中显示一次。
 - 为用户、OIDC client、service client、identity source、resource、refresh session 和授权审计逐项定义 organization_id 归属；resource、refresh session 与授权审计已经完成 scope、查询过滤和授权路径，用户、OIDC client、service client 与 identity source 仍不可仅加 nullable 列，必须随其完整查询约束和授权路径一起实施。
 - 设计兼容迁移：现有数据必须进入明确的 default organization 或显式 platform scope，并为每个 user 生成明确的 user_class 映射；迁移保持前向、可重复和可审计。生产恢复使用已验证的备份/恢复或修复迁移，不假设未实现的 down migration；禁止用隐式 NULL 代表所有组织或用默认类别掩盖不确定性。
 
@@ -109,12 +109,12 @@
 - [x] external_customer 只能绑定 organization scope；internal_employee 的平台角色和内部组织角色分离，类别本身不授予客户组织访问。
 - [x] customer-support 访问必须限定目标组织、操作和审计原因。
 - [x] 组织服务账号和客户端明确标记 platform-scoped 或 organization-scoped；组织级服务 Token 只能访问所属组织。service client 的 scope 不可变，组织 client 创建会原子建立 service Principal 与 active membership；Token 签发、check、batch-check、effective-permissions、resource-tree 和服务内省路径都会实时校验 client、Principal、组织与 membership，组织级 client 不可调用内省端点。
-- [ ] external_customer 组织管理员创建的 service/device Principal 与 API key 只能属于本组织；internal_employee 的平台级机器身份不得因内部类别自动访问客户组织。
+- [x] external_customer 组织管理员创建的 service/device Principal 与 API key 只能属于本组织；internal_employee 的平台级机器身份不得因内部类别自动访问客户组织。
 - [x] JWT 只携带当前组织上下文和稳定主体信息，不携带所有组织的完整权限集合；切换组织要重新签发上下文。
 
 验收：跨组织 check、batch-check、resource-tree、client 管理、identity source 管理和 refresh 都有拒绝测试；external_customer 绑定 platform/global role 会失败；internal_employee 的无授权客户访问会失败；平台管理员的跨组织操作必须显式调用、最小授权和审计。
 
-当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销、组织停用、organization-scoped refresh session、organization-scoped service Token、organization owner/admin 限定本组织的 service client 管理，以及带目标组织、operation、原因和实时撤销的 customer-support 访问；OIDC client、identity source、device 与 API key 仍属于后续未完成项。
+当前进展：已使用真实 PostgreSQL 覆盖双组织 resource code、check、batch-check、effective-permissions、resource-tree、成员暂停、角色撤销、组织停用、organization-scoped refresh session、organization-scoped service Token、organization owner/admin 限定本组织的 service/device 与 API key 管理，以及带目标组织、operation、原因和实时撤销的 customer-support 访问。`device` 和 API key 以不可变 platform/organization scope、hash-only 存储、轮换/撤销、实时 Principal/membership 校验和显式 `X-API-Key` 授权检查落地；OIDC client 与 identity source 的组织归属仍属于后续未完成项。
 
 ### 3.4 非人类主体与 API_KEY 认证
 

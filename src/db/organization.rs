@@ -261,6 +261,37 @@ pub(crate) async fn lock_active_organization_manager(
     Ok(())
 }
 
+/// Locks a manager and its target Principal in one stable order for delegated writes.
+///
+/// The target must already have an active membership in the organization. Callers
+/// use this before changing a machine identity so a concurrent suspension cannot
+/// make a stale owner/admin check succeed.
+pub(crate) async fn lock_active_organization_manager_target(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: &str,
+    actor_principal_id: &str,
+    target_principal_id: &str,
+) -> Result<()> {
+    let context = lock_organization_manager_context(
+        transaction,
+        organization_id,
+        actor_principal_id,
+        target_principal_id,
+    )
+    .await?;
+    if !context.target.active {
+        anyhow::bail!("organization_target_principal_inactive");
+    }
+    if context
+        .target_membership
+        .as_ref()
+        .is_none_or(|membership| membership.status != MEMBERSHIP_STATUS_ACTIVE)
+    {
+        anyhow::bail!("organization_target_membership_not_active");
+    }
+    Ok(())
+}
+
 /// Creates a tenant boundary with a generated stable identifier.
 pub async fn create_organization(
     pool: &PgPool,

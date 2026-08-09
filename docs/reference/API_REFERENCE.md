@@ -446,14 +446,14 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 `resource-tree` 的 `type` 支持 `menu`、`button`、`api`、`service`、`data_scope`。用户通常消费 `menu/button/data_scope`，服务通常消费 `api/service`。
 
-access token 或 service_access token 带有 `organization_id` 时，这两个端点会实时确认该 Principal 仍是该组织的 active member，随后只解释该组织的 `organization_role_bindings` 和该组织资源；成员被移除、暂停或组织被停用后，旧 token 不会继续获得组织权限。没有组织上下文的 access token 与 service_access 只解释 platform role 和 platform resource。API key 与独立 device Principal 仍属于后续机器身份功能。
+access token 或 service_access token 带有 `organization_id` 时，这两个端点会实时确认该 Principal 仍是该组织的 active member，随后只解释该组织的 `organization_role_bindings` 和该组织资源；成员被移除、暂停或组织被停用后，旧 token 不会继续获得组织权限。没有组织上下文的 access token 与 service_access 只解释 platform role 和 platform resource。独立 `device` Principal 与 API key 只能直接调用下一节明确声明的授权检查接口，不能调用本节的自助查询接口。
 
 ### 7.2 统一授权检查
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
-| POST | `/v1/authorize/check` | access 或 service_access | 单点授权检查 |
-| POST | `/v1/authorize/batch-check` | access 或 service_access | 批量授权检查 |
+| POST | `/v1/authorize/check` | access、service_access 或受限 API key | 单点授权检查 |
+| POST | `/v1/authorize/batch-check` | access、service_access 或受限 API key | 批量授权检查 |
 
 按权限 code 检查：
 
@@ -475,7 +475,9 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 
 每个检查必须二选一：提供非空 `permission`，或同时提供非空 `app`、`resource_type`、`resource_code`。混用两种目标、空权限或不完整资源坐标返回 `invalid_request`，不会被静默降级为拒绝。
 
-授权上下文只来自签名 token，不能由请求头或请求体覆盖。直接 permission 检查在带 `organization_id` 的 access token 下只读取当前组织的 active membership 与 organization role；按资源坐标检查会先解析资源归属，tenant resource 必须属于当前组织，platform resource 只接受 platform role。未知、跨组织、已停用或不可见的资源统一返回普通 deny，不暴露其他组织是否存在。batch-check 对整批请求只解析一次相同的 live context。
+授权上下文只来自签名 token 或 MachineCredential 固定的 `organization_id`，不能由请求头、URL 查询参数或请求体覆盖。直接 permission 检查在带 `organization_id` 的 access token 或 API key 下只读取当前组织的 active membership 与 organization role；按资源坐标检查会先解析资源归属，tenant resource 必须属于当前组织，platform resource 只接受 platform role。未知、跨组织、已停用或不可见的资源统一返回普通 deny，不暴露其他组织是否存在。batch-check 对整批请求只解析一次相同的 live context。
+
+机器调用仅在这两个端点通过 `X-API-Key: keylo.<key_id>.<secret>` 传递 API key。服务端只保存 bcrypt hash；它会同时检查 key 的 active/expiry、固定 scope、Principal、组织和 active membership，以及最终 RBAC。`allowed_scopes` 必须包含 `authorization`，`allowed_audiences` 必须包含 `admin-backend` 或 `*`。`Authorization: Bearer <api-key>`、同时携带 Bearer 和 `X-API-Key`、`api_key`/`x-api-key` URL 参数、错误 scope/audience、未知/撤销/过期 key 一律返回统一未授权结果。API key 不接受任何 `/v1/auth/*` 人类登录或 refresh 流程。
 
 响应：
 
@@ -513,6 +515,14 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 | GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false` | Principal refresh session 列表 |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions` | 撤销该 Principal 的所有 refresh session |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions/{session_id}` | 撤销单个 refresh session |
+| GET | `/v1/admin/principals/{principal_id}/api-keys?organization_id=` | 查询该 machine Principal 在精确 scope 内的 API key 元数据 |
+| POST | `/v1/admin/principals/{principal_id}/api-keys` | 创建 service/device API key；请求体显式提供可选 `organization_id` 和 capabilities |
+| POST | `/v1/admin/principals/{principal_id}/api-keys/{key_id}/rotate?organization_id=` | 创建重叠期 replacement key，旧 key 保持 active 直至显式撤销 |
+| DELETE | `/v1/admin/principals/{principal_id}/api-keys/{key_id}?organization_id=` | 请求体 `{ "reason": "..." }`，撤销一把 key |
+| GET | `/v1/admin/devices?organization_id=` | 查询 platform 或一个精确 organization scope 的 device Principal |
+| POST | `/v1/admin/devices` | 创建 device；可选 `organization_id` 一旦写入不可变 |
+| GET | `/v1/admin/devices/{device_id}?organization_id=` | 查询一个精确 scope 的 device |
+| PUT | `/v1/admin/devices/{device_id}?organization_id=` | 更新 device display_name 或 active，不可迁移 scope |
 | GET | `/v1/admin/refresh-sessions?include_revoked=false&organization_id=&principal_id=&client_id=&login_ip=&limit=&offset=` | 全局 refresh session 列表；organization_id 为精确组织过滤 |
 | DELETE | `/v1/admin/refresh-sessions/{session_id}` | 按 session ID 强制撤销 refresh session |
 
@@ -631,10 +641,20 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 | GET | `/v1/organizations/{organization_id}/services/{service_id}` | 查询当前组织的 service client |
 | PUT | `/v1/organizations/{organization_id}/services/{service_id}` | 更新当前组织 service 的可变元数据 |
 | POST | `/v1/organizations/{organization_id}/services/{service_id}/rotate-secret` | 轮换当前组织 service secret |
+| GET | `/v1/organizations/{organization_id}/devices` | 查询当前组织的 device Principal |
+| POST | `/v1/organizations/{organization_id}/devices` | 创建当前组织 device；scope 只从路径和 signed context 派生 |
+| GET | `/v1/organizations/{organization_id}/devices/{device_id}` | 查询当前组织 device |
+| PUT | `/v1/organizations/{organization_id}/devices/{device_id}` | 更新 device display_name 或 active，不能迁移 scope |
+| GET | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys` | 查询当前组织 machine Principal 的安全元数据 |
+| POST | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys` | 创建当前组织 service/device 的 API key |
+| POST | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys/{key_id}/rotate` | 创建 replacement key，允许短暂重叠 |
+| DELETE | `/v1/organizations/{organization_id}/principals/{principal_id}/api-keys/{key_id}` | 请求体 `{ "reason": "..." }`，撤销一把 key |
 
 组织 service 创建请求与平台服务注册使用相同的 `service_id`、`service_secret`、`name`、`allowed_scopes`、`allowed_audiences`、`integration_type`、`token_ttl_seconds`、`owner` 和 `contact` 字段，但不接受 `organization_id` 或 `introspection_allowed`。组织范围只来自路径和签名 access token 的相同 active organization context；创建时会原子写入 service Principal 与 active membership。更新同样不接受 scope 或 introspection 字段，组织 service 永远不能调用内省端点。轮换请求可选 `{ "new_secret": "..." }`；省略时服务器只在该次响应的 `data.new_secret` 返回新值。
 
-`organization_role_bindings` 只在持有相同 signed organization context、且组织与 membership 均为 active 时参与组织作用域的授权决策；它们不会转化为通用 platform 权限。跨组织、停用组织、非 active membership 和平台角色绑定均失败关闭。成功写操作会分别写入 `organization.membership.invited`、`organization.membership.updated`、`organization.membership.joined`、`organization.role_binding.assigned`、`organization.role_binding.revoked`、`organization.service.created`、`organization.service.updated` 或 `organization.service.secret_rotated` 审计事件。
+device 创建请求是 `{ "device_id": "edge-001", "display_name": "Warehouse edge agent" }`。organization 路由拒绝 body 中的 `organization_id`；创建会原子写入 immutable device scope 和 active organization membership。API key 创建请求是 `{ "allowed_scopes": ["authorization"], "allowed_audiences": ["admin-backend"], "expires_at": "2026-08-11T08:00:00Z" }`；`expires_at` 可省略，提供时必须是未来 RFC3339 时间。创建和轮换的 `data.api_key` 只在该次响应中出现；列表及审计永远不返回原值或 hash。rotation 请求可以传新的 `expires_at`、`allowed_scopes` 或 `allowed_audiences`，省略字段时沿用旧 key 的能力限制。
+
+`organization_role_bindings` 只在持有相同 signed organization context、且组织与 membership 均为 active 时参与组织作用域的授权决策；它们不会转化为通用 platform 权限。跨组织、停用组织、非 active membership 和平台角色绑定均失败关闭。成功写操作会分别写入 `organization.membership.invited`、`organization.membership.updated`、`organization.membership.joined`、`organization.role_binding.assigned`、`organization.role_binding.revoked`、`organization.service.created`、`organization.service.updated`、`organization.service.secret_rotated`、`machine.device.created`、`machine.device.updated`、`machine.api_key.created`、`machine.api_key.rotated` 或 `machine.api_key.revoked` 审计事件。
 
 ### 7.7 受限 Customer Support 访问
 

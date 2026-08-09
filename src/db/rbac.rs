@@ -5,7 +5,10 @@ use uuid::Uuid;
 use crate::models::*;
 
 pub fn valid_role_assignable_to(assignable_to: &str) -> bool {
-    matches!(assignable_to, "user" | "service" | "client" | "all")
+    matches!(
+        assignable_to,
+        "user" | "service" | "device" | "client" | "all"
+    )
 }
 
 pub fn ensure_role_assignable_to_principal_type(

@@ -3027,6 +3027,62 @@ mod tests {
             .await;
         assert_eq!(cross_organization.status_code(), StatusCode::FORBIDDEN);
 
+        let device_path = format!("/v1/organizations/{}/devices", organization_a.id);
+        let device_created = server
+            .post(&device_path)
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "device_id": format!("delegated-device-{suffix}"),
+                "display_name": "Delegated organization device"
+            }))
+            .await;
+        device_created.assert_status_ok();
+        let device_created: serde_json::Value = device_created.json();
+        assert_eq!(device_created["data"]["organization_id"], organization_a.id);
+        let delegated_device_principal_id = device_created["data"]["principal_id"]
+            .as_str()
+            .expect("Delegated device should return Principal id")
+            .to_string();
+        let delegated_key = server
+            .post(&format!(
+                "/v1/organizations/{}/principals/{}/api-keys",
+                organization_a.id, delegated_device_principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "allowed_scopes": ["authorization"],
+                "allowed_audiences": ["admin-backend"]
+            }))
+            .await;
+        delegated_key.assert_status_ok();
+        assert!(delegated_key.json::<serde_json::Value>()["data"]["api_key"]
+            .as_str()
+            .is_some());
+        let cross_organization_device = server
+            .post(&format!("/v1/organizations/{}/devices", organization_b.id))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "device_id": format!("forbidden-device-{suffix}"),
+                "display_name": "Forbidden device"
+            }))
+            .await;
+        assert_eq!(
+            cross_organization_device.status_code(),
+            StatusCode::FORBIDDEN
+        );
+        let cross_organization_key = server
+            .post(&format!(
+                "/v1/organizations/{}/principals/{}/api-keys",
+                organization_b.id, delegated_device_principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({
+                "allowed_scopes": ["authorization"],
+                "allowed_audiences": ["admin-backend"]
+            }))
+            .await;
+        assert_eq!(cross_organization_key.status_code(), StatusCode::FORBIDDEN);
+
         let other_service = format!("other-service-{suffix}");
         db::create_service_client(
             &pool,
@@ -3676,6 +3732,266 @@ mod tests {
             }))
             .await;
         assert_eq!(blocked_issuance.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    /// Exercises the metadata-only key lifecycle and direct machine authorization path.
+    #[tokio::test]
+    async fn test_machine_api_key_is_explicit_scoped_rotatable_and_live() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization_a = db::create_organization(
+            &pool,
+            &format!("machine-http-a-{suffix}"),
+            "Machine HTTP organization A",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create machine HTTP organization A");
+        let organization_b = db::create_organization(
+            &pool,
+            &format!("machine-http-b-{suffix}"),
+            "Machine HTTP organization B",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .expect("Failed to create machine HTTP organization B");
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Admin token should be present")
+            .to_string();
+
+        let device_id = format!("machine-http-device-{suffix}");
+        let device_response = server
+            .post("/v1/admin/devices")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "device_id": device_id,
+                "display_name": "Machine authorization agent",
+                "organization_id": organization_a.id,
+            }))
+            .await;
+        device_response.assert_status_ok();
+        let device: serde_json::Value = device_response.json();
+        assert_eq!(device["data"]["scope_kind"], "organization");
+        assert_eq!(device["data"]["organization_id"], organization_a.id);
+        let device_principal_id = device["data"]["principal_id"]
+            .as_str()
+            .expect("Device creation should return Principal id")
+            .to_string();
+
+        let permission = db::create_permission(
+            &pool,
+            &format!("machine:http:read:{suffix}"),
+            Some("Machine HTTP permission"),
+        )
+        .await
+        .expect("Failed to create machine permission");
+        let role = db::create_organization_role(
+            &pool,
+            &format!("machine-http-reader-{suffix}"),
+            Some("Machine HTTP reader"),
+            "device",
+        )
+        .await
+        .expect("Failed to create device organization role");
+        db::assign_permission_to_role(&pool, &role.id, &permission.id)
+            .await
+            .expect("Failed to bind machine permission");
+        db::assign_organization_role(
+            &pool,
+            &organization_a.id,
+            &device_principal_id,
+            &role.id,
+            Some("machine-api-key-integration-test"),
+        )
+        .await
+        .expect("Failed to bind device organization role");
+        db::create_resource_in_organization(
+            &pool,
+            Some(&organization_b.id),
+            db::CreateResourceParams {
+                app: "machine-http",
+                resource_type: "api",
+                code: "only-organization-b",
+                name: "Organization B machine resource",
+                parent_id: None,
+                display_order: 0,
+                description: None,
+                metadata: None,
+                permission_ids: std::slice::from_ref(&permission.id),
+            },
+        )
+        .await
+        .expect("Failed to create cross-tenant resource");
+
+        let key_path = format!("/v1/admin/principals/{device_principal_id}/api-keys");
+        let created = server
+            .post(&key_path)
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "organization_id": organization_a.id,
+                "allowed_scopes": ["authorization"],
+                "allowed_audiences": ["admin-backend"],
+            }))
+            .await;
+        created.assert_status_ok();
+        let created: serde_json::Value = created.json();
+        let api_key = created["data"]["api_key"]
+            .as_str()
+            .expect("API key should appear only in create response")
+            .to_string();
+        let key_id = created["data"]["key_id"]
+            .as_str()
+            .expect("API key metadata should include key id")
+            .to_string();
+        assert!(api_key.starts_with("keylo."));
+        assert!(created["data"].get("secret_hash").is_none());
+
+        let listed = server
+            .get(&format!("{key_path}?organization_id={}", organization_a.id))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .await;
+        listed.assert_status_ok();
+        let listed: serde_json::Value = listed.json();
+        assert_eq!(listed["data"].as_array().map(Vec::len), Some(1));
+        assert!(listed["data"][0].get("api_key").is_none());
+
+        let direct_check = server
+            .post("/v1/authorize/check")
+            .add_header("X-API-Key", api_key.clone())
+            .json(&json!({ "permission": permission.name }))
+            .await;
+        direct_check.assert_status_ok();
+        assert_eq!(
+            direct_check.json::<serde_json::Value>()["data"]["allowed"],
+            true
+        );
+        let direct_batch = server
+            .post("/v1/authorize/batch-check")
+            .add_header("X-API-Key", api_key.clone())
+            .json(&json!({
+                "checks": [{ "permission": permission.name }]
+            }))
+            .await;
+        direct_batch.assert_status_ok();
+        assert_eq!(
+            direct_batch.json::<serde_json::Value>()["data"]["results"][0]["allowed"],
+            true
+        );
+        let cross_tenant = server
+            .post("/v1/authorize/check")
+            .add_header("X-API-Key", api_key.clone())
+            .json(&json!({
+                "app": "machine-http",
+                "resource_type": "api",
+                "resource_code": "only-organization-b"
+            }))
+            .await;
+        cross_tenant.assert_status_ok();
+        assert_eq!(
+            cross_tenant.json::<serde_json::Value>()["data"]["allowed"],
+            false
+        );
+        let bearer_key = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {api_key}"))
+            .json(&json!({ "permission": permission.name }))
+            .await;
+        assert_eq!(bearer_key.status_code(), StatusCode::UNAUTHORIZED);
+        let query_key = server
+            .post(&format!("/v1/authorize/check?api_key={api_key}"))
+            .add_header("X-API-Key", api_key.clone())
+            .json(&json!({ "permission": permission.name }))
+            .await;
+        assert_eq!(query_key.status_code(), StatusCode::UNAUTHORIZED);
+
+        let rotated = server
+            .post(&format!(
+                "{key_path}/{key_id}/rotate?organization_id={}",
+                organization_a.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({}))
+            .await;
+        rotated.assert_status_ok();
+        let rotated: serde_json::Value = rotated.json();
+        let rotated_key = rotated["data"]["api_key"]
+            .as_str()
+            .expect("Rotation should return a replacement key once")
+            .to_string();
+        let old_key_during_overlap = server
+            .post("/v1/authorize/check")
+            .add_header("X-API-Key", api_key.clone())
+            .json(&json!({ "permission": permission.name }))
+            .await;
+        old_key_during_overlap.assert_status_ok();
+        let new_key_during_overlap = server
+            .post("/v1/authorize/check")
+            .add_header("X-API-Key", rotated_key.clone())
+            .json(&json!({ "permission": permission.name }))
+            .await;
+        new_key_during_overlap.assert_status_ok();
+
+        let revoked = server
+            .delete(&format!(
+                "{key_path}/{key_id}?organization_id={}",
+                organization_a.id
+            ))
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({ "reason": "Retired after rotation" }))
+            .await;
+        revoked.assert_status_ok();
+        let revoked_key = server
+            .post("/v1/authorize/check")
+            .add_header("X-API-Key", api_key)
+            .json(&json!({ "permission": permission.name }))
+            .await;
+        assert_eq!(revoked_key.status_code(), StatusCode::UNAUTHORIZED);
+
+        db::upsert_organization_membership(
+            &pool,
+            &organization_a.id,
+            &device_principal_id,
+            "suspended",
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to suspend device membership");
+        let suspended = server
+            .post("/v1/authorize/check")
+            .add_header("X-API-Key", rotated_key)
+            .json(&json!({ "permission": permission.name }))
+            .await;
+        assert_eq!(suspended.status_code(), StatusCode::UNAUTHORIZED);
+
+        let audited: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_logs
+             WHERE event_type IN (
+                'machine.device.created',
+                'machine.api_key.created',
+                'machine.api_key.authenticated',
+                'machine.api_key.rotated',
+                'machine.api_key.revoked'
+             )
+               AND detail LIKE $1",
+        )
+        .bind(format!("%principal_id={device_principal_id}%"))
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to inspect machine audit logs");
+        assert!(audited >= 5, "Machine lifecycle and use must be audited");
     }
 
     /// Verifies that a password login can create a tenant-scoped refresh session
