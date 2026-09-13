@@ -3086,6 +3086,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_user_can_list_and_unlink_oidc_identity_without_revoking_local_sessions() {
+        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await.unwrap();
+        let admin_login = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        admin_login.assert_status_ok();
+        let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let source_name = format!(
+            "self-unlink-source-{}",
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let source = server
+            .post("/v1/admin/identity-sources")
+            .add_header("Authorization", format!("Bearer {admin_token}"))
+            .json(&json!({
+                "name": source_name,
+                "source_type": "oidc_upstream",
+                "display_name": "Self unlink source",
+                "config": {
+                    "issuer": "https://idp.example.test",
+                    "client_id": "self-unlink-client",
+                    "client_secret": "self-unlink-secret",
+                    "redirect_uri": "https://keylo.example.test/v1/upstream/oidc/callback"
+                }
+            }))
+            .await;
+        source.assert_status_ok();
+        let source_id = source.json::<serde_json::Value>()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let username = format!("self-unlink-user-{}", uuid::Uuid::new_v4());
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some("SelfUnlink#123"),
+        )
+        .await
+        .unwrap();
+        let provider = format!("oidc_upstream:{source_id}");
+        db::create_external_user_mapping(
+            &pool,
+            &provider,
+            "self-unlink-external-subject",
+            &user.id,
+            Some(&json!({"source": "test"})),
+        )
+        .await
+        .unwrap();
+        let principal = db::ensure_user_principal(&pool, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let upstream_session_id = format!("self-unlink-session-{}", uuid::Uuid::new_v4());
+        let upstream_refresh_token_id = format!("self-unlink-refresh-id-{}", uuid::Uuid::new_v4());
+        let upstream_refresh_token = format!("self-unlink-refresh-{}", uuid::Uuid::new_v4());
+        let upstream_access_jti = format!("self-unlink-access-{}", uuid::Uuid::new_v4());
+        db::create_refresh_session(
+            &pool,
+            db::CreateRefreshSessionParams {
+                session_id: &upstream_session_id,
+                principal_id: &principal.id,
+                client_id: &provider,
+                organization_id: None,
+                refresh_token_id: &upstream_refresh_token_id,
+                refresh_token: &upstream_refresh_token,
+                access_jti: &upstream_access_jti,
+                login_ip: None,
+                user_agent: None,
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .unwrap();
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "SelfUnlink#123"
+            }))
+            .await;
+        login.assert_status_ok();
+        let login_body: serde_json::Value = login.json();
+        let access_token = login_body["access_token"].as_str().unwrap().to_string();
+
+        let links = server
+            .get("/v1/user/identity-sources/links")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        links.assert_status_ok();
+        let links_body: serde_json::Value = links.json();
+        assert_eq!(links_body["identity_sources"].as_array().unwrap().len(), 1);
+        assert_eq!(links_body["identity_sources"][0]["source_id"], source_id);
+        assert!(links_body["identity_sources"][0]
+            .get("external_subject")
+            .is_none());
+
+        let unlink = server
+            .delete(&format!("/v1/user/identity-sources/{source_id}/link"))
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        unlink.assert_status_ok();
+        let unlink_body: serde_json::Value = unlink.json();
+        assert_eq!(unlink_body["success"], true);
+        assert_eq!(unlink_body["source_id"], source_id);
+
+        let links_after = server
+            .get("/v1/user/identity-sources/links")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        links_after.assert_status_ok();
+        assert_eq!(
+            links_after.json::<serde_json::Value>()["identity_sources"],
+            json!([])
+        );
+
+        let unlink_again = server
+            .delete(&format!("/v1/user/identity-sources/{source_id}/link"))
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        assert_eq!(unlink_again.status_code(), StatusCode::NOT_FOUND);
+
+        let sessions = db::list_refresh_sessions_for_principal(&pool, &principal.id, true)
+            .await
+            .unwrap();
+        assert!(sessions.iter().any(|session| {
+            session.client_id == provider
+                && session.revoked_at.is_some()
+                && session.revoke_reason.as_deref() == Some("upstream_identity_unlinked")
+        }));
+        assert!(sessions.iter().any(|session| {
+            session.client_id.starts_with("user:") && session.revoked_at.is_none()
+        }));
+    }
+
+    #[tokio::test]
     async fn test_oidc_upstream_discovery_cache_invalidates_on_source_update() {
         let (issuer, discovery_hits, upstream_handle) = spawn_fake_upstream_metadata_server().await;
         let server = setup_test_server().await;

@@ -159,6 +159,7 @@
 
 - 先稳定已有的 change-password、TOTP、恢复码和 OIDC identity link/unlink 契约。
 - [x] TOTP enrollment、恢复码一次性消费、token-bound recent MFA、密码修改前置校验和 TOTP reset 已有真实 HTTP 回归覆盖。
+- [x] 已关联 OIDC upstream 身份的自助列表、解除关联、上游 refresh session 定向撤销和重复解除错误边界已有真实 HTTP 回归覆盖。
 - 当真实应用需要邮件闭环时，再增加可插拔邮件投递边界：邮箱验证、forgot-password、一次性哈希 Token、过期/重放撤销、审计、密码重置后的 session revoke。
 - 不在 Keylo 核心内置模板主题、营销邮件或通用工作流；测试使用 fake mail provider，生产通过受控 SMTP 或外部邮件服务。
 
