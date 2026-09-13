@@ -140,6 +140,15 @@
 - 覆盖 service/device Principal 的 API key 创建、直接调用、短期 service_access 换取、跨组织拒绝、轮换、撤销、过期、限流和审计矩阵。
 - 为迁移、组织停用、成员移除、Token 刷新、缓存失效和回滚建立真实 PostgreSQL 集成测试。
 
+#### 3.5.1 本轮切片：service token 换取保护（设计已冻结）
+
+- [x] `/v1/service/token` 在数据库查询前按客户端 IP 和 `service_id` 执行双层限流；客户端 IP 默认取 TCP peer address，仅在 `TRUST_PROXY_HEADERS=true` 时读取受信任的转发头。
+- [x] 错误凭证按 `service_id` 记录失败次数并复用 `MAX_FAILED_LOGIN_ATTEMPTS` / `LOGIN_LOCKOUT_SECONDS` 锁定策略；锁定期间统一返回 `too_many_requests`，成功换取 Token 后清除失败记录。
+- [x] 未注册、停用和错误密钥继续使用现有公开错误边界；审计事件只记录 service 标识、客户端 IP 的非敏感摘要和拒绝原因，不写入原始密钥；固定指标覆盖认证结果和限流拒绝次数。
+- [x] 保持成功响应、`service_access` Claims、组织范围实时校验和 Token TTL 不变；本机 Docker PostgreSQL 集成测试覆盖错误密钥、锁定、成功清除、IP/服务双层限流、审计脱敏和 metrics 计数，并记录容器镜像、端口、启动及清理状态。
+
+验证记录（2026-09-13）：使用本机 Docker 服务 `keylo-test-db`，镜像 `postgres:17-alpine`，宿主端口 `5432` 映射到容器端口 `5432`；启动后通过 `pg_isready` 确认 `keylo_test` 可用，以 URL 编码密码设置 `TEST_DATABASE_URL`。新增用例、相关 service token 用例及完整 workspace 测试均通过，随后执行 `docker rm -f keylo-test-db` 完成清理，容器和端口映射均已移除。
+
 完成标准：隔离回归全部通过，任意数据库查询路径都能追溯 organization filter；发现一次跨组织成功即阻止版本发布。
 
 ## 4. 2.1 后半段：通用 IAM 易用性（P1）

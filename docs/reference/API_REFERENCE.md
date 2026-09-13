@@ -879,6 +879,8 @@ Keylo 当前只接受 RS256 签名的 ID Token；若 Discovery 显式声明的 `
 
 服务 Token 的组织边界只能从已注册 service client 的持久化记录派生，`/v1/service/token` 不接受 `organization_id`、请求头或 audience/scope 以外的字段来切换组织。organization-scoped client 签发的 JWT 会包含其唯一的 `organization_id`；每次使用时都会实时检查 service client、service Principal、组织和 active membership。组织停用、服务 Principal 停用或 membership 变为 pending/suspended/removed 时，已有 Token 和新的签发请求都会被拒绝。
 
+该入口会在凭证查询前按客户端 IP 和 `service_id` 执行双层限流，窗口和请求数分别复用 `AUTH_RATE_LIMIT_WINDOW_SECONDS`、`AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS` 与 `AUTH_RATE_LIMIT_MAX_REQUESTS`。客户端 IP 默认取 TCP peer address；只有 `TRUST_PROXY_HEADERS=true` 时才使用 `X-Forwarded-For` / `X-Real-IP`。连续错误凭证会按 `MAX_FAILED_LOGIN_ATTEMPTS` 和 `LOGIN_LOCKOUT_SECONDS` 锁定对应 service client；锁定期间返回 `429 too_many_requests`，有效凭证成功换取 Token 后清除失败计数。限流、锁定和失败事件会写入审计，审计不包含原始 service secret 或明文 IP，只保留稳定的非敏感 IP 摘要；认证结果和限流拒绝计入固定 metrics。
+
 ### 9.2 服务受保护接口
 
 | 方法 | 路径 | 鉴权 |

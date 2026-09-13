@@ -94,7 +94,7 @@ fn redact_audit_json_value(value: &mut Value) {
     }
 }
 
-pub struct PeerAddr(Option<SocketAddr>);
+pub struct PeerAddr(pub(crate) Option<SocketAddr>);
 
 impl<S> axum::extract::FromRequestParts<S> for PeerAddr
 where
@@ -429,7 +429,7 @@ fn audit_event_background(
     });
 }
 
-fn extract_client_ip(
+pub(crate) fn extract_client_ip(
     headers: &HeaderMap,
     peer_addr: Option<SocketAddr>,
     trust_proxy_headers: bool,

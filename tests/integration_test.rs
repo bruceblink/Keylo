@@ -154,6 +154,24 @@ mod tests {
         }
     }
 
+    /// Sends one service-token request and returns its HTTP status for security-matrix tests.
+    async fn request_service_token_status(
+        server: &TestServer,
+        service_id: &str,
+        service_secret: &str,
+    ) -> StatusCode {
+        server
+            .post("/v1/service/token")
+            .json(&json!({
+                "service_id": service_id,
+                "service_secret": service_secret,
+                "audience": "admin-backend",
+                "scope": "read"
+            }))
+            .await
+            .status_code()
+    }
+
     /// Opens and migrates the database used by organization HTTP tests.
     ///
     /// An explicitly configured test database must be reachable; otherwise a
@@ -5627,6 +5645,171 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
         let body: serde_json::Value = response.json();
         assert_eq!(body["error"], "service_client_not_authorized");
+    }
+
+    #[tokio::test]
+    async fn test_service_token_failed_credentials_lock_and_success_clears_failures() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let mut config = test_config();
+        config.max_failed_login_attempts = 2;
+        config.login_lockout_seconds = 60;
+        config.auth_rate_limit_max_requests = 100;
+        config.auth_global_rate_limit_max_requests = 1_000;
+        let server = setup_test_server_with_config(config).await;
+        let service_id = format!("service-lockout-{}", uuid::Uuid::new_v4().simple());
+        let allowed_scopes = vec!["read".to_string()];
+        let allowed_audiences = vec!["admin-backend".to_string()];
+
+        db::create_service_client(
+            &pool,
+            db::CreateServiceClientParams {
+                service_id: &service_id,
+                service_secret: "ServiceLock#123",
+                name: "Service lockout test",
+                description: None,
+                organization_id: None,
+                allowed_scopes: &allowed_scopes,
+                allowed_audiences: &allowed_audiences,
+                integration_type: "internal",
+                introspection_allowed: true,
+                token_ttl_seconds: None,
+                owner: None,
+                contact: None,
+            },
+        )
+        .await
+        .expect("service client should be created");
+
+        assert_eq!(
+            request_service_token_status(&server, &service_id, "wrong-secret").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_id, "ServiceLock#123").await,
+            StatusCode::OK,
+            "a valid credential should clear a previous failure"
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_id, "wrong-secret").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_id, "ServiceLock#123").await,
+            StatusCode::OK,
+            "a second valid credential should remain possible after one failure"
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_id, "wrong-secret").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_id, "wrong-secret").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_id, "ServiceLock#123").await,
+            StatusCode::TOO_MANY_REQUESTS,
+            "the next request should observe the lockout"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_service_token_rate_limits_by_service_and_ip_without_secret_audit_leak() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let mut config = test_config();
+        config.max_failed_login_attempts = 100;
+        config.auth_rate_limit_max_requests = 2;
+        config.auth_global_rate_limit_max_requests = 3;
+        config.auth_rate_limit_window_seconds = 60;
+        let server = setup_test_server_with_config(config).await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let service_a = format!("service-rate-a-{suffix}");
+        let service_b = format!("service-rate-b-{suffix}");
+        let allowed_scopes = vec!["read".to_string()];
+        let allowed_audiences = vec!["admin-backend".to_string()];
+
+        for service_id in [&service_a, &service_b] {
+            db::create_service_client(
+                &pool,
+                db::CreateServiceClientParams {
+                    service_id,
+                    service_secret: "ServiceRate#123",
+                    name: "Service rate-limit test",
+                    description: None,
+                    organization_id: None,
+                    allowed_scopes: &allowed_scopes,
+                    allowed_audiences: &allowed_audiences,
+                    integration_type: "internal",
+                    introspection_allowed: true,
+                    token_ttl_seconds: None,
+                    owner: None,
+                    contact: None,
+                },
+            )
+            .await
+            .expect("service client should be created");
+        }
+
+        assert_eq!(
+            request_service_token_status(&server, &service_a, "wrong-secret").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_a, "wrong-secret").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_a, "wrong-secret").await,
+            StatusCode::TOO_MANY_REQUESTS,
+            "the service-specific bucket should reject its third request"
+        );
+        assert_eq!(
+            request_service_token_status(&server, &service_b, "wrong-secret").await,
+            StatusCode::TOO_MANY_REQUESTS,
+            "the shared IP bucket should reject a later service request"
+        );
+
+        let metrics = server.get("/metrics").await;
+        metrics.assert_status_ok();
+        let metrics = metrics.text();
+        assert!(metrics.contains("keylo_rate_limit_rejections_total 2"));
+        assert!(metrics.contains("keylo_authentication_failures_total 4"));
+
+        let scoped_audits: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_logs
+             WHERE event_type = 'service.token.rate_limited' AND actor = $1",
+        )
+        .bind(&service_a)
+        .fetch_one(&pool)
+        .await
+        .expect("scoped rate-limit audit query should succeed");
+        assert_eq!(scoped_audits, 1);
+
+        let global_audits: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_logs
+             WHERE event_type = 'service.token.rate_limited.global' AND actor = $1",
+        )
+        .bind(&service_b)
+        .fetch_one(&pool)
+        .await
+        .expect("global rate-limit audit query should succeed");
+        assert_eq!(global_audits, 1);
+
+        let audit_detail: String = sqlx::query_scalar(
+            "SELECT COALESCE(detail, '') FROM audit_logs
+             WHERE event_type = 'service.token.rate_limited' AND actor = $1
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(&service_a)
+        .fetch_one(&pool)
+        .await
+        .expect("rate-limit audit detail query should succeed");
+        assert!(audit_detail.contains("client_ip_hash="));
+        assert!(!audit_detail.contains("wrong-secret"));
     }
 
     #[tokio::test]

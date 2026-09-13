@@ -149,7 +149,11 @@ impl RuntimeMetrics {
     pub fn security_outcome(&self, path: &str, status: u16) {
         if matches!(
             path,
-            "/v1/auth/token" | "/v1/admin/token" | "/v1/oidc/login" | "/v1/upstream/oidc/callback"
+            "/v1/auth/token"
+                | "/v1/admin/token"
+                | "/v1/service/token"
+                | "/v1/oidc/login"
+                | "/v1/upstream/oidc/callback"
         ) {
             if (200..300).contains(&status) {
                 self.authentication_successes_total
@@ -638,9 +642,11 @@ mod tests {
         metrics.request_started();
         metrics.request_finished(200, 3);
         metrics.security_outcome("/v1/auth/token", 200);
+        metrics.security_outcome("/v1/service/token", 201);
         metrics.request_started();
         metrics.request_finished(401, 4);
         metrics.security_outcome("/v1/auth/token", 401);
+        metrics.security_outcome("/v1/service/token", 401);
         metrics.request_started();
         metrics.request_finished(403, 5);
         metrics.security_outcome("/v1/authorize/check", 403);
@@ -653,8 +659,8 @@ mod tests {
 
         let text = metrics.prometheus_text();
 
-        assert!(text.contains("keylo_authentication_successes_total 1"));
-        assert!(text.contains("keylo_authentication_failures_total 1"));
+        assert!(text.contains("keylo_authentication_successes_total 2"));
+        assert!(text.contains("keylo_authentication_failures_total 2"));
         assert!(text.contains("keylo_authorization_denials_total 1"));
         assert!(text.contains("keylo_refresh_replays_total 1"));
         assert!(text.contains("keylo_rate_limit_rejections_total 1"));

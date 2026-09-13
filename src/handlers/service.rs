@@ -1,15 +1,18 @@
 use crate::db::service as svc_db;
 use crate::errors::{is_unique_violation, AuthError};
+use crate::handlers::auth::{extract_client_ip, PeerAddr};
 use crate::models::service::{
     IntrospectRequest, IntrospectResponse, RegisterServiceRequest, RotateServiceSecretRequest,
     ServiceClaims, ServiceInfo, ServiceTokenRequest, ServiceTokenResponse, UpdateServiceRequest,
 };
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -17,10 +20,76 @@ use uuid::Uuid;
 /// 服务间认证：使用 service_id + service_secret 换取短期 JWT
 pub async fn service_token(
     State(state): State<AppState>,
+    PeerAddr(peer_addr): PeerAddr,
+    headers: HeaderMap,
     Json(payload): Json<ServiceTokenRequest>,
 ) -> Result<Json<ServiceTokenResponse>, AuthError> {
+    let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
+    let client_ip_hash = service_token_digest(&client_ip);
+    let service_id_hash = service_token_digest(&payload.service_id);
+    let global_rate_key = format!("service-token:ip:{client_ip_hash}");
+    let scoped_rate_key = format!("service-token:ip:{client_ip_hash}:service:{service_id_hash}");
+    let service_actor =
+        (!payload.service_id.trim().is_empty()).then_some(payload.service_id.as_str());
+
+    if !state
+        .allow_auth_request(
+            &global_rate_key,
+            state.config.auth_rate_limit_window_seconds,
+            state.config.auth_global_rate_limit_max_requests,
+        )
+        .await
+    {
+        state.runtime_metrics.rate_limit_rejection_observed();
+        let detail = service_token_audit_detail(
+            &client_ip_hash,
+            "Service token request rate limit exceeded",
+        );
+        audit_service_event(
+            &state,
+            "service.token.rate_limited.global",
+            service_actor,
+            Some(&detail),
+        )
+        .await;
+        return Err(AuthError::TooManyRequests);
+    }
+
+    if !state
+        .allow_auth_request(
+            &scoped_rate_key,
+            state.config.auth_rate_limit_window_seconds,
+            state.config.auth_rate_limit_max_requests,
+        )
+        .await
+    {
+        state.runtime_metrics.rate_limit_rejection_observed();
+        let detail = service_token_audit_detail(
+            &client_ip_hash,
+            "Service token request rate limit exceeded",
+        );
+        audit_service_event(
+            &state,
+            "service.token.rate_limited",
+            service_actor,
+            Some(&detail),
+        )
+        .await;
+        return Err(AuthError::TooManyRequests);
+    }
+
     if payload.service_id.trim().is_empty() || payload.service_secret.trim().is_empty() {
         return Err(AuthError::MissingCredentials);
+    }
+
+    let failure_key = format!("service-token:failure:{service_id_hash}");
+    if state.is_login_locked(&failure_key).await.is_some() {
+        let detail = service_token_audit_detail(
+            &client_ip_hash,
+            "Service token login is locked due to repeated failures",
+        );
+        audit_service_event(&state, "service.token.locked", service_actor, Some(&detail)).await;
+        return Err(AuthError::TooManyRequests);
     }
 
     // 优先从数据库验证凭证
@@ -32,26 +101,42 @@ pub async fn service_token(
 
         match result {
             svc_db::ServiceCredentialVerification::NotAuthorized => {
+                state
+                    .record_login_failure(
+                        &failure_key,
+                        state.config.max_failed_login_attempts,
+                        state.config.login_lockout_seconds,
+                    )
+                    .await;
+                let detail = service_token_audit_detail(
+                    &client_ip_hash,
+                    "Service client is not registered or active",
+                );
                 audit_service_event(
                     &state,
                     "service.token.forbidden",
-                    Some(&payload.service_id),
-                    Some("Service client is not registered or active"),
+                    service_actor,
+                    Some(&detail),
                 )
                 .await;
                 return Err(AuthError::ServiceClientNotAuthorized);
             }
             svc_db::ServiceCredentialVerification::WrongSecret => {
-                audit_service_event(
-                    &state,
-                    "service.token.failed",
-                    Some(&payload.service_id),
-                    Some("Invalid service credentials"),
-                )
-                .await;
+                state
+                    .record_login_failure(
+                        &failure_key,
+                        state.config.max_failed_login_attempts,
+                        state.config.login_lockout_seconds,
+                    )
+                    .await;
+                let detail =
+                    service_token_audit_detail(&client_ip_hash, "Invalid service credentials");
+                audit_service_event(&state, "service.token.failed", service_actor, Some(&detail))
+                    .await;
                 return Err(AuthError::WrongCredentials);
             }
             svc_db::ServiceCredentialVerification::Authorized(policy) => {
+                state.clear_login_failures(&failure_key).await;
                 let granted_scopes = resolve_scopes(&payload.scope, &policy.allowed_scopes)?;
                 let audience = resolve_audience(&payload.audience, &policy.allowed_audiences)?;
                 let expires_in = policy
@@ -78,11 +163,15 @@ pub async fn service_token(
                 .await
                 .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
                 if !token_context_active {
+                    let detail = service_token_audit_detail(
+                        &client_ip_hash,
+                        "Service client organization context is inactive",
+                    );
                     audit_service_event(
                         &state,
                         "service.token.forbidden",
-                        Some(&payload.service_id),
-                        Some("Service client organization context is inactive"),
+                        service_actor,
+                        Some(&detail),
                     )
                     .await;
                     return Err(AuthError::ServiceClientNotAuthorized);
@@ -98,18 +187,15 @@ pub async fn service_token(
                     expires_in,
                 )?;
 
-                audit_service_event(
-                    &state,
-                    "service.token.issued",
-                    Some(&payload.service_id),
-                    Some(&format!(
-                        "scope={}, aud={}, organization_id={}",
-                        granted_scopes.join(" "),
-                        audience,
-                        service_scope.organization_id.as_deref().unwrap_or("-")
-                    )),
-                )
-                .await;
+                let detail = format!(
+                    "scope={}, aud={}, organization_id={}, client_ip_hash={}",
+                    granted_scopes.join(" "),
+                    audience,
+                    service_scope.organization_id.as_deref().unwrap_or("-"),
+                    client_ip_hash
+                );
+                audit_service_event(&state, "service.token.issued", service_actor, Some(&detail))
+                    .await;
 
                 return Ok(Json(ServiceTokenResponse::new(
                     token,
@@ -548,6 +634,18 @@ fn resolve_audience(requested: &Option<String>, allowed: &[String]) -> Result<St
     }
 }
 
+/// Hashes request identity values before they become in-memory or Redis keys.
+/// This keeps key size bounded and prevents service identifiers or IP addresses
+/// from being copied into rate-limit storage.
+fn service_token_digest(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+/// Adds a stable, non-sensitive client-IP summary to service authentication audits.
+fn service_token_audit_detail(client_ip_hash: &str, reason: &str) -> String {
+    format!("{reason}; client_ip_hash={client_ip_hash}")
+}
+
 fn non_empty_trimmed(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -654,5 +752,25 @@ mod tests {
         let normalized = normalize_list("allowed_audiences", vec!["*".into()], true).unwrap();
 
         assert_eq!(normalized, vec!["*".to_string()]);
+    }
+
+    #[test]
+    fn service_token_digest_keeps_rate_limit_identity_values_private() {
+        let digest = service_token_digest("service-secret-or-client-ip");
+
+        assert_eq!(digest.len(), 64);
+        assert!(!digest.contains("service-secret"));
+        assert_ne!(digest, service_token_digest("another-value"));
+    }
+
+    #[test]
+    fn service_token_audit_detail_contains_only_the_ip_summary() {
+        let detail = service_token_audit_detail("0123456789abcdef", "Invalid service credentials");
+
+        assert_eq!(
+            detail,
+            "Invalid service credentials; client_ip_hash=0123456789abcdef"
+        );
+        assert!(!detail.contains("service_secret"));
     }
 }
