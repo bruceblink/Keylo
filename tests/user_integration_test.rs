@@ -4,6 +4,7 @@ mod tests {
     use keylo::config::Config;
     use keylo::startup::init_app_router_with_db_and_admin;
     use serde_json::json;
+    use totp_rs::{Algorithm, Secret, TOTP};
 
     const TEST_JWT_PRIVATE_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCsrVdCePdLh6/8
@@ -51,9 +52,26 @@ wwIDAQAB
             jwt_keys_generated: false,
             admin_client_id: Some("user-test-admin".to_string()),
             admin_client_secret: Some("UserTestAdmin#123".to_string()),
+            mfa_secret_key: Some("01234567890123456789012345678901".to_string()),
             environment: "test".to_string(),
             ..Default::default()
         }
+    }
+
+    /// Generate the code expected by the enrollment endpoint using the same fixed RFC 6238 profile.
+    fn current_totp_code(seed: &str) -> String {
+        let secret = Secret::Encoded(seed.to_string()).to_bytes().unwrap();
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            0,
+            30,
+            secret,
+            Some("Keylo".to_string()),
+            "verification".to_string(),
+        )
+        .unwrap();
+        totp.generate(chrono::Utc::now().timestamp() as u64)
     }
 
     async fn setup_test_server() -> Option<TestServer> {
@@ -371,5 +389,128 @@ wwIDAQAB
             .await;
 
         assert_eq!(change_response.status_code(), 401); // 缺少Authorization header
+    }
+
+    #[tokio::test]
+    async fn test_totp_recovery_and_recent_mfa_lifecycle() {
+        let Some(server) = setup_test_server().await else {
+            return;
+        };
+
+        // The flow covers enrollment, one-time recovery use, token-bound MFA, and reset.
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let username = format!("mfa_user_{}", timestamp);
+        let email = format!("mfa_{}@example.com", timestamp);
+        let register = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "OldPassword123!"
+            }))
+            .await;
+        assert_eq!(register.status_code(), 200);
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "OldPassword123!"
+            }))
+            .await;
+        assert_eq!(login.status_code(), 200);
+        let tokens: serde_json::Value = login.json::<serde_json::Value>();
+        let access_token = tokens["access_token"].as_str().unwrap().to_string();
+
+        let enrollment = server
+            .post("/v1/user/mfa/totp/enroll")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        assert_eq!(enrollment.status_code(), 200);
+        let enrollment_data: serde_json::Value = enrollment.json::<serde_json::Value>();
+        let seed = enrollment_data["data"]["manual_entry_key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(!seed.is_empty());
+        assert!(enrollment_data["data"]["provisioning_uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("otpauth://totp/"));
+
+        let verify_enrollment = server
+            .post("/v1/user/mfa/totp/verify")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .json(&json!({"code": current_totp_code(&seed)}))
+            .await;
+        assert_eq!(verify_enrollment.status_code(), 200);
+        let enabled_data: serde_json::Value = verify_enrollment.json::<serde_json::Value>();
+        assert_eq!(enabled_data["data"]["enabled"], true);
+        let recovery_code = enabled_data["data"]["recovery_codes"][0]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            enabled_data["data"]["recovery_codes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            10
+        );
+
+        let blocked_change = server
+            .post("/v1/user/change-password")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .json(&json!({
+                "current_password": "OldPassword123!",
+                "new_password": "NewPassword123!"
+            }))
+            .await;
+        assert_eq!(blocked_change.status_code(), 403);
+        let blocked_data: serde_json::Value = blocked_change.json::<serde_json::Value>();
+        assert_eq!(blocked_data["mfa_required"], true);
+
+        let recent_mfa = server
+            .post("/v1/user/mfa/verify")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .json(&json!({"recovery_code": recovery_code}))
+            .await;
+        assert_eq!(recent_mfa.status_code(), 200);
+        let recent_data: serde_json::Value = recent_mfa.json::<serde_json::Value>();
+        assert_eq!(recent_data["data"]["method"], "recovery_code");
+
+        let replay = server
+            .post("/v1/user/mfa/verify")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .json(&json!({"recovery_code": recovery_code}))
+            .await;
+        assert_eq!(replay.status_code(), 400);
+
+        let changed = server
+            .post("/v1/user/change-password")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .json(&json!({
+                "current_password": "OldPassword123!",
+                "new_password": "NewPassword123!"
+            }))
+            .await;
+        assert_eq!(changed.status_code(), 200);
+
+        let reset = server
+            .post("/v1/user/mfa/totp/reset")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        assert_eq!(reset.status_code(), 200);
+        let reset_data: serde_json::Value = reset.json::<serde_json::Value>();
+        assert_eq!(reset_data["data"]["enabled"], false);
+
+        let reset_again = server
+            .post("/v1/user/mfa/totp/reset")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        assert_eq!(reset_again.status_code(), 404);
     }
 }
