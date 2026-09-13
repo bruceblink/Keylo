@@ -10,7 +10,7 @@
 * 主线开发计划与核心设计见 [docs/design/KEYLO_DEVELOPMENT_BLUEPRINT.md](docs/design/KEYLO_DEVELOPMENT_BLUEPRINT.md)
 * 多客户端权限建模见 [docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md)
 * 统一密文配置格式见 [docs/operations/SECRET_ENCRYPTION.md](docs/operations/SECRET_ENCRYPTION.md)
-* 发布说明见 [docs/archive/releases/RELEASE_2_0.md](docs/archive/releases/RELEASE_2_0.md)
+* 发布说明见 [docs/archive/releases/RELEASE_2_1_1.md](docs/archive/releases/RELEASE_2_1_1.md)
 
 ---
 
@@ -440,7 +440,7 @@ curl http://127.0.0.1:2345/metrics
 ### 使用 GitHub Container Registry 镜像
 
 ```bash
-docker pull ghcr.io/bruceblink/keylo:v2.1.0
+docker pull ghcr.io/bruceblink/keylo:v2.1.1
 ```
 
 ### 运行容器
@@ -453,7 +453,7 @@ docker run --rm -p 2345:2345 \
   -e REDIS_HOST="redis" \
   -e REDIS_PASSWORD_ENC_FILE="/run/secrets/.redis_password.enc" \
   -e REDIS_PASSWORD_KEY_FILE="/run/secrets/.redis_password.key" \
-  ghcr.io/bruceblink/keylo:v2.1.0
+  ghcr.io/bruceblink/keylo:v2.1.1
 ```
 
 ### 本地构建镜像
