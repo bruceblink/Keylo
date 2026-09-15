@@ -3784,6 +3784,14 @@ mod tests {
         };
         let server = setup_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization = db::create_organization(
+            &pool,
+            &format!("http-org-internal-{suffix}"),
+            "HTTP organization owner API test",
+            keylo::models::ORGANIZATION_KIND_INTERNAL,
+        )
+        .await
+        .expect("Failed to create organization for delegated membership test");
 
         let owner = db::create_user(
             &pool,
@@ -3801,6 +3809,16 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &owner_principal.id,
+            "active",
+            Some("test-admin"),
+            Some(keylo::models::ORGANIZATION_MANAGEMENT_ROLE_OWNER),
+        )
+        .await
+        .expect("Failed to create organization owner membership");
 
         let member = db::create_user(
             &pool,
@@ -3839,7 +3857,7 @@ mod tests {
         let owner_context = server
             .post("/v1/auth/organization-context")
             .add_header("Authorization", format!("Bearer {owner_token}"))
-            .json(&json!({"organization_id": "org-internal"}))
+            .json(&json!({"organization_id": organization.id}))
             .await;
         owner_context.assert_status_ok();
         let owner_context_token = owner_context.json::<serde_json::Value>()["access_token"]
@@ -3847,9 +3865,12 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let invite_path = "/v1/organizations/org-internal/memberships/invitations";
+        let invite_path = format!(
+            "/v1/organizations/{}/memberships/invitations",
+            organization.id
+        );
         let invite = server
-            .post(invite_path)
+            .post(&invite_path)
             .add_header("Authorization", format!("Bearer {owner_context_token}"))
             .json(&json!({"principal_id": member_principal.id}))
             .await;
@@ -3860,7 +3881,7 @@ mod tests {
         );
 
         let repeated_invite = server
-            .post(invite_path)
+            .post(&invite_path)
             .add_header("Authorization", format!("Bearer {owner_context_token}"))
             .json(&json!({"principal_id": member_principal.id}))
             .await;
@@ -3885,8 +3906,8 @@ mod tests {
             .unwrap()
             .to_string();
         let join_path = format!(
-            "/v1/organizations/org-internal/memberships/{}/join",
-            member_principal.id
+            "/v1/organizations/{}/memberships/{}/join",
+            organization.id, member_principal.id
         );
         let join = server
             .post(&join_path)
@@ -3894,10 +3915,54 @@ mod tests {
             .await;
         join.assert_status_ok();
 
+        let delegated_members_page = server
+            .get(&format!(
+                "/v1/organizations/{}/memberships?limit=1&offset=0",
+                organization.id
+            ))
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .await;
+        delegated_members_page.assert_status_ok();
+        let delegated_members_page_body: serde_json::Value = delegated_members_page.json();
+        assert_eq!(
+            delegated_members_page_body["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(delegated_members_page_body["pagination"]["limit"], 1);
+        assert_eq!(delegated_members_page_body["pagination"]["offset"], 0);
+        assert_eq!(delegated_members_page_body["pagination"]["has_more"], true);
+        assert_eq!(delegated_members_page_body["pagination"]["next_offset"], 1);
+
+        let delegated_members_last_page = server
+            .get(&format!(
+                "/v1/organizations/{}/memberships?limit=1&offset=1",
+                organization.id
+            ))
+            .add_header("Authorization", format!("Bearer {owner_context_token}"))
+            .await;
+        delegated_members_last_page.assert_status_ok();
+        let delegated_members_last_page_body: serde_json::Value =
+            delegated_members_last_page.json();
+        assert_eq!(
+            delegated_members_last_page_body["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            delegated_members_last_page_body["pagination"]["has_more"],
+            false
+        );
+        assert!(delegated_members_last_page_body["pagination"]["next_offset"].is_null());
+
         let member_context = server
             .post("/v1/auth/organization-context")
             .add_header("Authorization", format!("Bearer {member_token}"))
-            .json(&json!({"organization_id": "org-internal"}))
+            .json(&json!({"organization_id": organization.id}))
             .await;
         member_context.assert_status_ok();
         let member_context_token = member_context.json::<serde_json::Value>()["access_token"]
@@ -3905,15 +3970,18 @@ mod tests {
             .unwrap()
             .to_string();
         let member_cannot_manage = server
-            .get("/v1/organizations/org-internal/memberships")
+            .get(&format!(
+                "/v1/organizations/{}/memberships",
+                organization.id
+            ))
             .add_header("Authorization", format!("Bearer {member_context_token}"))
             .await;
         assert_eq!(member_cannot_manage.status_code(), StatusCode::FORBIDDEN);
 
         let promote_member = server
             .put(&format!(
-                "/v1/organizations/org-internal/memberships/{}",
-                member_principal.id
+                "/v1/organizations/{}/memberships/{}",
+                organization.id, member_principal.id
             ))
             .add_header("Authorization", format!("Bearer {owner_context_token}"))
             .json(&json!({"status": "active", "management_role": "admin"}))
@@ -3930,8 +3998,8 @@ mod tests {
         .expect("Failed to create organization role");
         let assigned = server
             .post(&format!(
-                "/v1/organizations/org-internal/memberships/{}/roles",
-                member_principal.id
+                "/v1/organizations/{}/memberships/{}/roles",
+                organization.id, member_principal.id
             ))
             .add_header("Authorization", format!("Bearer {owner_context_token}"))
             .json(&json!({"role_id": organization_role.id.clone()}))
@@ -3940,8 +4008,8 @@ mod tests {
 
         let listed_roles = server
             .get(&format!(
-                "/v1/organizations/org-internal/memberships/{}/roles",
-                member_principal.id
+                "/v1/organizations/{}/memberships/{}/roles",
+                organization.id, member_principal.id
             ))
             .add_header("Authorization", format!("Bearer {owner_context_token}"))
             .await;
@@ -3956,8 +4024,8 @@ mod tests {
 
         let revoked = server
             .delete(&format!(
-                "/v1/organizations/org-internal/memberships/{}/roles/{}",
-                member_principal.id, organization_role.id
+                "/v1/organizations/{}/memberships/{}/roles/{}",
+                organization.id, member_principal.id, organization_role.id
             ))
             .add_header("Authorization", format!("Bearer {owner_context_token}"))
             .await;
@@ -3966,8 +4034,8 @@ mod tests {
 
         let suspended = server
             .put(&format!(
-                "/v1/organizations/org-internal/memberships/{}",
-                member_principal.id
+                "/v1/organizations/{}/memberships/{}",
+                organization.id, member_principal.id
             ))
             .add_header("Authorization", format!("Bearer {owner_context_token}"))
             .json(&json!({"status": "suspended"}))
@@ -3976,7 +4044,7 @@ mod tests {
         let suspended_context = server
             .post("/v1/auth/organization-context")
             .add_header("Authorization", format!("Bearer {member_token}"))
-            .json(&json!({"organization_id": "org-internal"}))
+            .json(&json!({"organization_id": organization.id}))
             .await;
         assert_eq!(suspended_context.status_code(), StatusCode::FORBIDDEN);
 

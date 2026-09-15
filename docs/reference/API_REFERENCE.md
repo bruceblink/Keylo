@@ -659,7 +659,7 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/organizations/{organization_id}/memberships?status=&limit=&offset=` | 查询当前组织成员 |
+| GET | `/v1/organizations/{organization_id}/memberships?status=&limit=&offset=` | 查询当前组织成员；返回 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | POST | `/v1/organizations/{organization_id}/memberships/invitations` | `{ "principal_id": "...", "management_role": "member|admin|owner" }`，创建或重复刷新 pending 邀请 |
 | PUT | `/v1/organizations/{organization_id}/memberships/{principal_id}` | 更新成员状态和管理角色；admin 不能授予或修改 owner |
 | POST | `/v1/organizations/{organization_id}/memberships/{principal_id}/join` | 仅目标本人接受 pending 邀请；重复 join 幂等 |

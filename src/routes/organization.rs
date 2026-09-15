@@ -435,17 +435,28 @@ async fn list_delegated_memberships_handler(
 ) -> Result<Json<serde_json::Value>, AuthError> {
     require_delegated_manager(&state, &claims, &organization_id).await?;
     let db = require_organization_db(&state)?;
-    let memberships = crate::db::list_organization_memberships(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (memberships, has_more) = crate::db::list_organization_memberships_page(
         db,
         &organization_id,
         query.status.as_deref(),
-        query.limit.unwrap_or(50),
-        query.offset.unwrap_or(0),
+        limit,
+        offset,
     )
     .await
     .map_err(map_delegated_error)?;
 
-    Ok(Json(json!({"success": true, "data": memberships})))
+    Ok(Json(json!({
+        "success": true,
+        "data": memberships,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn invite_delegated_member_handler(
