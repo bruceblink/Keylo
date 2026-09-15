@@ -535,14 +535,14 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/v1/admin/principals?principal_type=&active=&limit=&offset=` | Principal 列表；响应包含 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
-| GET | `/v1/admin/authorization-audit-logs?organization_id=&principal_id=&decision=&permission_name=&resource_id=&limit=&offset=` | 授权决策审计日志；organization_id 为精确组织过滤，`decision` 可筛选 `allow` 或 `deny` |
+| GET | `/v1/admin/authorization-audit-logs?organization_id=&principal_id=&decision=&permission_name=&resource_id=&limit=&offset=` | 授权决策审计日志；organization_id 为精确组织过滤，`decision` 可筛选 `allow` 或 `deny`；返回 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | POST | `/v1/admin/authorization-audit-logs/cleanup` | 清理超过保留期的授权审计日志，体为 `{ "retention_days": 30 }` |
 | GET | `/v1/admin/principals/{principal_id}` | Principal 详情 |
 | GET | `/v1/admin/principals/{principal_id}/roles` | Principal 角色 |
 | POST | `/v1/admin/principals/{principal_id}/roles` | 给 Principal 绑定角色 |
 | DELETE | `/v1/admin/principals/{principal_id}/roles/{role_id}` | 撤销 Principal 角色 |
 | GET | `/v1/admin/principals/{principal_id}/effective-permissions` | Principal 最终权限 |
-| GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false&limit=&offset=` | Principal refresh session 列表；limit 默认 50、最大 200，offset 默认 0 |
+| GET | `/v1/admin/principals/{principal_id}/refresh-sessions?include_revoked=false&limit=&offset=` | Principal refresh session 列表；limit 默认 50、最大 200，offset 默认 0，返回 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions` | 撤销该 Principal 的所有 refresh session |
 | DELETE | `/v1/admin/principals/{principal_id}/refresh-sessions/{session_id}` | 撤销单个 refresh session |
 | GET | `/v1/admin/principals/{principal_id}/api-keys?organization_id=&limit=&offset=` | 查询该 machine Principal 在精确 scope 内的 API key 元数据；返回 `has_more/next_offset` |
@@ -553,7 +553,7 @@ access token 或 service_access token 带有 `organization_id` 时，这两个�
 | POST | `/v1/admin/devices` | 创建 device；可选 `organization_id` 一旦写入不可变 |
 | GET | `/v1/admin/devices/{device_id}?organization_id=` | 查询一个精确 scope 的 device |
 | PUT | `/v1/admin/devices/{device_id}?organization_id=` | 更新 device display_name 或 active，不可迁移 scope |
-| GET | `/v1/admin/refresh-sessions?include_revoked=false&organization_id=&principal_id=&client_id=&login_ip=&limit=&offset=` | 全局 refresh session 列表；organization_id 为精确组织过滤 |
+| GET | `/v1/admin/refresh-sessions?include_revoked=false&organization_id=&principal_id=&client_id=&login_ip=&limit=&offset=` | 全局 refresh session 列表；organization_id 为精确组织过滤；返回 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 | DELETE | `/v1/admin/refresh-sessions/{session_id}` | 按 session ID 强制撤销 refresh session |
 
 绑定角色请求体：

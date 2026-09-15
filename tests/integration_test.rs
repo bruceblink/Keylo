@@ -4542,6 +4542,16 @@ mod tests {
             direct_check.json::<serde_json::Value>()["data"]["allowed"],
             true
         );
+        let repeated_direct_check = server
+            .post("/v1/authorize/check")
+            .add_header("Authorization", format!("Bearer {organization_token}"))
+            .json(&json!({"permission": permission.name}))
+            .await;
+        repeated_direct_check.assert_status_ok();
+        assert_eq!(
+            repeated_direct_check.json::<serde_json::Value>()["data"]["allowed"],
+            true
+        );
         let organization_audits = db::list_authorization_audit_logs_in_organization(
             &pool,
             Some(&organization_a.id),
@@ -4559,7 +4569,7 @@ mod tests {
             .any(|audit| { audit.organization_id.as_deref() == Some(organization_a.id.as_str()) }));
         let audit_api = server
             .get(&format!(
-                "/v1/admin/authorization-audit-logs?organization_id={}",
+                "/v1/admin/authorization-audit-logs?organization_id={}&limit=1&offset=0",
                 organization_a.id
             ))
             .add_header("Authorization", format!("Bearer {admin_token}"))
@@ -4567,7 +4577,11 @@ mod tests {
         audit_api.assert_status_ok();
         let audit_api_body: serde_json::Value = audit_api.json();
         let audit_rows = audit_api_body["data"].as_array().unwrap();
-        assert!(!audit_rows.is_empty());
+        assert_eq!(audit_rows.len(), 1);
+        assert_eq!(audit_api_body["pagination"]["limit"], 1);
+        assert_eq!(audit_api_body["pagination"]["offset"], 0);
+        assert_eq!(audit_api_body["pagination"]["has_more"], true);
+        assert_eq!(audit_api_body["pagination"]["next_offset"], 1);
         assert!(audit_rows
             .iter()
             .all(|audit| audit["organization_id"] == organization_a.id));
@@ -6316,6 +6330,9 @@ mod tests {
         all_sessions_resp.assert_status_ok();
         let all_sessions_body: serde_json::Value = all_sessions_resp.json();
         assert!(all_sessions_body["data"].as_array().unwrap().len() >= 2);
+        assert_eq!(all_sessions_body["pagination"]["limit"], 50);
+        assert_eq!(all_sessions_body["pagination"]["offset"], 0);
+        assert_eq!(all_sessions_body["pagination"]["has_more"], false);
 
         let paged_sessions_resp = server
             .get(&format!(
@@ -6327,6 +6344,10 @@ mod tests {
         paged_sessions_resp.assert_status_ok();
         let paged_sessions_body: serde_json::Value = paged_sessions_resp.json();
         assert_eq!(paged_sessions_body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(paged_sessions_body["pagination"]["limit"], 1);
+        assert_eq!(paged_sessions_body["pagination"]["offset"], 1);
+        assert_eq!(paged_sessions_body["pagination"]["has_more"], false);
+        assert!(paged_sessions_body["pagination"]["next_offset"].is_null());
         assert_eq!(
             paged_sessions_body["data"][0]["id"],
             all_sessions_body["data"][1]["id"]
@@ -6334,14 +6355,43 @@ mod tests {
 
         let global_sessions_resp = server
             .get(&format!(
-                "/v1/admin/refresh-sessions?principal_id={}",
+                "/v1/admin/refresh-sessions?principal_id={}&limit=1&offset=0",
                 principal_id
             ))
             .add_header("Authorization", format!("Bearer {}", access_token))
             .await;
         global_sessions_resp.assert_status_ok();
         let global_sessions_body: serde_json::Value = global_sessions_resp.json();
-        assert!(global_sessions_body["data"]
+        assert_eq!(global_sessions_body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(global_sessions_body["pagination"]["limit"], 1);
+        assert_eq!(global_sessions_body["pagination"]["offset"], 0);
+        assert_eq!(global_sessions_body["pagination"]["has_more"], true);
+        assert_eq!(global_sessions_body["pagination"]["next_offset"], 1);
+        let global_sessions_last_page_resp = server
+            .get(&format!(
+                "/v1/admin/refresh-sessions?principal_id={}&limit=1&offset=1",
+                principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        global_sessions_last_page_resp.assert_status_ok();
+        let global_sessions_last_page_body: serde_json::Value =
+            global_sessions_last_page_resp.json();
+        assert_eq!(
+            global_sessions_last_page_body["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(global_sessions_last_page_body["pagination"]["limit"], 1);
+        assert_eq!(global_sessions_last_page_body["pagination"]["offset"], 1);
+        assert_eq!(
+            global_sessions_last_page_body["pagination"]["has_more"],
+            false
+        );
+        assert!(global_sessions_last_page_body["pagination"]["next_offset"].is_null());
+        assert!(global_sessions_last_page_body["data"]
             .as_array()
             .unwrap()
             .iter()

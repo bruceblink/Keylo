@@ -442,7 +442,28 @@ pub async fn list_refresh_sessions_for_principal_paginated(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<RefreshSessionInfo>> {
-    list_refresh_sessions_in_organization(
+    Ok(
+        list_refresh_sessions_for_principal_page(
+            pool,
+            principal_id,
+            include_revoked,
+            limit,
+            offset,
+        )
+        .await?
+        .0,
+    )
+}
+
+/// Lists one Principal's refresh-session page and reports whether another page exists.
+pub async fn list_refresh_sessions_for_principal_page(
+    pool: &PgPool,
+    principal_id: &str,
+    include_revoked: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<RefreshSessionInfo>, bool)> {
+    list_refresh_sessions_in_organization_page(
         pool,
         None,
         include_revoked,
@@ -490,6 +511,36 @@ pub async fn list_refresh_sessions_in_organization(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<RefreshSessionInfo>> {
+    Ok(list_refresh_sessions_in_organization_page(
+        pool,
+        organization_id,
+        include_revoked,
+        principal_id,
+        client_id,
+        login_ip,
+        limit,
+        offset,
+    )
+    .await?
+    .0)
+}
+
+/// Lists one bounded refresh-session page and reports whether another page exists.
+///
+/// Session metadata is still selected without refresh-token material; the extra
+/// row only supports the pagination flag and never escapes this function.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_refresh_sessions_in_organization_page(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    include_revoked: bool,
+    principal_id: Option<&str>,
+    client_id: Option<&str>,
+    login_ip: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<RefreshSessionInfo>, bool)> {
+    let limit = limit.max(0);
     let rows = sqlx::query(
         r#"
         SELECT
@@ -520,12 +571,13 @@ pub async fn list_refresh_sessions_in_organization(
     .bind(principal_id)
     .bind(client_id)
     .bind(login_ip)
-    .bind(limit)
-    .bind(offset)
+    .bind(limit.saturating_add(1))
+    .bind(offset.max(0))
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
+    let has_more = rows.len() > limit as usize;
+    let mut sessions = rows
         .into_iter()
         .map(|row| RefreshSessionInfo {
             id: row.get("id"),
@@ -541,7 +593,9 @@ pub async fn list_refresh_sessions_in_organization(
             revoked_at: row.get("revoked_at"),
             revoke_reason: row.get("revoke_reason"),
         })
-        .collect())
+        .collect::<Vec<_>>();
+    sessions.truncate(limit as usize);
+    Ok((sessions, has_more))
 }
 
 pub async fn revoke_principal_refresh_sessions(

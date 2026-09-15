@@ -123,22 +123,30 @@ async fn list_authorization_audit_logs_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let logs = crate::db::list_authorization_audit_logs_in_organization(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (logs, has_more) = crate::db::list_authorization_audit_logs_in_organization_page(
         db,
         query.organization_id.as_deref(),
         query.principal_id.as_deref(),
         query.decision.as_deref(),
         query.permission_name.as_deref(),
         query.resource_id.as_deref(),
-        query.limit.unwrap_or(50).clamp(1, 200),
-        query.offset.unwrap_or(0).max(0),
+        limit,
+        offset,
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
     Ok(Json(json!({
         "success": true,
-        "data": logs
+        "data": logs,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 
@@ -173,22 +181,30 @@ async fn list_refresh_sessions_handler(
         .db
         .as_deref()
         .ok_or_else(|| AuthError::DatabaseError("Database not available".to_string()))?;
-    let sessions = crate::db::list_refresh_sessions_in_organization(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (sessions, has_more) = crate::db::list_refresh_sessions_in_organization_page(
         db,
         query.organization_id.as_deref(),
         query.include_revoked.unwrap_or(false),
         query.principal_id.as_deref(),
         query.client_id.as_deref(),
         query.login_ip.as_deref(),
-        query.limit.unwrap_or(50).clamp(1, 200),
-        query.offset.unwrap_or(0).max(0),
+        limit,
+        offset,
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
     Ok(Json(json!({
         "success": true,
-        "data": sessions
+        "data": sessions,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 
@@ -388,19 +404,27 @@ async fn list_principal_refresh_sessions_handler(
         return Err(AuthError::NotFound);
     }
 
-    let sessions = crate::db::list_refresh_sessions_for_principal_paginated(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let (sessions, has_more) = crate::db::list_refresh_sessions_for_principal_page(
         db,
         &principal_id,
         query.include_revoked.unwrap_or(false),
-        query.limit.unwrap_or(50).clamp(1, 200),
-        query.offset.unwrap_or(0).max(0),
+        limit,
+        offset,
     )
     .await
     .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
     Ok(Json(json!({
         "success": true,
-        "data": sessions
+        "data": sessions,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
     })))
 }
 

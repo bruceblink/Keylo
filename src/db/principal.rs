@@ -709,6 +709,36 @@ pub async fn list_authorization_audit_logs_in_organization(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<AuthorizationAuditLog>> {
+    Ok(list_authorization_audit_logs_in_organization_page(
+        pool,
+        organization_id,
+        principal_id,
+        decision,
+        permission_name,
+        resource_id,
+        limit,
+        offset,
+    )
+    .await?
+    .0)
+}
+
+/// Lists one bounded authorization-audit page and reports whether another page exists.
+///
+/// The extra row is read only to calculate `has_more`; it is removed before the
+/// caller receives the page, so existing result ordering and row shapes remain stable.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_authorization_audit_logs_in_organization_page(
+    pool: &PgPool,
+    organization_id: Option<&str>,
+    principal_id: Option<&str>,
+    decision: Option<&str>,
+    permission_name: Option<&str>,
+    resource_id: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<AuthorizationAuditLog>, bool)> {
+    let limit = limit.max(0);
     let logs = sqlx::query_as::<_, AuthorizationAuditLog>(
         r#"
         SELECT id, organization_id, principal_id, decision, permission_name, resource_id, detail, created_at
@@ -727,12 +757,15 @@ pub async fn list_authorization_audit_logs_in_organization(
     .bind(decision)
     .bind(permission_name)
     .bind(resource_id)
-    .bind(limit)
-    .bind(offset)
+    .bind(limit.saturating_add(1))
+    .bind(offset.max(0))
     .fetch_all(pool)
     .await?;
 
-    Ok(logs)
+    let has_more = logs.len() > limit as usize;
+    let mut logs = logs;
+    logs.truncate(limit as usize);
+    Ok((logs, has_more))
 }
 
 /// Deletes authorization decisions older than the configured retention window.
