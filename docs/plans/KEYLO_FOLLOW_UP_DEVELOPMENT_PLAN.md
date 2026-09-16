@@ -41,6 +41,12 @@
 - Keycloak 只作为代表性互操作回归。镜像、TLS、网络或浏览器不可用时，记录 not_executed，不把它改写成通过。
 - 交付物：每个样例的最小配置、失败排查路径、标准 HTTP 集成测试和可选 Keycloak 矩阵 artifact。
 
+#### 2.1-B 本轮切片：OIDC 与资源服务样例构建回归
+
+- [x] `scripts/validate_oidc_rp_examples.ps1` 已统一验证 Node、Go、Rust Axum、Spring Boot OIDC RP 和 Spring Boot resource server 样例，任一样例失败都会返回非零状态。
+
+验证记录（2026-09-16）：执行 `.\scripts\validate_oidc_rp_examples.ps1`，Node `npm run check`、Go `go test ./...`、Rust Axum `cargo test`、Spring OIDC `gradlew.bat test --no-daemon` 和 Spring resource server `gradlew.bat test --no-daemon` 全部通过。该回归只证明样例构建和本地测试通过；Keycloak 镜像、TLS、浏览器和跨系统互操作矩阵本次未执行。
+
 完成标准：标准客户端不需要解析 Keylo 专用登录 JSON；未知主体、禁用主体、错误 audience、错误 PKCE、失效 code 和 Keylo 授权服务不可用均默认拒绝。
 
 ### 2.1-C 首启、错误和审计闭环
