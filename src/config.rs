@@ -2,6 +2,8 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+#[cfg(test)]
+use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::rand_core::OsRng;
 use rsa::RsaPrivateKey;
@@ -9,9 +11,9 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::sync::Once;
 #[cfg(test)]
-use std::sync::{Mutex, MutexGuard};
+use std::sync::LazyLock;
+use std::sync::Once;
 use urlencoding::encode;
 
 static DOTENV_INIT: Once = Once::new();
@@ -63,16 +65,17 @@ const DEFAULT_REDIS_PASSWORD_KEY_PATHS: [&str; 3] = [
     "/run/secrets/redis_password.key",
 ];
 
-/// Serializes test-only process environment access across modules.
-/// Environment variables are process-global, so separate test modules must not mutate them concurrently.
+/// Serializes test-only process environment reads and mutations across modules.
+///
+/// The lock is reentrant because environment-focused tests must hold it while
+/// `Config::from_env` reads their temporary values on the same thread.
 #[cfg(test)]
-pub(crate) static TEST_PROCESS_ENV_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static TEST_PROCESS_ENV_LOCK: LazyLock<ReentrantMutex<()>> =
+    LazyLock::new(|| ReentrantMutex::new(()));
 
 #[cfg(test)]
-pub(crate) fn test_process_env_lock() -> MutexGuard<'static, ()> {
-    TEST_PROCESS_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+pub(crate) fn test_process_env_lock() -> ReentrantMutexGuard<'static, ()> {
+    TEST_PROCESS_ENV_LOCK.lock()
 }
 
 fn read_env_or_file(value_key: &str, path_key: &str) -> Option<String> {
@@ -679,6 +682,8 @@ impl Default for Config {
 
 impl Config {
     pub fn from_env() -> Self {
+        #[cfg(test)]
+        let _process_env_guard = test_process_env_lock();
         load_dotenv();
 
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
@@ -1608,6 +1613,45 @@ mod tests {
                 "payment-svc".to_string()
             ]
         );
+    }
+
+    /// Ensures ordinary configuration readers cannot observe another test's temporary variables.
+    #[test]
+    fn config_from_env_waits_for_global_environment_mutations() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let guard = test_process_env_lock();
+        let previous_password = std::env::var("REDIS_PASSWORD_ENC").ok();
+        std::env::set_var("REDIS_PASSWORD_ENC", "invalid-test-ciphertext");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            started_tx.send(()).expect("Test reader should start");
+            let _ = Config::from_env();
+            completed_tx
+                .send(())
+                .expect("Test reader should report completion");
+        });
+
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Test reader should reach the configuration read");
+        assert!(
+            completed_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "configuration read must wait while another test mutates process environment"
+        );
+
+        restore_env("REDIS_PASSWORD_ENC", previous_password);
+        drop(guard);
+        completed_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Configuration reader should continue after environment restoration");
+        reader
+            .join()
+            .expect("Configuration reader should not panic after environment restoration");
     }
 
     #[test]
