@@ -3854,9 +3854,29 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
+        let header_only_context = server
+            .post("/v1/auth/organization-context")
+            .add_header("Authorization", format!("Bearer {owner_token}"))
+            .add_header("X-Organization-Id", organization.id.as_str())
+            .json(&json!({}))
+            .await;
+        assert_eq!(
+            header_only_context.status_code(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let header_only_management = server
+            .get(&format!(
+                "/v1/organizations/{}/memberships",
+                organization.id
+            ))
+            .add_header("Authorization", format!("Bearer {owner_token}"))
+            .add_header("X-Organization-Id", organization.id.as_str())
+            .await;
+        assert_eq!(header_only_management.status_code(), StatusCode::FORBIDDEN);
         let owner_context = server
             .post("/v1/auth/organization-context")
             .add_header("Authorization", format!("Bearer {owner_token}"))
+            .add_header("X-Organization-Id", format!("forged-organization-{suffix}"))
             .json(&json!({"organization_id": organization.id}))
             .await;
         owner_context.assert_status_ok();

@@ -98,8 +98,10 @@
 - [x] pending/suspended/removed 成员不能创建或刷新 organization-scoped refresh session；组织 disabled/archived 会撤销该组织 session，重新 active 不恢复旧 token。
 - internal_employee 可以使用平台作用域，或加入 kind=internal 的内部组织；external_customer 只有加入 kind=customer 的 active organization 后才能进入客户资源，未归属或 pending 状态不得创建组织上下文。
 - [x] 身份源必须声明允许创建的 user_class 和组织归属策略；外部 OIDC/社交登录默认只能创建 external_customer，不得通过邮箱或 claim 自动获得 internal_employee。当前只允许显式 `none` 或单一 active `fixed` 组织，不接受 claim/header 动态选租户；固定来源 JIT 创建匹配类别账号和 active membership，并签发同组织 refresh session。
-- 组织切换必须重新校验 membership 并签发新的 active organization context；不能信任任意 X-Organization-Id 请求头。
+- [x] 组织切换必须重新校验 membership 并签发新的 active organization context；不能信任任意 X-Organization-Id 请求头。
 - 组织删除初期只允许 archive；物理删除、数据导出和保留策略另行审批。
+
+验证记录（2026-09-16）：使用本机 Docker 服务 `keylo-organization-context-test-db`，镜像 `postgres:17-alpine`，宿主端口 `127.0.0.1:55432` 映射到容器 `5432`。服务启动后以 `pg_isready` 确认 `keylo_test` 可用；真实 HTTP 用例确认仅提供 `X-Organization-Id` 不能选取组织上下文或访问组织管理 API，带冲突请求头的合法选择只按请求体和 active membership 签发 Token。测试完成后执行 `docker rm -f -v keylo-organization-context-test-db`，容器、匿名数据卷和端口映射均已移除。
 
 验收：pending/suspended/removed 成员不能创建或刷新组织会话；external_customer 没有 active customer membership 时不能进入客户资源；internal_employee 没有显式支持角色时不能读取客户资源；组织停用会撤销该组织签发的 refresh session；邀请和重复请求具有幂等语义。
 
