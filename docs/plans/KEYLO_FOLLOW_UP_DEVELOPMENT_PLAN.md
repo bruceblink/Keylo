@@ -25,6 +25,13 @@
 - 为 migration、setup advisory lock、依赖超时、重试和恢复补齐集成测试。
 - 交付物：端到端快速开始、可执行 PowerShell 验证脚本、数据库测试前置检查。
 
+#### 2.1-A 本轮切片：本机 Docker 验证入口
+
+- [x] `scripts/run_tests.ps1` 使用唯一测试容器名和临时密钥目录，支持指定 PostgreSQL 宿主端口，并在成功或失败路径清理容器、匿名卷和临时密钥。
+- [x] 验证入口启动后执行 PostgreSQL readiness 检查，依次执行 `cargo fmt`、workspace Clippy 和串行 workspace 测试；数据库不可用、迁移失败或任一检查失败都会返回非零状态。
+
+验证记录（2026-09-16）：执行 `.\scripts\run_tests.ps1 -DatabasePort 55432`，使用本机 Docker 服务 `keylo-test-db-ea0a829f453f`，镜像 `postgres:17-alpine`，宿主端口 `127.0.0.1:55432` 映射到容器 `5432`；`pg_isready` 检查通过，138 个单元测试、1 个 customer-support、25 个 database、76 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC 和 6 个 user 集成测试全部通过。脚本结束后容器、匿名卷、端口映射和临时密钥目录均已移除。
+
 完成标准：新开发者在干净工作区启动本地依赖，能完成迁移和最小登录；数据库或 Redis 不可用时得到可行动的错误而不是假成功。
 
 ### 2.1-B 标准 OIDC 与资源服务接入

@@ -1,41 +1,24 @@
+param(
+    [int]$DatabasePort = 55432,
+    [string]$PostgresImage = "postgres:17-alpine"
+)
+
 $ErrorActionPreference = "Stop"
 
-Write-Host "[INFO] Starting Keylo Integration Tests" -ForegroundColor Cyan
-
-function Info($msg) { Write-Host "[INFO] $msg" -ForegroundColor Cyan }
-function Success($msg) { Write-Host "[SUCCESS] $msg" -ForegroundColor Green }
-function Warn($msg) { Write-Host "[WARNING] $msg" -ForegroundColor Yellow }
-function Fail($msg) {
-    Write-Host "[ERROR] $msg" -ForegroundColor Red
-    if ($script:cleanupTestDatabase) {
-        Remove-TestDatabaseContainer
-    }
-    exit 1
+function Write-Info([string]$Message) {
+    Write-Host "[INFO] $Message" -ForegroundColor Cyan
 }
 
-$testContainerName = "keylo-test-db"
-$script:cleanupTestDatabase = $false
-
-function Invoke-NativeQuiet($command) {
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        & $command *> $null
-        return $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
+function Write-Success([string]$Message) {
+    Write-Host "[SUCCESS] $Message" -ForegroundColor Green
 }
 
-function Remove-TestDatabaseContainer {
-    $existingContainer = docker ps -a -q --filter "name=^/${testContainerName}$"
-    if ($existingContainer) {
-        Invoke-NativeQuiet { docker rm -f $testContainerName } *> $null
-    }
+function Write-WarningMessage([string]$Message) {
+    Write-Host "[WARNING] $Message" -ForegroundColor Yellow
 }
 
-function New-Base64RandomBytes($length) {
-    $bytes = New-Object byte[] $length
+function New-Base64RandomBytes([int]$Length) {
+    $bytes = New-Object byte[] $Length
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
         $rng.GetBytes($bytes)
@@ -45,79 +28,135 @@ function New-Base64RandomBytes($length) {
     [Convert]::ToBase64String($bytes)
 }
 
-# Check docker
-if ((Invoke-NativeQuiet { docker info }) -ne 0) {
-    Fail "Docker is not running. Please start Docker and try again."
+if ($DatabasePort -lt 1024 -or $DatabasePort -gt 65535) {
+    throw "DatabasePort must be between 1024 and 65535."
+}
+if ([string]::IsNullOrWhiteSpace($PostgresImage)) {
+    throw "PostgresImage must not be empty."
 }
 
-Info "Starting PostgreSQL test database..."
-New-Item -ItemType Directory -Force -Path ".secrets" *> $null
-$secretDir = Get-Item -Force -LiteralPath ".secrets"
-$secretDir.Attributes = $secretDir.Attributes -bor [System.IO.FileAttributes]::Hidden
-$testPasswordFile = Join-Path $secretDir.FullName ".test_postgres_password"
-$testPasswordEncFile = Join-Path $secretDir.FullName ".test_postgres_password.enc"
-$testPasswordKeyFile = Join-Path $secretDir.FullName ".test_database_password.key"
-if (!(Test-Path $testPasswordFile) -or ((Get-Item $testPasswordFile).Length -eq 0)) {
-    New-Base64RandomBytes 32 | Set-Content -NoNewline $testPasswordFile
-}
-if (!(Test-Path $testPasswordKeyFile) -or ((Get-Item $testPasswordKeyFile).Length -eq 0)) {
-    New-Base64RandomBytes 32 | Set-Content -NoNewline $testPasswordKeyFile
-}
-$env:DATABASE_PASSWORD_FILE = $testPasswordFile
-$env:DATABASE_PASSWORD_KEY_FILE = $testPasswordKeyFile
-cargo run --quiet --bin keylo-encrypt-db-password | Set-Content -NoNewline $testPasswordEncFile
-Remove-Item Env:DATABASE_PASSWORD_FILE
-Remove-TestDatabaseContainer
-$dockerRunExitCode = Invoke-NativeQuiet {
-    docker run -d --name $testContainerName `
-        -e POSTGRES_PASSWORD_FILE=/run/secrets/.postgres_password `
-        -e POSTGRES_DB=keylo_test `
-        -v "${testPasswordFile}:/run/secrets/.postgres_password:ro" `
-        -p 5432:5432 postgres:17-alpine
-}
-if ($dockerRunExitCode -eq 0) {
-    $script:cleanupTestDatabase = $true
-    Success "PostgreSQL test database started"
-} else {
-    Warn "PostgreSQL container already exists or failed to start"
-}
+$runId = [Guid]::NewGuid().ToString("N").Substring(0, 12)
+$testContainerName = "keylo-test-db-$runId"
+$testTempDir = Join-Path ([System.IO.Path]::GetTempPath()) "keylo-test-$runId"
+$containerStarted = $false
+$tempDirCreated = $false
+$succeeded = $false
 
-Info "Waiting for database to be ready..."
-for ($i = 0; $i -lt 30; $i++) {
-    if ((Invoke-NativeQuiet { docker exec $testContainerName pg_isready -U postgres -d keylo_test }) -eq 0) {
-        Success "Database is ready"
-        break
+function Remove-TestResources {
+    if ($script:containerStarted) {
+        try {
+            docker rm -f -v $script:testContainerName *> $null
+        } catch {
+            Write-WarningMessage "Failed to remove Docker test container $($script:testContainerName): $($_.Exception.Message)"
+        }
+        $script:containerStarted = $false
     }
-    Start-Sleep -Seconds 1
+
+    if ($script:tempDirCreated -and (Test-Path -LiteralPath $script:testTempDir)) {
+        try {
+            Remove-Item -LiteralPath $script:testTempDir -Recurse -Force
+        } catch {
+            Write-WarningMessage "Failed to remove temporary test secrets: $($_.Exception.Message)"
+        }
+        $script:tempDirCreated = $false
+    }
 }
-if ($i -eq 30) {
-    Fail "Database failed to start within 30 seconds"
+
+$script:testContainerName = $testContainerName
+$script:testTempDir = $testTempDir
+$script:containerStarted = $false
+$script:tempDirCreated = $false
+
+try {
+    Write-Info "Checking Docker availability..."
+    docker info *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Docker is not running. Start Docker Desktop and retry."
+    }
+
+    New-Item -ItemType Directory -Force -Path $testTempDir *> $null
+    $tempDirCreated = $true
+    $script:tempDirCreated = $true
+    $testPasswordFile = Join-Path $testTempDir "postgres_password"
+    $testPasswordKeyFile = Join-Path $testTempDir "database_password.key"
+    $testPasswordEncFile = Join-Path $testTempDir "postgres_password.enc"
+
+    Write-Info "Creating temporary database credentials..."
+    New-Base64RandomBytes 32 | Set-Content -LiteralPath $testPasswordFile -NoNewline -Encoding ascii
+    New-Base64RandomBytes 32 | Set-Content -LiteralPath $testPasswordKeyFile -NoNewline -Encoding ascii
+    $env:DATABASE_PASSWORD_FILE = $testPasswordFile
+    $env:DATABASE_PASSWORD_KEY_FILE = $testPasswordKeyFile
+    cargo run --quiet --bin keylo-encrypt-db-password | Set-Content -LiteralPath $testPasswordEncFile -NoNewline -Encoding ascii
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to generate the encrypted PostgreSQL password."
+    }
+    Remove-Item Env:DATABASE_PASSWORD_FILE -ErrorAction SilentlyContinue
+    Remove-Item Env:DATABASE_PASSWORD_KEY_FILE -ErrorAction SilentlyContinue
+
+    Write-Info "Starting $PostgresImage on 127.0.0.1:$DatabasePort..."
+    # Mark the generated name before starting Docker so a partially created
+    # container is also removed if the native command fails.
+    $script:containerStarted = $true
+    docker run --detach --name $testContainerName `
+        --env POSTGRES_USER=postgres `
+        --env POSTGRES_PASSWORD_FILE=/run/secrets/.postgres_password `
+        --env POSTGRES_DB=keylo_test `
+        --volume "${testPasswordFile}:/run/secrets/.postgres_password:ro" `
+        --publish "127.0.0.1:${DatabasePort}:5432" `
+        $PostgresImage | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to start the PostgreSQL Docker container."
+    }
+    $containerStarted = $true
+    $containerState = docker inspect --format '{{.Config.Image}} {{.State.Status}}' $testContainerName
+    Write-Info "Docker service: $testContainerName ($containerState), port 127.0.0.1:$DatabasePort -> 5432"
+
+    Write-Info "Waiting for PostgreSQL readiness..."
+    $databaseReady = $false
+    for ($attempt = 1; $attempt -le 30; $attempt++) {
+        docker exec $testContainerName pg_isready -U postgres -d keylo_test *> $null
+        if ($LASTEXITCODE -eq 0) {
+            $databaseReady = $true
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $databaseReady) {
+        throw "PostgreSQL did not become ready within 30 seconds."
+    }
+    Write-Success "PostgreSQL is ready."
+
+    $testDbPassword = (Get-Content -LiteralPath $testPasswordFile -Raw).Trim()
+    $env:TEST_DATABASE_URL = "postgres://postgres:${testDbPassword}@127.0.0.1:${DatabasePort}/keylo_test"
+    $env:DATABASE_PASSWORD_ENC_FILE = $testPasswordEncFile
+    $env:DATABASE_PASSWORD_KEY_FILE = $testPasswordKeyFile
+    $env:RUST_TEST_THREADS = "1"
+
+    Write-Info "Running formatting checks..."
+    cargo fmt --all -- --check
+    if ($LASTEXITCODE -ne 0) { throw "Formatting check failed." }
+    Write-Success "Formatting checks passed."
+
+    Write-Info "Running workspace Clippy checks..."
+    cargo clippy --workspace --all-targets -- -D warnings
+    if ($LASTEXITCODE -ne 0) { throw "Clippy checks failed." }
+    Write-Success "Workspace Clippy checks passed."
+
+    Write-Info "Running workspace tests with one test thread..."
+    cargo test --workspace --all-targets -- --test-threads=1
+    if ($LASTEXITCODE -ne 0) { throw "Workspace tests failed." }
+    Write-Success "Workspace tests passed."
+    $succeeded = $true
+} catch {
+    Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
+} finally {
+    Write-Info "Cleaning up Docker test resources..."
+    Remove-TestResources
+    Write-Success "Docker test resources cleaned up."
 }
 
-$testDbPassword = (Get-Content -Raw $testPasswordFile).Trim()
-$env:TEST_DATABASE_URL = "postgres://postgres:${testDbPassword}@localhost:5432/keylo_test"
-$env:DATABASE_PASSWORD_ENC_FILE = $testPasswordEncFile
-$env:DATABASE_PASSWORD_KEY_FILE = $testPasswordKeyFile
-$env:RUST_LOG = "debug"
+if (-not $succeeded) {
+    exit 1
+}
 
-Info "Running formatting checks..."
-cargo fmt --all -- --check
-if ($LASTEXITCODE -ne 0) { Fail "Formatting check failed" }
-Success "Formatting checks passed"
-
-Info "Running clippy checks..."
-cargo clippy -- -D warnings
-if ($LASTEXITCODE -ne 0) { Fail "Clippy checks failed" }
-Success "Clippy checks passed"
-
-Info "Running full test suite..."
-cargo test
-if ($LASTEXITCODE -ne 0) { Fail "Tests failed" }
-Success "All tests passed"
-
-Info "Cleaning up test database..."
-Remove-TestDatabaseContainer
-$script:cleanupTestDatabase = $false
-Success "Test database cleaned up"
-
-Success "All checks completed successfully"
+Write-Success "All local Docker validation checks completed successfully."
