@@ -8,6 +8,57 @@ static DB_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 #[cfg(test)]
 mod database_tests {
     use super::*;
+    use std::borrow::Cow;
+
+    const PRINCIPAL_RESOURCE_MIGRATION_VERSION: i64 = 20260606090000;
+    const ORGANIZATION_DOMAIN_MIGRATION_VERSION: i64 = 20260809090000;
+
+    /// Builds a migration set that represents the schema before one later migration.
+    ///
+    /// The test uses SQLx's original checksums and ledger behavior, so an upgrade
+    /// from this prefix exercises the same migration engine as production startup.
+    fn migrations_before(version: i64) -> sqlx::migrate::Migrator {
+        let all = sqlx::migrate!("./migrations");
+        sqlx::migrate::Migrator {
+            migrations: Cow::Owned(
+                all.iter()
+                    .filter(|migration| migration.version < version)
+                    .cloned()
+                    .collect(),
+            ),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        }
+    }
+
+    /// Replaces only the database component of a configured PostgreSQL URL.
+    fn database_url_for_name(database_url: &str, database_name: &str) -> anyhow::Result<String> {
+        let mut url = url::Url::parse(database_url)?;
+        url.set_path(&format!("/{database_name}"));
+        Ok(url.to_string())
+    }
+
+    /// Drops one generated migration-test database after terminating its pooled connections.
+    async fn drop_temporary_database(
+        maintenance_url: &str,
+        database_name: &str,
+    ) -> anyhow::Result<()> {
+        let maintenance_pool = db::init_db_pool(maintenance_url).await?;
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid)
+             FROM pg_stat_activity
+             WHERE datname = $1 AND pid <> pg_backend_pid()",
+        )
+        .bind(database_name)
+        .execute(&maintenance_pool)
+        .await?;
+        sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS \"{database_name}\""))
+            .execute(&maintenance_pool)
+            .await?;
+        maintenance_pool.close().await;
+        Ok(())
+    }
 
     /// 设置测试数据库
     async fn setup_test_db() -> Result<PgPool, &'static str> {
@@ -119,6 +170,201 @@ mod database_tests {
             .await
             .unwrap_or(0);
         assert_eq!(blacklisted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_existing_single_organization_data_migrates_to_explicit_scopes() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let configured_database_url = match std::env::var("TEST_DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                println!(
+                    "Skipping legacy migration integration test: TEST_DATABASE_URL is required"
+                );
+                return;
+            }
+        };
+        let maintenance_url = database_url_for_name(&configured_database_url, "postgres")
+            .expect("TEST_DATABASE_URL must be a valid PostgreSQL URL");
+        let database_name = format!("keylo_legacy_{}", uuid::Uuid::new_v4().simple());
+        let temporary_database_url =
+            database_url_for_name(&configured_database_url, &database_name)
+                .expect("Temporary database URL should be valid");
+
+        let maintenance_pool = db::init_db_pool(&maintenance_url)
+            .await
+            .expect("TEST_DATABASE_URL credentials must create local Docker test databases");
+        sqlx::raw_sql(&format!("CREATE DATABASE \"{database_name}\""))
+            .execute(&maintenance_pool)
+            .await
+            .expect("Temporary legacy migration database should be created");
+        maintenance_pool.close().await;
+
+        let pool = db::init_db_pool(&temporary_database_url)
+            .await
+            .expect("Temporary legacy migration database should be reachable");
+        let result: anyhow::Result<()> = async {
+            migrations_before(PRINCIPAL_RESOURCE_MIGRATION_VERSION)
+                .run(&pool)
+                .await?;
+
+            sqlx::query(
+                "INSERT INTO users (id, username, email, password_hash, active)
+                 VALUES
+                    ('legacy-internal-user', 'legacy-internal', 'legacy-internal@example.test', 'hash', TRUE),
+                    ('legacy-external-user', 'legacy-external', 'legacy-external@example.test', 'hash', TRUE)",
+            )
+            .execute(&pool)
+            .await?;
+            sqlx::query(
+                "INSERT INTO roles (id, name, description)
+                 VALUES ('legacy-super-admin-role', 'super_admin', 'Historical platform operator')",
+            )
+            .execute(&pool)
+            .await?;
+            sqlx::query(
+                "INSERT INTO permissions (id, name, description)
+                 VALUES ('legacy-admin-full', 'admin.full', 'Historical platform authority')",
+            )
+            .execute(&pool)
+            .await?;
+            sqlx::query(
+                "INSERT INTO role_permissions (role_id, permission_id)
+                 VALUES ('legacy-super-admin-role', 'legacy-admin-full')",
+            )
+            .execute(&pool)
+            .await?;
+            sqlx::query(
+                "INSERT INTO user_roles (user_id, role_id)
+                 VALUES ('legacy-internal-user', 'legacy-super-admin-role')",
+            )
+            .execute(&pool)
+            .await?;
+
+            migrations_before(ORGANIZATION_DOMAIN_MIGRATION_VERSION)
+                .run(&pool)
+                .await?;
+            sqlx::query(
+                "INSERT INTO resources
+                    (id, app, resource_type, code, name, display_order, metadata, version)
+                 VALUES
+                    ('legacy-platform-resource', 'legacy-app', 'menu', 'dashboard',
+                     'Historical platform resource', 0, '{}'::jsonb, 1)",
+            )
+            .execute(&pool)
+            .await?;
+
+            db::run_migrations(&pool).await?;
+
+            let internal_user_class: String =
+                sqlx::query_scalar("SELECT user_class FROM users WHERE id = 'legacy-internal-user'")
+                    .fetch_one(&pool)
+                    .await?;
+            anyhow::ensure!(
+                internal_user_class == keylo::models::USER_CLASS_INTERNAL_EMPLOYEE,
+                "historical platform operator must become an internal employee"
+            );
+            let external_user_class: String =
+                sqlx::query_scalar("SELECT user_class FROM users WHERE id = 'legacy-external-user'")
+                    .fetch_one(&pool)
+                    .await?;
+            anyhow::ensure!(
+                external_user_class == keylo::models::USER_CLASS_EXTERNAL_CUSTOMER,
+                "historical non-operator must become an external customer"
+            );
+            let internal_membership_status: Option<String> = sqlx::query_scalar(
+                "SELECT membership.status
+                 FROM organization_memberships AS membership
+                 INNER JOIN principals AS principal ON principal.id = membership.principal_id
+                 WHERE membership.organization_id = 'org-internal'
+                   AND principal.ref_id = 'legacy-internal-user'",
+            )
+            .fetch_optional(&pool)
+            .await?;
+            anyhow::ensure!(
+                internal_membership_status.as_deref() == Some("active"),
+                "historical platform operator must gain an active internal membership"
+            );
+            let external_membership_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*)
+                 FROM organization_memberships AS membership
+                 INNER JOIN principals AS principal ON principal.id = membership.principal_id
+                 WHERE principal.ref_id = 'legacy-external-user'",
+            )
+            .fetch_one(&pool)
+            .await?;
+            anyhow::ensure!(
+                external_membership_count == 0,
+                "historical external customer must not receive an implicit organization membership"
+            );
+            let role_scope: String = sqlx::query_scalar(
+                "SELECT scope FROM roles WHERE id = 'legacy-super-admin-role'",
+            )
+            .fetch_one(&pool)
+            .await?;
+            anyhow::ensure!(
+                role_scope == "platform",
+                "historical role must retain explicit platform scope"
+            );
+            let resource_organization_id: Option<String> = sqlx::query_scalar(
+                "SELECT organization_id FROM resources WHERE id = 'legacy-platform-resource'",
+            )
+            .fetch_one(&pool)
+            .await?;
+            anyhow::ensure!(
+                resource_organization_id.is_none(),
+                "historical resource must remain explicitly platform-scoped"
+            );
+            let unmapped_user_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*)
+                 FROM users
+                 WHERE user_class IS NULL
+                    OR user_class NOT IN ('internal_employee', 'external_customer')",
+            )
+            .fetch_one(&pool)
+            .await?;
+            anyhow::ensure!(
+                unmapped_user_count == 0,
+                "organization migration must classify every historical user"
+            );
+
+            db::run_migrations(&pool).await?;
+            let status = db::migration_status(&pool).await?;
+            anyhow::ensure!(
+                status.current && status.applied == status.expected,
+                "repeat migration must preserve a current SQLx ledger"
+            );
+            let internal_organization_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM organizations WHERE id = 'org-internal'",
+            )
+            .fetch_one(&pool)
+            .await?;
+            anyhow::ensure!(
+                internal_organization_count == 1,
+                "repeat migration must not duplicate the internal organization"
+            );
+            let internal_membership_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*)
+                 FROM organization_memberships AS membership
+                 INNER JOIN principals AS principal ON principal.id = membership.principal_id
+                 WHERE membership.organization_id = 'org-internal'
+                   AND principal.ref_id = 'legacy-internal-user'",
+            )
+            .fetch_one(&pool)
+            .await?;
+            anyhow::ensure!(
+                internal_membership_count == 1,
+                "repeat migration must not duplicate the internal membership"
+            );
+
+            Ok(())
+        }
+        .await;
+
+        pool.close().await;
+        let cleanup_result = drop_temporary_database(&maintenance_url, &database_name).await;
+        result.expect("Historical single-organization data should migrate safely");
+        cleanup_result.expect("Temporary legacy migration database should be removed");
     }
 
     #[tokio::test]

@@ -84,7 +84,9 @@
 - [x] 将人类与机器主体分开建模：`user` 继续使用 `user_class`，`service` 保持现有服务 Principal，新增 `device` 作为设备/边缘代理/无人值守任务的机器 Principal；机器主体没有 user_class、密码登录、浏览器会话或人类 MFA 要求。
 - [x] 新增 MachineCredential/API key 记录：principal_id、organization_id、key_id/prefix、secret_hash、status、expires_at、last_used_at、created_by、allowed_scopes、allowed_audiences；原始 key 只在创建或轮换响应中显示一次。
 - [x] 为用户、OIDC client、service client、identity source、resource、refresh session 和授权审计逐项定义 organization_id 归属；用户使用显式 membership，service client、identity source、resource、refresh session 与授权审计已经完成 scope、查询过滤和授权路径，OIDC client 通过显式 scope、不可变约束、组织管理 API 和 live authorization context 完成归属。
-- 设计兼容迁移：现有数据必须进入明确的 default organization 或显式 platform scope，并为每个 user 生成明确的 user_class 映射；迁移保持前向、可重复和可审计。生产恢复使用已验证的备份/恢复或修复迁移，不假设未实现的 down migration；禁止用隐式 NULL 代表所有组织或用默认类别掩盖不确定性。
+- [x] 设计兼容迁移：现有数据必须进入明确的 default organization 或显式 platform scope，并为每个 user 生成明确的 user_class 映射；迁移保持前向、可重复和可审计。生产恢复使用已验证的备份/恢复或修复迁移，不假设未实现的 down migration；禁止用隐式 NULL 代表所有组织或用默认类别掩盖不确定性。
+
+验证记录（2026-09-16）：使用本机 Docker 服务 `keylo-legacy-migration-test-db`，镜像 `postgres:17-alpine`，宿主端口 `127.0.0.1:55432` 映射到容器 `5432`。服务启动后以 `pg_isready` 确认 `keylo_test` 可用；集成测试创建独立临时数据库，先写入组织模型迁移前的历史用户、平台角色和资源，再执行完整迁移并重复执行，核对 user_class、内部组织成员关系、platform scope 与 SQLx 迁移账本。测试完成后删除临时数据库，并执行 `docker rm -f keylo-legacy-migration-test-db` 清理 Docker 服务；容器和端口映射均已移除。
 
 验收：迁移在干净数据库和已有单组织数据库上都能执行；重复执行不产生重复组织、类别或绑定；任一租户归属或 user_class 不明确的对象都会阻止发布而不是被静默归入错误组织。
 
