@@ -56,6 +56,13 @@
 - 审计事件必须包含 actor、target、原因、结果和可关联的 session/source/client 标识，但不得记录密码、Token、验证码、私钥或未必要的邮箱明文。
 - 交付物：错误语义表、审计字段约束、面向运维的最小诊断清单。
 
+#### 2.1-C 本轮切片：内部诊断与错误响应隔离
+
+- [x] `AuthError::DatabaseError` 对外只返回稳定的 `database_error`、HTTP 500 和可行动的公开消息，底层连接串、凭据和 SQL 诊断只保留在服务端日志路径。
+- [x] 新增回归测试锁定错误响应不回显 PostgreSQL 连接串或密码片段。
+
+验证记录（2026-09-16）：执行 `cargo test --lib database_error_response_does_not_expose_diagnostic_details`，用例通过；该用例只验证响应序列化，不连接外部服务。
+
 完成标准：一个失败场景可以仅凭客户端响应、readyz/metrics 和审计查询定位到下一步动作；敏感值在 HTTP 日志和审计中均不可回显。
 
 ### 2.1-D 会话、密钥和账户安全

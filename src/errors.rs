@@ -237,4 +237,20 @@ mod tests {
 
         assert_eq!(json["error"], "invalid_audience");
     }
+
+    #[tokio::test]
+    async fn database_error_response_does_not_expose_diagnostic_details() {
+        let diagnostic = "connection failed for postgres://keylo:secret@postgres:5432/keylo";
+        let response = AuthError::DatabaseError(diagnostic.to_string()).into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["error"], "database_error");
+        assert_eq!(json["message"], "Database error");
+        assert!(!json.to_string().contains("postgres://"));
+        assert!(!json.to_string().contains("secret"));
+    }
 }
