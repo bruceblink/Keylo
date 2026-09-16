@@ -210,6 +210,91 @@ mod tests {
         )
         .await
         .expect("second customer organization should be created");
+
+        let mut customer_principal_ids = Vec::new();
+        for index in 1..=2 {
+            let customer = db::create_user(
+                &pool,
+                &format!("customer-support-member-{index}-{suffix}"),
+                &format!("customer-support-member-{index}-{suffix}@example.test"),
+                Some("CustomerSupportMember#123"),
+            )
+            .await
+            .expect("customer member should be created");
+            let principal = db::get_principal_by_ref(&pool, "user", &customer.id)
+                .await
+                .expect("customer member principal should be queryable")
+                .expect("customer member principal should exist");
+            db::upsert_organization_membership(
+                &pool,
+                &organization_a.id,
+                &principal.id,
+                "active",
+                Some("customer-support-integration-test"),
+                None,
+            )
+            .await
+            .expect("customer member should have an active organization membership");
+            customer_principal_ids.push(principal.id);
+        }
+
+        let resource_app = format!("customer-support-resource-{suffix}");
+        let no_permission_ids = Vec::new();
+        for index in 1..=2 {
+            db::create_resource_in_organization(
+                &pool,
+                Some(&organization_a.id),
+                db::CreateResourceParams {
+                    app: &resource_app,
+                    resource_type: "diagnostic",
+                    code: &format!("resource-{index}"),
+                    name: &format!("Customer support resource {index}"),
+                    parent_id: None,
+                    display_order: index,
+                    description: None,
+                    metadata: None,
+                    permission_ids: &no_permission_ids,
+                },
+            )
+            .await
+            .expect("customer-support resource should be created");
+        }
+
+        let authorization_permission = format!("customer-support.pagination.{suffix}");
+        for principal_id in &customer_principal_ids {
+            db::create_authorization_audit_log_in_organization(
+                &pool,
+                Some(&organization_a.id),
+                Some(principal_id),
+                "allow",
+                Some(&authorization_permission),
+                None,
+                Some("customer-support pagination integration test"),
+            )
+            .await
+            .expect("customer-support authorization audit should be created");
+        }
+
+        let refresh_client_id = format!("customer-support-refresh-client-{suffix}");
+        for (index, principal_id) in customer_principal_ids.iter().enumerate() {
+            db::create_refresh_session(
+                &pool,
+                db::CreateRefreshSessionParams {
+                    session_id: &format!("customer-support-session-{index}-{suffix}"),
+                    principal_id,
+                    client_id: &refresh_client_id,
+                    organization_id: Some(&organization_a.id),
+                    refresh_token_id: &format!("customer-support-token-id-{index}-{suffix}"),
+                    refresh_token: &format!("customer-support-token-{index}-{suffix}"),
+                    access_jti: &format!("customer-support-access-{index}-{suffix}"),
+                    login_ip: Some("127.0.0.1"),
+                    user_agent: Some("customer-support-pagination-test"),
+                    expires_at: Utc::now().timestamp() + 600,
+                },
+            )
+            .await
+            .expect("customer-support refresh session should be created");
+        }
         assert!(
             db::get_active_organization_membership(
                 &pool,
@@ -229,7 +314,13 @@ mod tests {
                 "support_principal_id": support_principal.id,
                 "organization_id": organization_a.id,
                 "reason": "Investigate a customer-reported sign-in failure",
-                "operations": ["organization.read"],
+                "operations": [
+                    "organization.read",
+                    "membership.read",
+                    "resource.read",
+                    "authorization_audit.read",
+                    "refresh_session.read"
+                ],
                 "expires_at": (Utc::now() + Duration::minutes(10)).to_rfc3339()
             }))
             .await;
@@ -241,7 +332,13 @@ mod tests {
             .to_string();
         assert_eq!(
             grant_body["data"]["operations"],
-            json!(["organization.read"])
+            json!([
+                "authorization_audit.read",
+                "membership.read",
+                "organization.read",
+                "refresh_session.read",
+                "resource.read"
+            ])
         );
 
         let grant_list_response = server
@@ -288,7 +385,16 @@ mod tests {
         assert_eq!(context_claims["token_type"], "customer_support_access");
         assert_eq!(context_claims["organization_id"], organization_a.id);
         assert_eq!(context_claims["customer_support_grant_id"], grant_id);
-        assert_eq!(context_claims["scope"], json!(["organization.read"]));
+        assert_eq!(
+            context_claims["scope"],
+            json!([
+                "authorization_audit.read",
+                "membership.read",
+                "organization.read",
+                "refresh_session.read",
+                "resource.read"
+            ])
+        );
 
         let active_introspection = server
             .post("/v1/auth/introspect")
@@ -313,6 +419,154 @@ mod tests {
             allowed_read.json::<Value>()["data"]["id"],
             organization_a.id
         );
+
+        let membership_page = server
+            .get(&format!(
+                "/v1/customer-support/organizations/{}/memberships?limit=1&offset=0",
+                organization_a.id
+            ))
+            .add_header("Authorization", format!("Bearer {context_token}"))
+            .await;
+        membership_page.assert_status_ok();
+        let membership_page_body = membership_page.json::<Value>();
+        assert_eq!(membership_page_body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(membership_page_body["pagination"]["limit"], 1);
+        assert_eq!(membership_page_body["pagination"]["offset"], 0);
+        assert_eq!(membership_page_body["pagination"]["has_more"], true);
+        assert_eq!(membership_page_body["pagination"]["next_offset"], 1);
+
+        let membership_last_page = server
+            .get(&format!(
+                "/v1/customer-support/organizations/{}/memberships?limit=1&offset=1",
+                organization_a.id
+            ))
+            .add_header("Authorization", format!("Bearer {context_token}"))
+            .await;
+        membership_last_page.assert_status_ok();
+        let membership_last_page_body = membership_last_page.json::<Value>();
+        assert_eq!(
+            membership_last_page_body["data"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(membership_last_page_body["pagination"]["has_more"], false);
+        assert!(membership_last_page_body["pagination"]["next_offset"].is_null());
+
+        let resource_page = server
+            .get(&format!(
+                "/v1/customer-support/organizations/{}/resources?app={}&limit=1&offset=0",
+                organization_a.id, resource_app
+            ))
+            .add_header("Authorization", format!("Bearer {context_token}"))
+            .await;
+        resource_page.assert_status_ok();
+        let resource_page_body = resource_page.json::<Value>();
+        assert_eq!(resource_page_body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(resource_page_body["pagination"]["limit"], 1);
+        assert_eq!(resource_page_body["pagination"]["offset"], 0);
+        assert_eq!(resource_page_body["pagination"]["has_more"], true);
+        assert_eq!(resource_page_body["pagination"]["next_offset"], 1);
+
+        let resource_last_page = server
+            .get(&format!(
+                "/v1/customer-support/organizations/{}/resources?app={}&limit=1&offset=1",
+                organization_a.id, resource_app
+            ))
+            .add_header("Authorization", format!("Bearer {context_token}"))
+            .await;
+        resource_last_page.assert_status_ok();
+        let resource_last_page_body = resource_last_page.json::<Value>();
+        assert_eq!(resource_last_page_body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(resource_last_page_body["pagination"]["has_more"], false);
+        assert!(resource_last_page_body["pagination"]["next_offset"].is_null());
+
+        let authorization_audit_page = server
+            .get(&format!(
+                "/v1/customer-support/organizations/{}/authorization-audit-logs?permission_name={}&limit=1&offset=0",
+                organization_a.id, authorization_permission
+            ))
+            .add_header("Authorization", format!("Bearer {context_token}"))
+            .await;
+        authorization_audit_page.assert_status_ok();
+        let authorization_audit_page_body = authorization_audit_page.json::<Value>();
+        assert_eq!(
+            authorization_audit_page_body["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(authorization_audit_page_body["pagination"]["limit"], 1);
+        assert_eq!(authorization_audit_page_body["pagination"]["offset"], 0);
+        assert_eq!(
+            authorization_audit_page_body["pagination"]["has_more"],
+            true
+        );
+        assert_eq!(
+            authorization_audit_page_body["pagination"]["next_offset"],
+            1
+        );
+
+        let authorization_audit_last_page = server
+            .get(&format!(
+                "/v1/customer-support/organizations/{}/authorization-audit-logs?permission_name={}&limit=1&offset=1",
+                organization_a.id, authorization_permission
+            ))
+            .add_header("Authorization", format!("Bearer {context_token}"))
+            .await;
+        authorization_audit_last_page.assert_status_ok();
+        let authorization_audit_last_page_body = authorization_audit_last_page.json::<Value>();
+        assert_eq!(
+            authorization_audit_last_page_body["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            authorization_audit_last_page_body["pagination"]["has_more"],
+            false
+        );
+        assert!(authorization_audit_last_page_body["pagination"]["next_offset"].is_null());
+
+        let refresh_session_page = server
+            .get(&format!(
+                "/v1/customer-support/organizations/{}/refresh-sessions?client_id={}&limit=1&offset=0",
+                organization_a.id, refresh_client_id
+            ))
+            .add_header("Authorization", format!("Bearer {context_token}"))
+            .await;
+        refresh_session_page.assert_status_ok();
+        let refresh_session_page_body = refresh_session_page.json::<Value>();
+        assert_eq!(
+            refresh_session_page_body["data"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(refresh_session_page_body["pagination"]["limit"], 1);
+        assert_eq!(refresh_session_page_body["pagination"]["offset"], 0);
+        assert_eq!(refresh_session_page_body["pagination"]["has_more"], true);
+        assert_eq!(refresh_session_page_body["pagination"]["next_offset"], 1);
+
+        let refresh_session_last_page = server
+            .get(&format!(
+                "/v1/customer-support/organizations/{}/refresh-sessions?client_id={}&limit=1&offset=1",
+                organization_a.id, refresh_client_id
+            ))
+            .add_header("Authorization", format!("Bearer {context_token}"))
+            .await;
+        refresh_session_last_page.assert_status_ok();
+        let refresh_session_last_page_body = refresh_session_last_page.json::<Value>();
+        assert_eq!(
+            refresh_session_last_page_body["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            refresh_session_last_page_body["pagination"]["has_more"],
+            false
+        );
+        assert!(refresh_session_last_page_body["pagination"]["next_offset"].is_null());
 
         let cross_organization_read = server
             .get(&format!(

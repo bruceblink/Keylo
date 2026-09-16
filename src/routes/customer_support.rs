@@ -121,6 +121,8 @@ struct CustomerSupportResourceListQuery {
     #[serde(rename = "type")]
     resource_type: Option<String>,
     active: Option<bool>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -743,15 +745,17 @@ async fn list_customer_support_memberships(
     )
     .await?;
     let db = support_db(&state)?;
-    let memberships = crate::db::list_organization_memberships(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let memberships = crate::db::list_organization_memberships_page(
         db,
         &organization_id,
         query.status.as_deref(),
-        query.limit.unwrap_or(50).clamp(1, 200),
-        query.offset.unwrap_or(0).max(0),
+        limit,
+        offset,
     )
     .await;
-    let memberships = match memberships {
+    let (memberships, has_more) = match memberships {
         Ok(memberships) => memberships,
         Err(error) => {
             record_customer_support_read_failure(
@@ -779,7 +783,16 @@ async fn list_customer_support_memberships(
     )
     .await?;
 
-    Ok(Json(json!({ "success": true, "data": memberships })))
+    Ok(Json(json!({
+        "success": true,
+        "data": memberships,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn list_customer_support_resources(
@@ -798,15 +811,19 @@ async fn list_customer_support_resources(
     )
     .await?;
     let db = support_db(&state)?;
-    let resources = crate::db::list_resources_for_admin(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let resources = crate::db::list_resources_for_admin_page(
         db,
         Some(&organization_id),
         query.app.as_deref(),
         query.resource_type.as_deref(),
         query.active,
+        limit,
+        offset,
     )
     .await;
-    let resources = match resources {
+    let (resources, has_more) = match resources {
         Ok(resources) => resources,
         Err(error) => {
             record_customer_support_read_failure(
@@ -834,7 +851,16 @@ async fn list_customer_support_resources(
     )
     .await?;
 
-    Ok(Json(json!({ "success": true, "data": resources })))
+    Ok(Json(json!({
+        "success": true,
+        "data": resources,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn list_customer_support_authorization_audit_logs(
@@ -853,18 +879,20 @@ async fn list_customer_support_authorization_audit_logs(
     )
     .await?;
     let db = support_db(&state)?;
-    let logs = crate::db::list_authorization_audit_logs_in_organization(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let logs = crate::db::list_authorization_audit_logs_in_organization_page(
         db,
         Some(&organization_id),
         query.principal_id.as_deref(),
         query.decision.as_deref(),
         query.permission_name.as_deref(),
         query.resource_id.as_deref(),
-        query.limit.unwrap_or(50).clamp(1, 200),
-        query.offset.unwrap_or(0).max(0),
+        limit,
+        offset,
     )
     .await;
-    let logs = match logs {
+    let (logs, has_more) = match logs {
         Ok(logs) => logs,
         Err(error) => {
             record_customer_support_read_failure(
@@ -892,7 +920,16 @@ async fn list_customer_support_authorization_audit_logs(
     )
     .await?;
 
-    Ok(Json(json!({ "success": true, "data": logs })))
+    Ok(Json(json!({
+        "success": true,
+        "data": logs,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }
 
 async fn list_customer_support_refresh_sessions(
@@ -911,18 +948,20 @@ async fn list_customer_support_refresh_sessions(
     )
     .await?;
     let db = support_db(&state)?;
-    let sessions = crate::db::list_refresh_sessions_in_organization(
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let sessions = crate::db::list_refresh_sessions_in_organization_page(
         db,
         Some(&organization_id),
         query.include_revoked.unwrap_or(false),
         query.principal_id.as_deref(),
         query.client_id.as_deref(),
         query.login_ip.as_deref(),
-        query.limit.unwrap_or(50).clamp(1, 200),
-        query.offset.unwrap_or(0).max(0),
+        limit,
+        offset,
     )
     .await;
-    let sessions = match sessions {
+    let (sessions, has_more) = match sessions {
         Ok(sessions) => sessions,
         Err(error) => {
             record_customer_support_read_failure(
@@ -950,5 +989,14 @@ async fn list_customer_support_refresh_sessions(
     )
     .await?;
 
-    Ok(Json(json!({ "success": true, "data": sessions })))
+    Ok(Json(json!({
+        "success": true,
+        "data": sessions,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + limit),
+        }
+    })))
 }

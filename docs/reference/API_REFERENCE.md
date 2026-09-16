@@ -698,10 +698,10 @@ Customer Support 不是组织成员关系，也不使用 `organization_role_bind
 | DELETE | `/v1/admin/customer-support-grants/{grant_id}` | internal human platform admin | 请求体 `{ "reason": "..." }`；重复撤销幂等 |
 | POST | `/v1/customer-support/context` | 普通、platform-scoped support user access token | 请求体 `{ "grant_id": "..." }`，换取不超过 5 分钟且不超过授权到期时间的 `customer_support_access` token |
 | GET | `/v1/customer-support/organizations/{organization_id}` | `customer_support_access` | 需要 `organization.read` |
-| GET | `/v1/customer-support/organizations/{organization_id}/memberships` | `customer_support_access` | 需要 `membership.read` |
-| GET | `/v1/customer-support/organizations/{organization_id}/resources` | `customer_support_access` | 需要 `resource.read` |
-| GET | `/v1/customer-support/organizations/{organization_id}/authorization-audit-logs` | `customer_support_access` | 需要 `authorization_audit.read` |
-| GET | `/v1/customer-support/organizations/{organization_id}/refresh-sessions` | `customer_support_access` | 需要 `refresh_session.read` |
+| GET | `/v1/customer-support/organizations/{organization_id}/memberships?status=&limit=&offset=` | `customer_support_access` | 需要 `membership.read`；返回 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
+| GET | `/v1/customer-support/organizations/{organization_id}/resources?app=&type=&active=&limit=&offset=` | `customer_support_access` | 需要 `resource.read`；返回 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
+| GET | `/v1/customer-support/organizations/{organization_id}/authorization-audit-logs?principal_id=&decision=&permission_name=&resource_id=&limit=&offset=` | `customer_support_access` | 需要 `authorization_audit.read`；返回 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
+| GET | `/v1/customer-support/organizations/{organization_id}/refresh-sessions?include_revoked=false&principal_id=&client_id=&login_ip=&limit=&offset=` | `customer_support_access` | 需要 `refresh_session.read`；返回 `pagination.limit`、`offset`、`has_more` 和 `next_offset` |
 
 创建授权请求：
 
