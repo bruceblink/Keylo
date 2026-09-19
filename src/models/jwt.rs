@@ -20,6 +20,10 @@ use std::fmt::Display;
 use std::sync::{Arc, RwLock};
 use tracing::warn;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject：身份主体
@@ -62,6 +66,10 @@ pub struct Claims {
 
     /// Token 类型：access_token 或 refresh_token
     pub token_type: String,
+
+    /// The token is limited to the password-change recovery flow.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub password_change_required: bool,
 
     /// Expiration time (unix timestamp)
     pub exp: i64,
@@ -516,6 +524,7 @@ mod tests {
             principal_type: Some("user".to_string()),
             organization_id: None,
             customer_support_grant_id: None,
+            password_change_required: false,
             iss: state.config.jwt_issuer.clone(),
             aud: "admin-backend".to_string(),
             scope: vec!["read".to_string()],
@@ -540,6 +549,7 @@ mod tests {
             principal_type: Some("user".to_string()),
             organization_id: None,
             customer_support_grant_id: None,
+            password_change_required: false,
             iss: state.config.jwt_issuer.clone(),
             aud: "admin-backend".to_string(),
             scope: vec!["read".to_string(), "write".to_string()],

@@ -797,6 +797,9 @@ pub async fn login(
     if !verify(&request.password, password_hash).unwrap_or(false) {
         return Err(AuthError::WrongCredentials);
     }
+    if user.password_change_required {
+        return Err(AuthError::PasswordChangeRequired);
+    }
     if !crate::db::oidc_client_user_context_is_active(
         db,
         &client.client_id,

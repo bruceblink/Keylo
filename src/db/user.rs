@@ -40,7 +40,7 @@ fn external_subject_hash(external_user_id: &str) -> String {
 /// 获取用户
 pub async fn get_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users WHERE id = $1",
+        "SELECT id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -52,7 +52,7 @@ pub async fn get_user_by_id(pool: &PgPool, user_id: &str) -> Result<Option<User>
 /// 根据用户名获取用户
 pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users WHERE username = $1",
+        "SELECT id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at FROM users WHERE username = $1",
     )
     .bind(username)
     .fetch_optional(pool)
@@ -64,7 +64,7 @@ pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Optio
 /// 根据邮箱获取用户
 pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User>> {
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users WHERE email = $1",
+        "SELECT id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at FROM users WHERE email = $1",
     )
     .bind(email)
     .fetch_optional(pool)
@@ -80,7 +80,7 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User
 pub async fn list_users_page(pool: &PgPool, limit: i64, offset: i64) -> Result<(Vec<User>, bool)> {
     let limit = limit.max(0);
     let mut users = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+        "SELECT id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
     )
     .bind(limit + 1)
     .bind(offset)
@@ -153,7 +153,7 @@ pub async fn create_user_with_email_verified_as_class(
         r#"
         INSERT INTO users (id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8)
-        RETURNING id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at
+         RETURNING id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(id)
@@ -232,7 +232,7 @@ pub async fn set_user_class(
         SET user_class = $2,
             updated_at = $3
         WHERE id = $1
-        RETURNING id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at
+        RETURNING id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(user_id)
@@ -291,7 +291,7 @@ pub async fn update_user(
             active = COALESCE($5, active),
             updated_at = $6
         WHERE id = $1
-        RETURNING id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at
+        RETURNING id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(user_id)
@@ -477,7 +477,9 @@ pub async fn reset_user_password(
 ) -> Result<bool> {
     let password_hash = hash_password(password)?;
     let mut transaction = pool.begin().await?;
-    let updated = sqlx::query("UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1")
+    let updated = sqlx::query(
+        "UPDATE users SET password_hash = $2, password_change_required = TRUE, updated_at = $3 WHERE id = $1",
+    )
         .bind(user_id)
         .bind(password_hash)
         .bind(chrono::Local::now().naive_utc())
@@ -563,7 +565,7 @@ pub async fn change_user_password(
     let mut transaction = pool.begin().await?;
     // Lock the account so concurrent password changes cannot both validate the same old password.
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at FROM users WHERE id = $1 FOR UPDATE",
+        "SELECT id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at FROM users WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -590,7 +592,9 @@ pub async fn change_user_password(
 
     // Update the credential and invalidate every session type in one transaction.
     let new_password_hash = hash_password(new_password)?;
-    let updated = sqlx::query("UPDATE users SET password_hash = $2, updated_at = $3 WHERE id = $1")
+    let updated = sqlx::query(
+        "UPDATE users SET password_hash = $2, password_change_required = FALSE, updated_at = $3 WHERE id = $1",
+    )
         .bind(user_id)
         .bind(new_password_hash)
         .bind(chrono::Local::now().naive_utc())
@@ -888,7 +892,7 @@ pub async fn provision_user_with_roles_as_class(
         r#"
         INSERT INTO users (id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at)
         VALUES ($1, $2, $3, FALSE, $4, $5, TRUE, $6, $7)
-        RETURNING id, username, email, email_verified, user_class, password_hash, active, created_at, updated_at
+        RETURNING id, username, email, email_verified, password_change_required, user_class, password_hash, active, created_at, updated_at
         "#,
     )
     .bind(&user_id)

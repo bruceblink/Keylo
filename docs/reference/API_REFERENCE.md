@@ -173,6 +173,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 }
 ```
 
+管理员重置密码后的用户首次使用新密码登录时，响应会额外返回 `password_change_required: true`。该 access token 仅能访问 `/v1/auth/me`、`/v1/auth/logout`、`/v1/user/mfa/verify` 和 `/v1/user/change-password`；普通登录不会返回该字段。修改密码成功后，服务端清除该标记并撤销本次登录产生的 refresh session，客户端必须使用新密码重新登录。
+
 `force` 可选，默认 `false`。仅当 `SESSION_POLICY=single_user_session` 或 `SESSION_POLICY=single_principal_session` 且认证成功后，`force=true` 才会撤销同一 Principal 的旧 refresh session 并接管登录。`organization_id` 同样可选；提供时只允许人类密码登录，服务端会实时确认该 Principal 在目标组织有 active membership，随后将相同 scope 写入 access token、refresh token 与 refresh session。省略或传 `null` 保持 platform session；空、未知、已停用或非 active membership 的组织范围均不会签发 Token。
 
 ### 3.2 获取管理 Token
@@ -322,6 +324,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 管理员通过同一更新接口设置 `password` 时，Keylo 会在密码生效前撤销该用户的全部 refresh session 和 OIDC 浏览器会话，并记录 `user.password_updated` 审计事件；旧 refresh token 与浏览器 OIDC cookie 不能继续使用。
 
+`POST /v1/admin/users/{user_id}/reset-password` 成功后会将 `password_change_required` 设为 `true`，撤销该用户现有 refresh session 和 OIDC 浏览器会话；用户首次使用重置后的密码登录时必须调用 `/v1/user/change-password` 完成改密。
+
 管理员完成近期 MFA 后可调用 `POST /v1/admin/users/{user_id}/verify-email` 标记用户当前邮箱为已验证。该操作幂等，不会发送邮件、不修改邮箱地址，并记录 `user.email_verified` 审计事件；管理员后续修改邮箱会自动清除该状态。
 
 当管理操作由已启用 TOTP 的人类用户 Principal 发起时，禁用、删除用户、管理员改密和重置密码必须先完成与当前 access token 绑定的近期 MFA 验证；管理客户端凭据属于机器自动化身份，不适用 TOTP 挑战。
@@ -366,6 +370,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 `POST /v1/user/mfa/verify` 请求体必须且只能提交 `totp_code` 或 `recovery_code` 其中之一。验证成功后，Keylo 将最近 MFA 凭据绑定到当前 access token 的 `jti`，有效期为 10 分钟；TOTP 的同一时间步只能成功一次，恢复码成功后立即作废。该接口为改密和管理敏感操作提供二次认证前置条件，审计记录仅保存验证方式。
 
 已启用 TOTP 的用户调用 `POST /v1/user/change-password` 前必须先调用 `/v1/user/mfa/verify` 并使用同一 access token；缺少或过期的近期 MFA 凭据会返回 `403` 与 `mfa_required=true`，不会修改密码。尚未启用 MFA 的既有用户在管理员强制 MFA 策略上线前保持兼容。
+
+如果 access token 的 `password_change_required` 为 `true`，除 `/v1/auth/me`、`/v1/auth/logout`、`/v1/user/mfa/verify` 和 `/v1/user/change-password` 外的受保护接口都会返回 `403` 与 `error=password_change_required`。`POST /v1/user/change-password` 成功后清除该标记；重置密码用户不能通过 OIDC 浏览器登录绕过首次改密要求。
 
 改密成功后，Keylo 会在同一事务中撤销该用户的 refresh session 和 OIDC 浏览器会话，并写入 `user.password_changed` 审计事件；客户端必须使用新密码重新登录，旧 refresh token 与旧 OIDC 浏览器 cookie 均不能继续使用。
 
@@ -1006,6 +1012,7 @@ Access token 关键字段：
 - `iss`：签发方（Issuer）。用于校验 token 来源是否可信，需与服务端配置的发行者一致。
 - `aud`：受众（Audience）。标识 token 目标服务（如 `admin-backend`）；后端应校验是否匹配当前资源服务。
 - `token_type`：令牌类型。当前常见为 `access`（访问令牌）、`refresh`（刷新令牌）、`service_access` 或受限的 `customer_support_access`；每个受保护接口只接受其声明的类型。
+- `password_change_required`：密码重置后的首次登录标记。为 `true` 时，服务端只允许完成身份查看、退出、MFA 验证和修改密码；缺失或为 `false` 表示正常 token。
 - `scope`（数组）：权限点集合。用于接口级授权判断，建议采用能力点命名（如 `ssc.camera.write`）。
 - `role`（数组，兼容历史字符串）：角色集合。用于粗粒度角色判断（如 `admin`、`user`）；当前输出为数组，兼容历史单字符串。
 - `exp`：过期时间（Unix 时间戳，秒）。当前时间超过该值后 token 无效。
@@ -1014,7 +1021,7 @@ Access token 关键字段：
 
 ### 11.1 稳定契约与扩展字段
 
-第三方服务应只把以下字段作为稳定契约消费：`iss`、`sub`、`aud`、`exp`、`iat`、`jti`、`scope`、`role`、`token_type`、`uid`、`principal_id`、`principal_type`。
+第三方服务应只把以下字段作为稳定契约消费：`iss`、`sub`、`aud`、`exp`、`iat`、`jti`、`scope`、`role`、`token_type`、`uid`、`principal_id`、`principal_type`、`password_change_required`。密码重置后的首次登录 token 带 `password_change_required=true`；完成修改密码后签发的 token 不再带该字段。
 
 Keylo 后续可能在 token 中增加更多字段。第三方服务应忽略未知 claims，避免将未文档化字段作为授权依据。
 

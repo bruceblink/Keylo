@@ -1242,7 +1242,7 @@ pub async fn promote_user_to_internal_employee(
         SET user_class = $2,
             updated_at = $3
         WHERE id = $1
-        RETURNING id, username, email, email_verified, user_class, password_hash, active,
+        RETURNING id, username, email, email_verified, password_change_required, user_class, password_hash, active,
                   created_at, updated_at
         "#,
     )

@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Serialize)]
 pub struct KeyloConfiguration {
     pub issuer: String,
@@ -23,6 +27,8 @@ pub struct AuthBody {
     pub refresh_token: Option<String>,
     pub token_type: String,
     pub expires_in: i64,
+    #[serde(skip_serializing_if = "is_false")]
+    pub password_change_required: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +78,8 @@ pub struct TokenIntrospectResponse {
     pub jti: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_type: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub password_change_required: bool,
 }
 
 impl TokenIntrospectResponse {
@@ -90,6 +98,7 @@ impl TokenIntrospectResponse {
             iat: None,
             jti: None,
             token_type: None,
+            password_change_required: false,
         }
     }
 
@@ -108,6 +117,7 @@ impl TokenIntrospectResponse {
             iat: Some(claims.iat),
             jti: Some(claims.jti.clone()),
             token_type: Some(claims.token_type.clone()),
+            password_change_required: claims.password_change_required,
         }
     }
 }
@@ -199,7 +209,13 @@ impl AuthBody {
             refresh_token,
             token_type: "Bearer".to_string(),
             expires_in,
+            password_change_required: false,
         }
+    }
+
+    pub fn with_password_change_required(mut self, required: bool) -> Self {
+        self.password_change_required = required;
+        self
     }
 }
 
@@ -222,4 +238,6 @@ pub struct MeResponse {
     pub exp: i64,
     pub iss: String,
     pub jti: String,
+    #[serde(skip_serializing_if = "is_false")]
+    pub password_change_required: bool,
 }

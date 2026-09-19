@@ -29,6 +29,7 @@ pub enum AuthError {
     InsufficientRole,
     InvalidAudience,
     TokenTypeInvalid,
+    PasswordChangeRequired,
     PermissionNotBound,
     RoleNotBound,
     ServiceClientNotAuthorized,
@@ -55,6 +56,7 @@ impl fmt::Display for AuthError {
             AuthError::InsufficientRole => write!(f, "Insufficient role"),
             AuthError::InvalidAudience => write!(f, "Invalid audience"),
             AuthError::TokenTypeInvalid => write!(f, "Token type invalid"),
+            AuthError::PasswordChangeRequired => write!(f, "Password change required"),
             AuthError::PermissionNotBound => write!(f, "Permission not bound"),
             AuthError::RoleNotBound => write!(f, "Role not bound"),
             AuthError::ServiceClientNotAuthorized => {
@@ -161,6 +163,12 @@ impl IntoResponse for AuthError {
                 1017,
                 "token_type_invalid",
                 "Token type invalid".to_string(),
+            ),
+            AuthError::PasswordChangeRequired => (
+                StatusCode::FORBIDDEN,
+                1022,
+                "password_change_required",
+                "Password change required".to_string(),
             ),
             AuthError::PermissionNotBound => (
                 StatusCode::NOT_FOUND,

@@ -1382,6 +1382,68 @@ mod tests {
             .json(&json!({"refresh_token": refresh_token}))
             .await;
         assert_eq!(refresh.status_code(), StatusCode::UNAUTHORIZED);
+
+        let forced_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "NewPassword#123"
+            }))
+            .await;
+        forced_login.assert_status_ok();
+        let forced_tokens: serde_json::Value = forced_login.json::<serde_json::Value>();
+        assert_eq!(forced_tokens["password_change_required"], true);
+        let forced_access_token = forced_tokens["access_token"].as_str().unwrap();
+        let forced_refresh_token = forced_tokens["refresh_token"].as_str().unwrap();
+
+        let blocked = server
+            .get("/protected")
+            .add_header("Authorization", format!("Bearer {forced_access_token}"))
+            .await;
+        assert_eq!(blocked.status_code(), StatusCode::FORBIDDEN);
+        let blocked_body: serde_json::Value = blocked.json::<serde_json::Value>();
+        assert_eq!(blocked_body["error"], "password_change_required");
+
+        let change = server
+            .post("/v1/user/change-password")
+            .add_header("Authorization", format!("Bearer {forced_access_token}"))
+            .json(&json!({
+                "current_password": "NewPassword#123",
+                "new_password": "FinalPassword#123"
+            }))
+            .await;
+        change.assert_status_ok();
+        assert!(
+            !db::get_user_by_id(&pool, &user.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .password_change_required
+        );
+
+        let forced_refresh = server
+            .post("/v1/auth/refresh")
+            .json(&json!({"refresh_token": forced_refresh_token}))
+            .await;
+        assert_eq!(forced_refresh.status_code(), StatusCode::UNAUTHORIZED);
+
+        let final_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "FinalPassword#123"
+            }))
+            .await;
+        final_login.assert_status_ok();
+        let final_tokens: serde_json::Value = final_login.json::<serde_json::Value>();
+        assert!(final_tokens.get("password_change_required").is_none());
+        let final_access_token = final_tokens["access_token"].as_str().unwrap();
+        let allowed = server
+            .get("/protected")
+            .add_header("Authorization", format!("Bearer {final_access_token}"))
+            .await;
+        allowed.assert_status_ok();
+
         let logs = db::get_recent_audit_logs(&pool, 20).await.unwrap();
         assert!(logs.iter().any(
             |(event_type, _, detail, _)| event_type == "user.password_reset"
@@ -5604,6 +5666,7 @@ mod tests {
                 principal_type: Some("user".to_string()),
                 organization_id: None,
                 customer_support_grant_id: None,
+                password_change_required: false,
                 iss: test_config().jwt_issuer,
                 aud: "admin-backend".to_string(),
                 scope: vec!["read".to_string(), "write".to_string(), "admin".to_string()],
@@ -6411,7 +6474,16 @@ mod tests {
             false
         );
         assert!(global_sessions_last_page_body["pagination"]["next_offset"].is_null());
-        assert!(global_sessions_last_page_body["data"]
+        let all_global_sessions_resp = server
+            .get(&format!(
+                "/v1/admin/refresh-sessions?principal_id={}&limit=50&offset=0",
+                principal_id
+            ))
+            .add_header("Authorization", format!("Bearer {}", access_token))
+            .await;
+        all_global_sessions_resp.assert_status_ok();
+        let all_global_sessions_body: serde_json::Value = all_global_sessions_resp.json();
+        assert!(all_global_sessions_body["data"]
             .as_array()
             .unwrap()
             .iter()

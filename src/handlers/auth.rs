@@ -223,6 +223,7 @@ async fn access_claims_for_principal(
                 principal_type: Some("user".to_string()),
                 organization_id: None,
                 customer_support_grant_id: None,
+                password_change_required: user.password_change_required,
                 iss: state.config.jwt_issuer.clone(),
                 aud: "admin-backend".to_string(),
                 scope: access_scope("user", is_admin_user),
@@ -249,6 +250,7 @@ async fn access_claims_for_principal(
                 principal_type: Some("client".to_string()),
                 organization_id: None,
                 customer_support_grant_id: None,
+                password_change_required: false,
                 iss: state.config.jwt_issuer.clone(),
                 aud: "admin-backend".to_string(),
                 scope: access_scope("client", true),
@@ -342,6 +344,7 @@ pub async fn issue_external_user_session(
         principal_type: Some("user".to_string()),
         organization_id: organization_id.map(str::to_string),
         customer_support_grant_id: None,
+        password_change_required: user.password_change_required,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope("user", is_admin_user),
@@ -358,6 +361,7 @@ pub async fn issue_external_user_session(
         principal_type: Some("user".to_string()),
         organization_id: organization_id.map(str::to_string),
         customer_support_grant_id: None,
+        password_change_required: user.password_change_required,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -403,7 +407,8 @@ pub async fn issue_external_user_session(
         access_token,
         Some(refresh_token),
         state.config.token_expiry_seconds,
-    ))
+    )
+    .with_password_change_required(user.password_change_required))
 }
 
 fn audit_event_background(
@@ -545,22 +550,22 @@ pub async fn auth_token(
 
     // First try to authenticate as a user
     let user_result = get_user_by_username(db, &payload.client_id).await;
-    let (is_user_valid, user_id) = match user_result {
+    let (is_user_valid, user_id, password_change_required) = match user_result {
         Ok(Some(user)) => {
             if !user.active {
-                (false, None)
+                (false, None, false)
             } else if let Some(ref password_hash) = user.password_hash {
                 let result = verify(&payload.client_secret, password_hash)
                     .map_err(|_| AuthError::WrongCredentials)?;
-                (result, Some(user.id))
+                (result, Some(user.id), user.password_change_required)
             } else {
                 tracing::debug!("User has no password hash: {}", payload.client_id);
-                (false, None)
+                (false, None, false)
             }
         }
         Ok(None) => {
             tracing::debug!("User not found: {}", payload.client_id);
-            (false, None)
+            (false, None, false)
         }
         Err(e) => {
             tracing::warn!("Database error getting user: {:?}", e);
@@ -638,6 +643,7 @@ pub async fn auth_token(
         principal_type: Some("user".to_string()),
         organization_id: organization_id.clone(),
         customer_support_grant_id: None,
+        password_change_required,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, is_admin_user),
@@ -657,6 +663,7 @@ pub async fn auth_token(
         principal_type: Some("user".to_string()),
         organization_id: organization_id.clone(),
         customer_support_grant_id: None,
+        password_change_required,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -691,11 +698,14 @@ pub async fn auth_token(
     }
 
     // Send the authorized tokens
-    Ok(Json(AuthBody::new(
-        access_token,
-        Some(refresh_token),
-        state.config.token_expiry_seconds,
-    )))
+    Ok(Json(
+        AuthBody::new(
+            access_token,
+            Some(refresh_token),
+            state.config.token_expiry_seconds,
+        )
+        .with_password_change_required(password_change_required),
+    ))
 }
 
 pub async fn admin_token(
@@ -802,6 +812,7 @@ pub async fn admin_token(
         principal_type: Some("client".to_string()),
         organization_id: None,
         customer_support_grant_id: None,
+        password_change_required: false,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: access_scope(subject_prefix, true),
@@ -819,6 +830,7 @@ pub async fn admin_token(
         principal_type: Some("client".to_string()),
         organization_id: None,
         customer_support_grant_id: None,
+        password_change_required: false,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],
@@ -1323,6 +1335,7 @@ pub async fn auth_me(claims: Claims) -> Result<Json<MeResponse>, AuthError> {
         exp: claims.exp,
         iss: claims.iss,
         jti: claims.jti,
+        password_change_required: claims.password_change_required,
     }))
 }
 
@@ -1376,11 +1389,10 @@ pub async fn auth_select_organization_context(
     )
     .await;
 
-    Ok(Json(AuthBody::new(
-        access_token,
-        None,
-        state.config.token_expiry_seconds,
-    )))
+    Ok(Json(
+        AuthBody::new(access_token, None, state.config.token_expiry_seconds)
+            .with_password_change_required(context_claims.password_change_required),
+    ))
 }
 
 /// Resolve the current database state for a token so introspection does not advertise disabled identities as active.
@@ -1762,6 +1774,7 @@ pub async fn keylo_configuration(State(state): State<AppState>) -> Json<KeyloCon
             "principal_type".to_string(),
             "organization_id".to_string(),
             "customer_support_grant_id".to_string(),
+            "password_change_required".to_string(),
         ],
         supported_signing_algorithms: vec!["RS256".to_string()],
         supported_audiences: state.config.jwt_audiences.clone(),
@@ -1819,6 +1832,7 @@ pub async fn auth_refresh(
         principal_type: refresh_claims.principal_type.clone(),
         organization_id: refresh_claims.organization_id.clone(),
         customer_support_grant_id: None,
+        password_change_required: refresh_claims.password_change_required,
         iss: state.config.jwt_issuer.clone(),
         aud: refresh_claims.aud.clone(),
         scope: vec!["refresh".into()],
@@ -1861,11 +1875,14 @@ pub async fn auth_refresh(
             )
             .await;
 
-            return Ok(Json(AuthBody::new(
-                access_token,
-                Some(new_refresh_token),
-                state.config.token_expiry_seconds,
-            )));
+            return Ok(Json(
+                AuthBody::new(
+                    access_token,
+                    Some(new_refresh_token),
+                    state.config.token_expiry_seconds,
+                )
+                .with_password_change_required(access_claims.password_change_required),
+            ));
         }
         ConsumeRefreshSessionResult::Replayed { session_id } => {
             state.runtime_metrics.refresh_replay_observed();
@@ -1925,6 +1942,7 @@ pub async fn auth_refresh(
         principal_type: Some("client".to_string()),
         organization_id: None,
         customer_support_grant_id: None,
+        password_change_required: false,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["refresh".into()],

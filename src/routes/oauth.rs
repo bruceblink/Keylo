@@ -467,6 +467,12 @@ async fn oauth_callback(
                 })),
             )
         })?;
+    let password_change_required = crate::db::user::get_user_by_id(db, &user_id)
+        .await
+        .map_err(oauth_db_err)?
+        .filter(|user| user.active)
+        .map(|user| user.password_change_required)
+        .ok_or_else(|| oauth_err(StatusCode::UNAUTHORIZED, "User is not active"))?;
     let token_expires_in = 3600; // 1小时
     let now = chrono::Utc::now().timestamp();
     let access_claims = crate::models::Claims {
@@ -476,6 +482,7 @@ async fn oauth_callback(
         principal_type: Some("user".to_string()),
         organization_id: None,
         customer_support_grant_id: None,
+        password_change_required,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: vec!["read".into(), "write".into()],

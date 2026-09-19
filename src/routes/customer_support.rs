@@ -273,6 +273,7 @@ async fn mint_customer_support_context(
         principal_type: Some("user".to_string()),
         organization_id: Some(context.organization_id.clone()),
         customer_support_grant_id: Some(context.grant_id.clone()),
+        password_change_required: false,
         iss: state.config.jwt_issuer.clone(),
         aud: "admin-backend".to_string(),
         scope: context.operations,

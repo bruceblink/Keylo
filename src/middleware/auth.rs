@@ -17,6 +17,16 @@ fn bearer_token(auth: Option<TypedHeader<Authorization<Bearer>>>) -> Result<Stri
         .ok_or(AuthError::Unauthorized)
 }
 
+/// Keep a temporary password token inside the recovery flow until the user
+/// replaces the reset password; MFA verification remains available for accounts
+/// whose normal password change policy requires a recent factor.
+fn password_change_allowed_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/auth/me" | "/v1/auth/logout" | "/v1/user/change-password" | "/v1/user/mfa/verify"
+    )
+}
+
 fn service_id_from_subject(subject: &str) -> Option<&str> {
     subject.strip_prefix("service:")
 }
@@ -209,6 +219,10 @@ pub async fn auth_middleware(
         if let Err(error) = ensure_claim_principal_active(db, &claims).await {
             return Ok(error.into_response());
         }
+    }
+
+    if claims.password_change_required && !password_change_allowed_path(request.uri().path()) {
+        return Ok(AuthError::PasswordChangeRequired.into_response());
     }
 
     // 将 claims 放入扩展，后续中间件或处理器可复用
