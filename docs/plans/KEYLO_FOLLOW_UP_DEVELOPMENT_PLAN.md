@@ -86,6 +86,9 @@
 - 主线设计只写当前代码和已经批准的边界；本计划只写后续工作；API_REFERENCE.md 只写已发布接口。
 - 设计与开发计划放在 docs/design 与 docs/plans，接口契约放在 docs/reference，使用和运维分别放在 docs/guides 与 docs/operations，历史内容放在 docs/archive。
 - 每个接口或安全状态变化必须同时更新对应参考文档、样例和测试。
+- [x] 新增 `scripts/check_markdown_links.ps1`，CI 监听实际的 `main`/`dev` 分支并在文档变更时执行相对 Markdown 链接检查。
+
+验证记录（2026-09-19）：执行 `.\\scripts\\check_markdown_links.ps1`，README 和 docs 下全部相对 Markdown 链接通过；当前检查不解析外部 URL、锚点和围栏代码示例。
 
 完成标准：相对链接检查通过，文档中的 endpoint、Token 类型、错误和配置与源码一致；archive 文档不参与新功能验收。
 

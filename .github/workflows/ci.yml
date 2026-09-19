@@ -2,27 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
-    paths-ignore:
-      - 'README.md'
-      - 'CONTRIBUTING.md'
-      - 'DEVELOPMENT.md'
-      - 'IMPROVEMENTS.md'
-      - 'docs/**'
-      - '**/*.md'
-      - '.dockerignore'
-      - '.gitignore'
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main, develop ]
-    paths-ignore:
-      - 'README.md'
-      - 'CONTRIBUTING.md'
-      - 'DEVELOPMENT.md'
-      - 'IMPROVEMENTS.md'
-      - 'docs/**'
-      - '**/*.md'
-      - '.dockerignore'
-      - '.gitignore'
+    branches: [ main, dev ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -52,6 +34,10 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Validate Markdown relative links
+      shell: pwsh
+      run: ./scripts/check_markdown_links.ps1
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
@@ -76,7 +62,7 @@ jobs:
         java-version: '21'
 
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -222,7 +208,7 @@ jobs:
       run: cargo tarpaulin --out Xml
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v4
       with:
         file: cobertura.xml
         fail_ci_if_error: false
