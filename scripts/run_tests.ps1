@@ -127,7 +127,9 @@ try {
     Write-Success "PostgreSQL is ready."
 
     $testDbPassword = (Get-Content -LiteralPath $testPasswordFile -Raw).Trim()
-    $env:TEST_DATABASE_URL = "postgres://postgres:${testDbPassword}@127.0.0.1:${DatabasePort}/keylo_test"
+    # Base64 passwords can contain URL-reserved characters such as '/', so encode them before building the DSN.
+    $encodedTestDbPassword = [System.Uri]::EscapeDataString($testDbPassword)
+    $env:TEST_DATABASE_URL = "postgres://postgres:${encodedTestDbPassword}@127.0.0.1:${DatabasePort}/keylo_test"
     $env:DATABASE_PASSWORD_ENC_FILE = $testPasswordEncFile
     $env:DATABASE_PASSWORD_KEY_FILE = $testPasswordKeyFile
     $env:RUST_TEST_THREADS = "1"
