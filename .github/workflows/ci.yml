@@ -181,7 +181,7 @@ jobs:
       run: cargo clippy --workspace --all-targets -- -D warnings
 
     - name: Run unit tests
-      run: cargo test --lib
+      run: cargo test --lib -- --test-threads=1
 
     - name: Run integration tests
       run: cargo test --test integration_test -- --test-threads=1
