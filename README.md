@@ -7,7 +7,8 @@
 * 文档导航见 [docs/README.md](docs/README.md)
 * 完整使用步骤见 [docs/guides/END_TO_END_QUICKSTART.md](docs/guides/END_TO_END_QUICKSTART.md)
 * 完整接口定义见 [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md)
-* 主线开发计划与核心设计见 [docs/design/KEYLO_DEVELOPMENT_BLUEPRINT.md](docs/design/KEYLO_DEVELOPMENT_BLUEPRINT.md)
+* 主线设计与能力边界见 [docs/design/KEYLO_DEVELOPMENT_BLUEPRINT.md](docs/design/KEYLO_DEVELOPMENT_BLUEPRINT.md)
+* 线性开发主线与功能清单见 [docs/plans/KEYLO_DEVELOPMENT_PLAN.md](docs/plans/KEYLO_DEVELOPMENT_PLAN.md)
 * 多客户端权限建模见 [docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md](docs/integrations/MULTI_CLIENT_RBAC_INTEGRATION.md)
 * 统一密文配置格式见 [docs/operations/SECRET_ENCRYPTION.md](docs/operations/SECRET_ENCRYPTION.md)
 * 发布说明见 [docs/archive/releases/RELEASE_2_1_1.md](docs/archive/releases/RELEASE_2_1_1.md)
@@ -535,14 +536,9 @@ docker compose logs -f keylo-service
 
 ---
 
-## 🚦 演进方向
+## 🚦 开发主线
 
-后续增强方向：
-
-* 多把 RSA 密钥并行发布
-* 自动密钥轮换流程
-* 更细粒度的健康检查与 readiness 探针
-* 更完善的网关接入样例
+当前已交付能力、下一切片和未排期边界统一维护在[线性开发主线与功能清单](docs/plans/KEYLO_DEVELOPMENT_PLAN.md)，不再在 README 中保留另一份演进列表。
 
 ---
 
@@ -610,4 +606,4 @@ MIT License - 查看 [LICENSE](LICENSE) 文件
 
 ---
 
-**Last Updated**: 2026年05月14日
+**Last Updated**: 2026年09月19日

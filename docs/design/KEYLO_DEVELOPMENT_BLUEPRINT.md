@@ -1,14 +1,14 @@
-# Keylo 主线设计与能力边界（审查版）
+# Keylo 主线设计与能力边界
 
-> 审查日期：2026-08-09
+> 当前基线：2026-09-19
 >
-> 本文是 Keylo 当前唯一的主线设计文档，负责产品定位、能力取舍、当前代码基线和核心安全模型。后续开发任务、优先级、验收命令和触发条件独立维护在 [KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md](../plans/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md)。docs/archive/ 只保留历史上下文，不作为新的开发或部署依据。
+> 本文只负责产品定位、能力取舍、当前代码基线和核心安全模型。线性开发顺序与功能状态统一维护在 [KEYLO_DEVELOPMENT_PLAN.md](../plans/KEYLO_DEVELOPMENT_PLAN.md)。`docs/archive/` 只保留历史上下文，不作为新的开发或部署依据。
 
 ## 0. 审查结论
 
 本轮审查确认：Keylo 以 Keycloak 作为协议、安全和互操作参照，而不是把 Keycloak 的全部能力搬进来，这个方向是正确的。Keycloak 官方能力覆盖 OIDC、OAuth、SAML、身份代理、LDAP/AD、用户和账户控制台、灵活认证、会话治理、管理 API 以及更细粒度的管理权限；这些能力证明了 IAM 产品需要解决的边界，但不代表每个部署都应该承担同样的复杂度。
 
-Keylo 采用“先通用 IAM 和可用性，再以 SaaS 组织隔离为下一条主线”的策略：
+Keylo 已将通用 IAM 可用性和 SaaS 多组织基础纳入当前基线，后续工作按线性开发计划逐步推进：
 
 1. 保留标准互操作和安全生命周期，把它们做成可验证的稳定契约。
 2. 使用 Principal、RBAC、资源和显式授权决策表达通用授权，不复制 Realm 层级和任意策略语言。
@@ -71,7 +71,7 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 
 ## 3. 当前代码能力基线
 
-下表按 2026-08-10 的源码、迁移和测试核对，不把历史发布说明当作现状。
+下表按 2026-09-19 的源码、迁移和测试核对，不把历史发布说明当作现状。
 
 | 领域 | 当前代码能力 | 仍然存在的边界 |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ Spring、Node、Go、Rust 样例与授权决策契约见 [第三方系统与服�
 
 Organization 是 SaaS 租户边界，但不是新的认证协议或 Realm 层级。Keylo 先采用单部署、多组织、共享运行时的模型；所有组织拥有的数据和关系必须显式带 organization_id，平台级对象才允许为空。
 
-当前实现状态（2026-08-10）：组织、用户类别、成员关系、组织角色绑定、资源、refresh session、OIDC client、service client 和 device/API key scope 已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台角色写入统一校验 `user_class` 与 role scope：external_customer 不能通过 user、Principal、provision 或批量接口获得 platform/global role，organization role 只能进入同组织的 organization_role_bindings；对 user Principal 的授予和撤销同步维护两张角色关系表。历史脏绑定在同步、权限、资源树、管理 Token 和 introspection 读取侧默认失败关闭，并会阻止将该账户提升为 internal_employee，直到管理员显式清理绑定。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。授权 check、batch-check、effective-permissions 与 resource-tree 每次都重验 signed active organization context、组织状态和 membership，并分别解释 platform role 或同组织 role binding；相同资源坐标可以由多个组织复用，跨组织资源保持普通 deny/forbidden 边界。人类密码登录提供 organization_id 时会创建相同 scope 的 refresh session，刷新时再次校验 scope 和 live membership，组织停用/归档或成员失效会原子撤销该 scope。service client、OIDC client 与 device 现在都明确存储 platform 或 organization scope；组织范围 device 创建会原子建立 active membership，API key 只保存 bcrypt hash，固定继承机器 Principal 的 scope，支持重叠轮换和显式撤销。`X-API-Key` 只在 `/v1/authorize/check` 与 `/v1/authorize/batch-check` 解析，且每次实时重验 key、scope/audience、Principal、组织、membership 和 RBAC；它不进入人类认证或 refresh 流程。拥有 signed active context 的 organization owner/admin 可以列出、创建、读取、更新和轮换本组织 OIDC client、service/device 与 API key；这些写操作要求近期 MFA，并且查询和写入都使用组织过滤。OIDC authorization code、Token 和 UserInfo 会实时校验 client active、组织 active、用户 Principal active 与 membership active；组织停用或成员变为 pending/suspended/removed 时，未兑换授权码被原子撤销，旧 OIDC access token 不能继续通过 UserInfo。internal_employee 的 customer-support 访问现通过固定受限角色、目标 customer 组织、read operation、人工原因与短期无 refresh token 的 context grant；每次读取和 introspection 都重新校验 grant、角色、人员和组织状态，并写入结构化审计。identity source 已落地显式 `allowed_user_class` 与 `none/fixed` 组织策略、active organization 校验、JIT membership 和 scoped session。
+当前实现状态（2026-09-19）：组织、用户类别、成员关系、组织角色绑定、资源、refresh session、OIDC client、service client 和 device/API key scope 已经有数据库迁移、持久化访问层与 PostgreSQL 集成测试；迁移只把历史 `super_admin`/`admin.full` 平台权限账户归类为 internal_employee，避免依据 `admin*` 名称前缀误判客户管理员。新建用户默认 external_customer，bootstrap super admin 会在同一启动流程中提升为 internal_employee 并加入 `org-internal`。平台角色写入统一校验 `user_class` 与 role scope：external_customer 不能通过 user、Principal、provision 或批量接口获得 platform/global role，organization role 只能进入同组织的 organization_role_bindings；对 user Principal 的授予和撤销同步维护两张角色关系表。历史脏绑定在同步、权限、资源树、管理 Token 和 introspection 读取侧默认失败关闭，并会阻止将该账户提升为 internal_employee，直到管理员显式清理绑定。平台管理员可使用受保护的组织创建、查询、状态迁移和成员状态 API；人类调用者会实时校验 `internal_employee` 类别，管理 client 也会再次校验 active admin-client 状态。未邀请或尚未完成组织归属的 external_customer 只能停留在无 active organization context 的平台注册状态，不能进入租户资源。授权 check、batch-check、effective-permissions 与 resource-tree 每次都重验 signed active organization context、组织状态和 membership，并分别解释 platform role 或同组织 role binding；相同资源坐标可以由多个组织复用，跨组织资源保持普通 deny/forbidden 边界。人类密码登录提供 organization_id 时会创建相同 scope 的 refresh session，刷新时再次校验 scope 和 live membership，组织停用/归档或成员失效会原子撤销该 scope。service client、OIDC client 与 device 现在都明确存储 platform 或 organization scope；组织范围 device 创建会原子建立 active membership，API key 只保存 bcrypt hash，固定继承机器 Principal 的 scope，支持重叠轮换和显式撤销。`X-API-Key` 只在 `/v1/authorize/check` 与 `/v1/authorize/batch-check` 解析，且每次实时重验 key、scope/audience、Principal、组织、membership 和 RBAC；它不进入人类认证或 refresh 流程。拥有 signed active context 的 organization owner/admin 可以列出、创建、读取、更新和轮换本组织 OIDC client、service/device 与 API key；这些写操作要求近期 MFA，并且查询和写入都使用组织过滤。OIDC authorization code、Token 和 UserInfo 会实时校验 client active、组织 active、用户 Principal active 与 membership active；组织停用或成员变为 pending/suspended/removed 时，未兑换授权码被原子撤销，旧 OIDC access token 不能继续通过 UserInfo。internal_employee 的 customer-support 访问现通过固定受限角色、目标 customer 组织、read operation、人工原因与短期无 refresh token 的 context grant；每次读取和 introspection 都重新校验 grant、角色、人员和组织状态，并写入结构化审计。identity source 已落地显式 `allowed_user_class` 与 `none/fixed` 组织策略、active organization 校验、JIT membership 和 scoped session。
 
 用户至少分为两类：
 
@@ -201,14 +201,14 @@ request -> authenticated principal -> active organization context
 - 当前已实现能力、明确缺口和身份源支持边界。
 - Principal、RBAC、资源、组织作用域、Token、密钥、会话和资源服务的核心规则。
 
-后续功能顺序、P0/P1 任务、触发式 2.2+ 能力、Docker 数据库验收、协议回归、文档门槛和提交规则见 [Keylo 后续完整开发计划](../plans/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md)。计划中的候选能力在满足触发信号前不得被解释为已承诺的实现。
+线性开发顺序、功能状态、Docker 数据库验收、协议回归、文档检查和提交规则见 [Keylo 线性开发主线与功能清单](../plans/KEYLO_DEVELOPMENT_PLAN.md)。该计划未列出的扩展不属于当前实现承诺。
 
 ## 6. 权威文档
 
 | 主题 | 权威文档 |
 | --- | --- |
 | 主线设计与能力边界 | 本文 |
-| 后续完整开发计划 | [KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md](../plans/KEYLO_FOLLOW_UP_DEVELOPMENT_PLAN.md) |
+| 线性开发主线与功能清单 | [KEYLO_DEVELOPMENT_PLAN.md](../plans/KEYLO_DEVELOPMENT_PLAN.md) |
 | API 请求、响应和错误语义 | [API_REFERENCE.md](../reference/API_REFERENCE.md) |
 | 从零开始部署与联调 | [END_TO_END_QUICKSTART.md](../guides/END_TO_END_QUICKSTART.md) |
 | 当前密钥和运行边界 | [SECRET_ENCRYPTION.md](../operations/SECRET_ENCRYPTION.md) 与 [KEY_ROTATION.md](../operations/KEY_ROTATION.md) |
