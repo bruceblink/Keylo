@@ -72,6 +72,13 @@
 - 固化 TOTP、恢复码、敏感管理操作近期 MFA、OAuth state 和 OIDC upstream state 的过期、一次性消费和重放测试。
 - 交付物：密钥轮换 runbook（只描述当前代码已支持的步骤）、安全回归测试、升级和回滚说明。
 
+#### 2.1-D 本轮切片：组织会话轮换的事务级上下文复核
+
+- [x] 组织作用域 refresh session 在轮换事务中按组织、主体、用户、成员关系和 refresh 行的固定顺序加锁并重新验证；上下文失效时撤销会话并拒绝轮换，避免生命周期检查与 Token 轮换之间的竞态。
+- [x] 数据库回归覆盖错误组织上下文不消费原 Token、成员状态失效时 fail-closed、会话撤销原因和恢复后的新会话正常轮换。
+
+验证记录（2026-09-19）：执行 `.\\scripts\\run_tests.ps1 -DatabasePort 55432`，使用本机 Docker 服务 `keylo-test-db-d8c18fae9e68`，镜像 `postgres:17-alpine`，宿主端口 `127.0.0.1:55432` 映射到容器 `5432`；`pg_isready` 检查通过，fmt、workspace Clippy 和 139 个单元测试、1 个 customer-support、25 个 database、76 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、6 个 user 测试全部通过。脚本结束后容器、匿名卷、端口映射和临时密钥目录均已移除。
+
 完成标准：轮换和账户安全状态变化不会产生可继续使用的旧 refresh session；升级或回滚不会让合法的短期旧 Token 被无故拒绝。
 
 ### 2.1-E 文档与契约收敛

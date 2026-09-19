@@ -34,6 +34,7 @@ pub enum ConsumeRefreshSessionResult {
     NotFound,
     Replayed { session_id: String },
     OrganizationScopeMismatch,
+    OrganizationContextInactive,
 }
 
 pub struct CreateRefreshSessionParams<'a> {
@@ -49,14 +50,15 @@ pub struct CreateRefreshSessionParams<'a> {
     pub expires_at: i64,
 }
 
-/// Lock the facts that make an organization-scoped session valid before it is
-/// inserted. Lifecycle writers must wait on these rows, or this check observes
-/// their committed state before the session can be written.
+/// Lock the rows that make an organization-scoped session valid and report
+/// whether the context is still usable. Lifecycle writers use the same lock
+/// order, so the result is evaluated against a committed state before a
+/// session is inserted or rotated.
 async fn lock_active_organization_session_context(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     organization_id: &str,
     principal_id: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let organization = sqlx::query(
         r#"
         SELECT status, kind
@@ -69,12 +71,12 @@ async fn lock_active_organization_session_context(
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(organization) = organization else {
-        anyhow::bail!("organization_session_context_inactive");
+        return Ok(false);
     };
     let organization_status: String = organization.get("status");
     let organization_kind: String = organization.get("kind");
     if organization_status != "active" {
-        anyhow::bail!("organization_session_context_inactive");
+        return Ok(false);
     }
 
     let principal = sqlx::query(
@@ -89,13 +91,13 @@ async fn lock_active_organization_session_context(
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(principal) = principal else {
-        anyhow::bail!("organization_session_context_inactive");
+        return Ok(false);
     };
     let principal_type: String = principal.get("principal_type");
     let principal_ref_id: String = principal.get("ref_id");
     let principal_active: bool = principal.get("active");
     if !principal_active || principal_type != "user" {
-        anyhow::bail!("organization_session_context_inactive");
+        return Ok(false);
     }
 
     let user = sqlx::query(
@@ -110,7 +112,7 @@ async fn lock_active_organization_session_context(
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(user) = user else {
-        anyhow::bail!("organization_session_context_inactive");
+        return Ok(false);
     };
     let user_active: bool = user.get("active");
     let user_class: Option<String> = user.get("user_class");
@@ -122,7 +124,7 @@ async fn lock_active_organization_session_context(
         || !user_class_valid
         || (user_class.as_deref() == Some("external_customer") && organization_kind != "customer")
     {
-        anyhow::bail!("organization_session_context_inactive");
+        return Ok(false);
     }
 
     let membership = sqlx::query(
@@ -138,14 +140,14 @@ async fn lock_active_organization_session_context(
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(membership) = membership else {
-        anyhow::bail!("organization_session_context_inactive");
+        return Ok(false);
     };
     let membership_status: String = membership.get("status");
     if membership_status != "active" {
-        anyhow::bail!("organization_session_context_inactive");
+        return Ok(false);
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// Creates a refresh session plus its first hashed token record.
@@ -162,8 +164,11 @@ pub async fn create_refresh_session(
     let refresh_token_hash = token_hash(params.refresh_token);
 
     if let Some(organization_id) = params.organization_id {
-        lock_active_organization_session_context(&mut tx, organization_id, params.principal_id)
-            .await?;
+        if !lock_active_organization_session_context(&mut tx, organization_id, params.principal_id)
+            .await?
+        {
+            anyhow::bail!("organization_session_context_inactive");
+        }
     }
 
     sqlx::query(
@@ -215,11 +220,64 @@ pub async fn consume_and_rotate_refresh_session(
     new_refresh_token: &str,
     new_access_jti: &str,
 ) -> Result<ConsumeRefreshSessionResult> {
-    // Lock both records before checking scope and consuming the old token, so a
-    // concurrent refresh cannot race a rotation or cross an organization boundary.
+    // Read the session identity first, then lock the organization context before
+    // locking refresh rows. Lifecycle writers use that same order when revoking
+    // sessions, which prevents a stale membership check from authorizing rotation.
     let mut tx = pool.begin().await?;
     let refresh_token_hash = token_hash(refresh_token);
     let new_refresh_token_hash = token_hash(new_refresh_token);
+
+    let candidate = sqlx::query(
+        r#"
+        SELECT rst.session_id, rs.principal_id, rs.organization_id
+        FROM refresh_session_tokens rst
+        INNER JOIN refresh_sessions rs ON rs.id = rst.session_id
+        WHERE rst.token_hash = $1
+        "#,
+    )
+    .bind(&refresh_token_hash)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(candidate) = candidate else {
+        tx.commit().await?;
+        return Ok(ConsumeRefreshSessionResult::NotFound);
+    };
+
+    let candidate_session_id: String = candidate.get("session_id");
+    let candidate_principal_id: String = candidate.get("principal_id");
+    let candidate_organization_id: Option<String> = candidate.get("organization_id");
+    if candidate_organization_id.as_deref() != expected_organization_id {
+        // A mismatch must not consume the token or revoke the stored session:
+        // callers map this to an invalid token without changing valid state.
+        tx.commit().await?;
+        return Ok(ConsumeRefreshSessionResult::OrganizationScopeMismatch);
+    }
+
+    if let Some(organization_id) = candidate_organization_id.as_deref() {
+        let context_active = lock_active_organization_session_context(
+            &mut tx,
+            organization_id,
+            &candidate_principal_id,
+        )
+        .await?;
+        if !context_active {
+            // Revoke the session while the context lock is held. The lifecycle
+            // reason wins when another writer already revoked the same session.
+            sqlx::query(
+                r#"
+                UPDATE refresh_sessions
+                SET revoked_at = COALESCE(revoked_at, NOW()),
+                    revoke_reason = COALESCE(revoke_reason, 'organization_context_inactive')
+                WHERE id = $1
+                "#,
+            )
+            .bind(&candidate_session_id)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok(ConsumeRefreshSessionResult::OrganizationContextInactive);
+        }
+    }
 
     let row = sqlx::query(
         r#"
@@ -269,12 +327,6 @@ pub async fn consume_and_rotate_refresh_session(
     }
 
     let organization_id: Option<String> = row.get("organization_id");
-    if organization_id.as_deref() != expected_organization_id {
-        // A mismatch must not consume the token or revoke the stored session:
-        // callers map this to an invalid token without changing valid state.
-        tx.commit().await?;
-        return Ok(ConsumeRefreshSessionResult::OrganizationScopeMismatch);
-    }
 
     if token_consumed || token_revoked || session_revoked {
         sqlx::query(

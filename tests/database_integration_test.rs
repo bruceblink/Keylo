@@ -606,7 +606,8 @@ mod database_tests {
 
     /// Keeps a tenant refresh token bound to the organization recorded with its
     /// session. A mismatched signed claim must not consume, rotate, or revoke a
-    /// still-valid session that belongs to the real organization.
+    /// still-valid session, while an inactive live context must fail closed even
+    /// when its session row has not been revoked by the lifecycle writer yet.
     #[tokio::test]
     async fn test_organization_refresh_session_scope_mismatch_preserves_session() {
         let _guard = DB_TEST_LOCK.lock().await;
@@ -708,20 +709,89 @@ mod database_tests {
         assert!(sessions[0].rotated_at.is_none());
         assert!(sessions[0].revoked_at.is_none());
 
-        let consumed = db::consume_and_rotate_refresh_session(
+        // Model a committed lifecycle change without relying on the separate
+        // revocation write; rotation must independently re-check the live rows.
+        sqlx::query(
+            "UPDATE organization_memberships SET status = 'suspended', updated_at = NOW() WHERE organization_id = $1 AND principal_id = $2",
+        )
+        .bind(&organization.id)
+        .bind(&principal.id)
+        .execute(&pool)
+        .await
+        .expect("Failed to suspend refresh-scope membership");
+        let inactive_context = db::consume_and_rotate_refresh_session(
             &pool,
             &refresh_token,
             Some(&organization.id),
-            "matching-refresh-token-id",
-            "matching-refresh-token",
-            "matching-access-jti",
+            "inactive-refresh-token-id",
+            "inactive-refresh-token",
+            "inactive-access-jti",
+        )
+        .await
+        .expect("Inactive organization context query should complete");
+        assert_eq!(
+            inactive_context,
+            db::ConsumeRefreshSessionResult::OrganizationContextInactive
+        );
+        let revoked = db::list_refresh_sessions_in_organization(
+            &pool,
+            Some(&organization.id),
+            true,
+            Some(&principal.id),
+            None,
+            None,
+            10,
+            0,
+        )
+        .await
+        .expect("Failed to list inactive organization sessions");
+        assert_eq!(
+            revoked[0].revoke_reason.as_deref(),
+            Some("organization_context_inactive")
+        );
+
+        sqlx::query(
+            "UPDATE organization_memberships SET status = 'active', updated_at = NOW() WHERE organization_id = $1 AND principal_id = $2",
+        )
+        .bind(&organization.id)
+        .bind(&principal.id)
+        .execute(&pool)
+        .await
+        .expect("Failed to reactivate refresh-scope membership");
+        let second_session_id = format!("refresh-scope-session-second-{suffix}");
+        let second_refresh_token_id = format!("refresh-scope-token-second-{suffix}");
+        let second_refresh_token = format!("refresh-scope-raw-token-second-{suffix}");
+        db::create_refresh_session(
+            &pool,
+            db::CreateRefreshSessionParams {
+                session_id: &second_session_id,
+                principal_id: &principal.id,
+                client_id: "user:refresh-scope-test",
+                organization_id: Some(&organization.id),
+                refresh_token_id: &second_refresh_token_id,
+                refresh_token: &second_refresh_token,
+                access_jti: "refresh-scope-access-jti-second",
+                login_ip: None,
+                user_agent: None,
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .expect("Failed to create second organization-scoped refresh session");
+        let consumed = db::consume_and_rotate_refresh_session(
+            &pool,
+            &second_refresh_token,
+            Some(&organization.id),
+            "matching-refresh-token-id-second",
+            "matching-refresh-token-second",
+            "matching-access-jti-second",
         )
         .await
         .expect("Matching organization refresh should rotate");
         assert!(matches!(
             consumed,
             db::ConsumeRefreshSessionResult::Consumed(ref session)
-                if session.session_id == session_id
+                if session.session_id == second_session_id
                     && session.organization_id.as_deref() == Some(organization.id.as_str())
         ));
     }

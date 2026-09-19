@@ -1888,6 +1888,16 @@ pub async fn auth_refresh(
             .await;
             return Err(AuthError::InvalidToken);
         }
+        ConsumeRefreshSessionResult::OrganizationContextInactive => {
+            audit_event(
+                &state,
+                "auth.refresh.organization_context_inactive",
+                Some(refresh_claims.sub.as_str()),
+                Some("Refresh session organization context is inactive"),
+            )
+            .await;
+            return Err(AuthError::InvalidToken);
+        }
         ConsumeRefreshSessionResult::NotFound if refresh_claims.organization_id.is_some() => {
             return Err(AuthError::InvalidToken);
         }
