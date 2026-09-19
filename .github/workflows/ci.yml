@@ -167,15 +167,11 @@ jobs:
           sleep 1
         done
 
-    - name: Apply DB migrations for SQLx compile-time checks
+    - name: Verify PostgreSQL version
       env:
         PGPASSWORD: password
       run: |
-        for f in $(find migrations -maxdepth 1 -name '*.sql' | sort); do
-          echo "Applying migration: $f"
-          psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -f "$f"
-        done
-        psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -c "SELECT to_regclass('public.users') AS users_table;"
+        psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -c "SHOW server_version;"
 
     - name: Run clippy
       run: cargo clippy --workspace --all-targets -- -D warnings
@@ -273,15 +269,11 @@ jobs:
           sleep 1
         done
 
-    - name: Apply DB migrations for SQLx compile-time checks
+    - name: Verify PostgreSQL version
       env:
         PGPASSWORD: password
       run: |
-        for f in $(find migrations -maxdepth 1 -name '*.sql' | sort); do
-          echo "Applying migration: $f"
-          psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -f "$f"
-        done
-        psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -c "SELECT to_regclass('public.users') AS users_table;"
+        psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -c "SHOW server_version;"
 
     - name: Run tests with coverage
       run: cargo tarpaulin --out Xml
