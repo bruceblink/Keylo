@@ -92,7 +92,7 @@ else
 fi
 
 print_status "Running integration tests..."
-if cargo test --test integration_test; then
+if cargo test --test integration_test -- --test-threads=1; then
     print_success "Integration tests passed"
 else
     print_error "Integration tests failed"
@@ -100,7 +100,7 @@ else
 fi
 
 print_status "Running user integration tests..."
-if cargo test --test user_integration_test; then
+if cargo test --test user_integration_test -- --test-threads=1; then
     print_success "User integration tests passed"
 else
     print_error "User integration tests failed"
@@ -108,7 +108,7 @@ else
 fi
 
 print_status "Running RBAC integration tests..."
-if cargo test --test rbac_integration_test; then
+if cargo test --test rbac_integration_test -- --test-threads=1; then
     print_success "RBAC integration tests passed"
 else
     print_error "RBAC integration tests failed"
@@ -116,7 +116,7 @@ else
 fi
 
 print_status "Running OAuth integration tests..."
-if cargo test --test oauth_integration_test; then
+if cargo test --test oauth_integration_test -- --test-threads=1; then
     print_success "OAuth integration tests passed"
 else
     print_error "OAuth integration tests failed"
@@ -124,7 +124,7 @@ else
 fi
 
 print_status "Running database integration tests..."
-if cargo test --test database_integration_test; then
+if cargo test --test database_integration_test -- --test-threads=1; then
     print_success "Database integration tests passed"
 else
     print_error "Database integration tests failed"
@@ -132,7 +132,7 @@ else
 fi
 
 print_status "Running load tests..."
-if cargo test --test load_test; then
+if cargo test --test load_test -- --test-threads=1; then
     print_success "Load tests passed"
 else
     print_error "Load tests failed"
@@ -158,7 +158,7 @@ else
 fi
 
 # Run clippy
-if cargo clippy -- -D warnings > /dev/null 2>&1; then
+if cargo clippy --workspace --all-targets -- -D warnings > /dev/null 2>&1; then
     print_success "Clippy checks passed"
 else
     print_warning "Clippy found issues. Run 'cargo clippy' to see details."

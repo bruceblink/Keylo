@@ -43,7 +43,7 @@
 ## 📋 前置要求
 
 * Rust 1.70+ ([安装 Rust](https://rustup.rs/))
-* PostgreSQL 12+ (或使用 Docker)
+* PostgreSQL 17+ (或使用 Docker)
 * Docker & Docker Compose (可选，用于本地开发)
 
 ---
@@ -292,7 +292,7 @@ Cargo.toml           # 项目依赖配置
 | 异步运行时 | Tokio | 1.0 |
 | JWT | jsonwebtoken | 10 |
 | 数据库 | SQLx | 0.8 |
-| 数据库系统 | PostgreSQL | 12+ |
+| 数据库系统 | PostgreSQL | 17+ |
 | 日志 | tracing | 0.1 |
 | 序列化 | serde | 1.0 |
 

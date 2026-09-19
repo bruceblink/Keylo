@@ -3,8 +3,84 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ main, dev ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'migrations/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'audit.toml'
+      - 'fly.toml'
+      - 'scripts/*.ps1'
+      - 'scripts/*.sh'
+      - 'scripts/*.py'
+      - 'web/src/**'
+      - 'web/index.html'
+      - 'web/*.json'
+      - 'web/*.ts'
+      - 'examples/go-net-http-oidc/*.go'
+      - 'examples/go-net-http-oidc/go.mod'
+      - 'examples/go-net-http-oidc/go.sum'
+      - 'examples/node-express-oidc/*.mjs'
+      - 'examples/node-express-oidc/package.json'
+      - 'examples/node-express-oidc/package-lock.json'
+      - 'examples/rust-axum-oidc/src/**'
+      - 'examples/rust-axum-oidc/Cargo.toml'
+      - 'examples/rust-axum-oidc/Cargo.lock'
+      - 'examples/spring-boot-oidc/src/**'
+      - 'examples/spring-boot-oidc/build.gradle'
+      - 'examples/spring-boot-oidc/settings.gradle'
+      - 'examples/spring-boot-oidc/gradlew*'
+      - 'examples/spring-boot-resource-server/src/**'
+      - 'examples/spring-boot-resource-server/build.gradle'
+      - 'examples/spring-boot-resource-server/settings.gradle'
+      - 'examples/spring-boot-resource-server/gradlew*'
+      - 'Dockerfile*'
+      - 'docker-compose*.yml'
+      - 'docker-compose*.yaml'
+      - '.env.example'
+      - '.github/workflows/**'
+      - '.github/scripts/**'
   pull_request:
     branches: [ main, dev ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'migrations/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'audit.toml'
+      - 'fly.toml'
+      - 'scripts/*.ps1'
+      - 'scripts/*.sh'
+      - 'scripts/*.py'
+      - 'web/src/**'
+      - 'web/index.html'
+      - 'web/*.json'
+      - 'web/*.ts'
+      - 'examples/go-net-http-oidc/*.go'
+      - 'examples/go-net-http-oidc/go.mod'
+      - 'examples/go-net-http-oidc/go.sum'
+      - 'examples/node-express-oidc/*.mjs'
+      - 'examples/node-express-oidc/package.json'
+      - 'examples/node-express-oidc/package-lock.json'
+      - 'examples/rust-axum-oidc/src/**'
+      - 'examples/rust-axum-oidc/Cargo.toml'
+      - 'examples/rust-axum-oidc/Cargo.lock'
+      - 'examples/spring-boot-oidc/src/**'
+      - 'examples/spring-boot-oidc/build.gradle'
+      - 'examples/spring-boot-oidc/settings.gradle'
+      - 'examples/spring-boot-oidc/gradlew*'
+      - 'examples/spring-boot-resource-server/src/**'
+      - 'examples/spring-boot-resource-server/build.gradle'
+      - 'examples/spring-boot-resource-server/settings.gradle'
+      - 'examples/spring-boot-resource-server/gradlew*'
+      - 'Dockerfile*'
+      - 'docker-compose*.yml'
+      - 'docker-compose*.yaml'
+      - '.env.example'
+      - '.github/workflows/**'
+      - '.github/scripts/**'
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,7 +94,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17-alpine
         env:
           POSTGRES_PASSWORD: password
           POSTGRES_DB: keylo_test
@@ -32,7 +108,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Validate Markdown relative links
       shell: pwsh
@@ -42,7 +118,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7
       with:
         node-version: 24
         cache: npm
@@ -51,18 +127,19 @@ jobs:
           examples/node-express-oidc/package-lock.json
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7
       with:
         go-version-file: examples/go-net-http-oidc/go.mod
+        cache-dependency-path: examples/go-net-http-oidc/go.sum
 
     - name: Set up JDK 21
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v6
       with:
         distribution: temurin
         java-version: '21'
 
     - name: Cache dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
@@ -101,28 +178,28 @@ jobs:
         psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -c "SELECT to_regclass('public.users') AS users_table;"
 
     - name: Run clippy
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --workspace --all-targets -- -D warnings
 
     - name: Run unit tests
       run: cargo test --lib
 
     - name: Run integration tests
-      run: cargo test --test integration_test
+      run: cargo test --test integration_test -- --test-threads=1
 
     - name: Run user integration tests
-      run: cargo test --test user_integration_test
+      run: cargo test --test user_integration_test -- --test-threads=1
 
     - name: Run RBAC integration tests
-      run: cargo test --test rbac_integration_test
+      run: cargo test --test rbac_integration_test -- --test-threads=1
 
     - name: Run OAuth integration tests
-      run: cargo test --test oauth_integration_test
+      run: cargo test --test oauth_integration_test -- --test-threads=1
 
     - name: Run database integration tests
-      run: cargo test --test database_integration_test
+      run: cargo test --test database_integration_test -- --test-threads=1
 
     - name: Run load tests
-      run: cargo test --test load_test
+      run: cargo test --test load_test -- --test-threads=1
 
     - name: Validate OIDC relying party examples
       run: |
@@ -146,7 +223,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -160,10 +237,12 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    env:
+      RUST_TEST_THREADS: 1
 
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17-alpine
         env:
           POSTGRES_PASSWORD: password
           POSTGRES_DB: keylo_test
@@ -177,7 +256,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -208,7 +287,7 @@ jobs:
       run: cargo tarpaulin --out Xml
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v7
       with:
         file: cobertura.xml
         fail_ci_if_error: false

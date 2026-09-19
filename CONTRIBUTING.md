@@ -7,7 +7,7 @@
 ### 前置要求
 
 - Rust 1.70+ ([安装 Rust](https://rustup.rs/))
-- PostgreSQL 12+ 或 Docker
+- PostgreSQL 17+ 或 Docker
 - Git
 
 ### 本地开发
