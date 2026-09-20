@@ -420,6 +420,97 @@ mod database_tests {
     }
 
     #[tokio::test]
+    async fn test_email_verification_tokens_are_hashed_single_use_and_revoked_on_email_change() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = match setup_test_db().await {
+            Ok(pool) => pool,
+            Err(msg) => {
+                println!(
+                    "Skipping test_email_verification_tokens_are_hashed_single_use_and_revoked_on_email_change: {}",
+                    msg
+                );
+                return;
+            }
+        };
+
+        let user = db::create_user(
+            &pool,
+            "email-token-user",
+            "email-token@example.test",
+            Some("Password123!"),
+        )
+        .await
+        .unwrap();
+        let first = db::issue_email_verification_token(&pool, &user.id, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        let stored_hash: String =
+            sqlx::query_scalar("SELECT token_hash FROM email_verification_tokens WHERE id = $1")
+                .bind(&first.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_ne!(stored_hash, first.token);
+        assert_eq!(stored_hash.len(), 64);
+
+        let second = db::issue_email_verification_token(&pool, &user.id, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            db::consume_email_verification_token(&pool, &first.token)
+                .await
+                .unwrap(),
+            db::ConsumeEmailVerificationTokenResult::Invalid
+        );
+        assert_eq!(
+            db::consume_email_verification_token(&pool, &second.token)
+                .await
+                .unwrap(),
+            db::ConsumeEmailVerificationTokenResult::Verified {
+                user_id: user.id.clone()
+            }
+        );
+        assert_eq!(
+            db::consume_email_verification_token(&pool, &second.token)
+                .await
+                .unwrap(),
+            db::ConsumeEmailVerificationTokenResult::Invalid
+        );
+
+        let changed_user = db::create_user(
+            &pool,
+            "email-token-change-user",
+            "email-token-change@example.test",
+            Some("Password123!"),
+        )
+        .await
+        .unwrap();
+        let pending = db::issue_email_verification_token(&pool, &changed_user.id, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        db::update_user(
+            &pool,
+            &changed_user.id,
+            None,
+            Some("email-token-changed@example.test"),
+            None,
+            None,
+            Some("test-admin"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db::consume_email_verification_token(&pool, &pending.token)
+                .await
+                .unwrap(),
+            db::ConsumeEmailVerificationTokenResult::Invalid
+        );
+    }
+
+    #[tokio::test]
     async fn test_organization_domain_tracks_explicit_human_classes_and_memberships() {
         let _guard = DB_TEST_LOCK.lock().await;
         let pool = match setup_test_db().await {

@@ -29,6 +29,11 @@ pub struct AppState {
     pub config: Arc<Config>,
 
     /// Pluggable mail delivery boundary for account self-service workflows.
+    ///
+    /// The provider is shared by cloned request state and must be thread-safe.
+    /// It owns transport behavior only; account handlers retain ownership of
+    /// token validity, persistence, rate limits, audit redaction, and rollback
+    /// after delivery failure.
     pub mail_provider: Arc<dyn MailProvider>,
 
     /// OAuth state 临时存储（用于防止 CSRF/replay）

@@ -4,7 +4,8 @@ use crate::handlers::{
     auth_export_audit_logs, auth_get_audit_logs, auth_get_blacklisted_tokens, auth_introspect,
     auth_jwks, auth_list_clients, auth_logout, auth_logout_refresh_token, auth_me, auth_refresh,
     auth_retire_jwt_key, auth_rollback_jwt_key, auth_rotate_client_secret, auth_rotate_jwt_key,
-    auth_select_organization_context, auth_token, auth_update_client, keylo_configuration,
+    auth_select_organization_context, auth_token, auth_update_client, confirm_email_verification,
+    keylo_configuration,
 };
 use crate::state::AppState;
 use axum::routing::{get, post, put};
@@ -67,6 +68,10 @@ pub fn public_router() -> Router<AppState> {
         .route("/.well-known/keylo-configuration", get(keylo_configuration))
         .route("/.well-known/jwks.json", get(auth_jwks))
         .route("/v1/auth/register", post(register_user))
+        .route(
+            "/v1/auth/email-verification/confirm",
+            post(confirm_email_verification),
+        )
         .route("/v1/auth/migrations/jit-register", post(jit_register_user))
         .route("/v1/auth/token", post(auth_token))
         .route("/v1/admin/token", post(admin_token))

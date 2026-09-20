@@ -63,6 +63,12 @@ pub struct ResetPasswordRequest {
     pub password: String,
 }
 
+/// One-time token submitted to confirm the current email address.
+#[derive(Debug, Deserialize)]
+pub struct EmailVerificationConfirmRequest {
+    pub token: String,
+}
+
 /// 更改密码请求
 #[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {

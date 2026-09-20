@@ -9,6 +9,7 @@ use axum::{
 use serde_json::json;
 use std::collections::HashMap;
 
+use crate::handlers::request_email_verification;
 use crate::{
     db::*,
     errors::is_unique_violation,
@@ -99,6 +100,10 @@ pub fn admin_user_routes() -> Router<AppState> {
 
 pub fn self_user_routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/v1/user/email-verification/request",
+            post(request_email_verification),
+        )
         .route("/v1/user/change-password", post(change_password_handler))
         .merge(crate::routes::mfa::mfa_routes())
 }

@@ -2,8 +2,13 @@
 mod tests {
     use axum_test::TestServer;
     use keylo::config::Config;
-    use keylo::startup::init_app_router_with_db_and_admin;
+    use keylo::db;
+    use keylo::mail::{MailDeliveryError, MailDeliveryFuture, MailMessage, MailProvider};
+    use keylo::startup::{
+        init_app_router_with_db_and_admin, init_app_router_with_db_and_admin_and_mail_provider,
+    };
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
     use totp_rs::{Algorithm, Secret, TOTP};
 
     const TEST_JWT_PRIVATE_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
@@ -56,6 +61,181 @@ wwIDAQAB
             environment: "test".to_string(),
             ..Default::default()
         }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingMailProvider {
+        deliveries: Arc<Mutex<Vec<MailMessage>>>,
+        failure: Arc<Mutex<Option<MailDeliveryError>>>,
+    }
+
+    impl RecordingMailProvider {
+        fn set_failure(&self, failure: Option<MailDeliveryError>) {
+            *self.failure.lock().unwrap() = failure;
+        }
+
+        fn deliveries(&self) -> Vec<MailMessage> {
+            self.deliveries.lock().unwrap().clone()
+        }
+    }
+
+    impl MailProvider for RecordingMailProvider {
+        fn send<'a>(&'a self, message: MailMessage) -> MailDeliveryFuture<'a> {
+            let deliveries = Arc::clone(&self.deliveries);
+            let failure = *self.failure.lock().unwrap();
+            Box::pin(async move {
+                message.validate()?;
+                if let Some(failure) = failure {
+                    return Err(failure);
+                }
+                deliveries.lock().unwrap().push(message);
+                Ok(())
+            })
+        }
+    }
+
+    async fn setup_email_verification_test_server() -> Option<(TestServer, RecordingMailProvider)> {
+        let config = test_config();
+        let db_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let provider = RecordingMailProvider::default();
+        match init_app_router_with_db_and_admin_and_mail_provider(
+            config,
+            &db_url,
+            "user-test-admin",
+            "UserTestAdmin#123",
+            Arc::new(provider.clone()),
+        )
+        .await
+        {
+            Ok(router) => Some((TestServer::new(router), provider)),
+            Err(error) => {
+                println!(
+                    "Skipping email verification test: DB unavailable ({})",
+                    error
+                );
+                None
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_email_verification_request_and_confirmation_are_single_use() {
+        let Some((server, provider)) = setup_email_verification_test_server().await else {
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let username = format!("email-verify-{suffix}");
+        let email = format!("email-verify-{suffix}@example.test");
+
+        let registration = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "Password123!"
+            }))
+            .await;
+        assert_eq!(registration.status_code(), 200);
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "Password123!"
+            }))
+            .await;
+        assert_eq!(login.status_code(), 200);
+        let login_data: serde_json::Value = login.json::<serde_json::Value>();
+        let access_token = login_data["access_token"].as_str().unwrap();
+
+        let request = server
+            .post("/v1/user/email-verification/request")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        assert_eq!(request.status_code(), 200);
+        let request_data: serde_json::Value = request.json::<serde_json::Value>();
+        assert_eq!(request_data["data"]["status"], "sent");
+
+        let deliveries = provider.deliveries();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].recipient, email);
+        let token = deliveries[0]
+            .text_body
+            .strip_prefix("Use this one-time Keylo email verification token: ")
+            .unwrap()
+            .to_string();
+
+        let confirmation = server
+            .post("/v1/auth/email-verification/confirm")
+            .json(&json!({ "token": token.clone() }))
+            .await;
+        assert_eq!(confirmation.status_code(), 200);
+        let confirmation_data: serde_json::Value = confirmation.json::<serde_json::Value>();
+        assert_eq!(confirmation_data["data"]["email_verified"], true);
+
+        let replay = server
+            .post("/v1/auth/email-verification/confirm")
+            .json(&json!({ "token": token }))
+            .await;
+        assert_eq!(replay.status_code(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_email_verification_delivery_failure_returns_unavailable_and_revokes_token() {
+        let Some((server, provider)) = setup_email_verification_test_server().await else {
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let username = format!("email-failure-{suffix}");
+        let email = format!("email-failure-{suffix}@example.test");
+
+        let registration = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "Password123!"
+            }))
+            .await;
+        assert_eq!(registration.status_code(), 200);
+        let registration_data: serde_json::Value = registration.json::<serde_json::Value>();
+        let user_id = registration_data["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "Password123!"
+            }))
+            .await;
+        let login_data: serde_json::Value = login.json::<serde_json::Value>();
+        let access_token = login_data["access_token"].as_str().unwrap();
+
+        provider.set_failure(Some(MailDeliveryError::Timeout));
+        let failed_request = server
+            .post("/v1/user/email-verification/request")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        assert_eq!(failed_request.status_code(), 503);
+        assert!(provider.deliveries().is_empty());
+
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = db::init_db_pool(&database_url).await.unwrap();
+        let revoked_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM email_verification_tokens
+             WHERE user_id = $1 AND revoked_at IS NOT NULL",
+        )
+        .bind(&user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(revoked_count, 1);
+        pool.close().await;
     }
 
     /// Generate the code expected by the enrollment endpoint using the same fixed RFC 6238 profile.

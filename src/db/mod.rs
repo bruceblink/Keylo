@@ -10,6 +10,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub mod customer_support;
+pub mod email_verification;
 pub mod identity;
 pub mod machine;
 pub mod mfa;
@@ -26,6 +27,7 @@ pub mod settings;
 pub mod user;
 
 pub use customer_support::*;
+pub use email_verification::*;
 pub use identity::*;
 pub use machine::*;
 pub use mfa::*;

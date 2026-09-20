@@ -278,6 +278,18 @@ pub async fn update_user(
     let now = chrono::Local::now().naive_utc();
 
     let mut transaction = pool.begin().await?;
+    let previous_email = if email.is_some() {
+        sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+    } else {
+        None
+    };
+    let email_changed = match (previous_email.as_deref(), email) {
+        (Some(previous), Some(next)) => previous != next,
+        _ => false,
+    };
     let user = sqlx::query_as::<_, User>(
         r#"
         UPDATE users
@@ -304,6 +316,16 @@ pub async fn update_user(
     .await?;
 
     if let Some(user) = &user {
+        if email_changed {
+            sqlx::query(
+                "UPDATE email_verification_tokens
+                 SET revoked_at = COALESCE(revoked_at, NOW())
+                 WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL",
+            )
+            .bind(&user.id)
+            .execute(&mut *transaction)
+            .await?;
+        }
         if active == Some(false) || password.is_some() {
             let (event_type, revoke_reason) = if active == Some(false) {
                 ("user.disabled", "user_disabled")

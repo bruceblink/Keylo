@@ -248,13 +248,42 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 本地注册用户的 `email_verified` 初始值为 `false`。该字段会在用户管理接口和用户创建响应中返回；管理员修改邮箱后会自动重置为 `false`。只有已验证的上游 OIDC `email_verified: true` 且邮箱与本地邮箱匹配时，Keylo 才会将本地状态提升为 `true`，并记录 `user.email_verified` 审计事件。
 
-### 3.8 第三方 JIT 迁移注册
+### 3.8 用户邮箱验证
+
+已登录的本地用户可为当前邮箱申请验证邮件：
+
+- **POST** `/v1/user/email-verification/request`
+- 鉴权：user access token
+- 作用：为当前未验证邮箱创建一个短时一次性 token，并通过已配置的 `MailProvider` 投递。
+- 成功响应只返回发送状态，不返回邮箱地址或 token：
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "sent",
+    "email_verified": false
+  }
+}
+```
+
+已验证账户返回 `status=already_verified`。用户级和 IP 级限流均命中时返回 `429`。邮件 provider 未配置、超时、临时不可用或拒绝投递时返回 `503`，服务端会撤销刚创建的 token。
+
+使用邮件中的 token 完成验证：
+
+- **POST** `/v1/auth/email-verification/confirm`
+- 鉴权：否
+- 请求体：`{"token":"..."}`
+
+服务端只保存 token 的 SHA-256 摘要，不保存原文；token 绑定签发时的当前邮箱，成功消费后立即失效并将 `email_verified` 设为 `true`。未知、过期、重放、已撤销、停用用户或邮箱已变更的 token 均返回相同的 `400 invalid_email_verification_token`，不暴露账户状态。成功消费写入 `user.email_verified` 审计事件，审计详情不包含 token 原文。
+
+### 3.9 第三方 JIT 迁移注册
 
 - **POST** `/v1/auth/migrations/jit-register`
 - 鉴权：否
 - 请求体：`provider`、`external_user_id`、`username`、`email`、`password?`、`active?`、`roles?`、`metadata?`
 
-### 3.9 Token 内省（授权中心集成）
+### 3.10 Token 内省（授权中心集成）
 
 - **POST** `/v1/auth/introspect`
 - 鉴权：是（service_access + `read` + `aud=admin-backend`）

@@ -1,5 +1,6 @@
 use crate::config::{build_database_url, database_password_from_env_result, Config};
 use crate::handlers::{favicon, healthz, index, metrics, protected, readyz};
+use crate::mail::{DisabledMailProvider, MailProvider};
 use crate::middleware::{auth, http_log};
 use crate::routes;
 use crate::state::AppState;
@@ -452,6 +453,24 @@ pub async fn init_app_router_with_db_and_admin(
     admin_client_id: &str,
     admin_client_secret: &str,
 ) -> Result<Router, anyhow::Error> {
+    init_app_router_with_db_and_admin_and_mail_provider(
+        config,
+        database_url,
+        admin_client_id,
+        admin_client_secret,
+        Arc::new(DisabledMailProvider),
+    )
+    .await
+}
+
+/// Test and embedding entry point that injects the mail adapter without changing production defaults.
+pub async fn init_app_router_with_db_and_admin_and_mail_provider(
+    config: Config,
+    database_url: &str,
+    admin_client_id: &str,
+    admin_client_secret: &str,
+    mail_provider: Arc<dyn MailProvider>,
+) -> Result<Router, anyhow::Error> {
     validate_test_database_startup_config(&config)?;
 
     let database_url = resolve_database_url(database_url)?;
@@ -466,7 +485,7 @@ pub async fn init_app_router_with_db_and_admin(
     crate::db::seed_super_admin_user(&db, &config).await?;
 
     let cors_allowed_origins = config.cors_allowed_origins.clone();
-    let app_state = AppState::new(config, Some(Arc::new(db)))?;
+    let app_state = AppState::new_with_mail_provider(config, Some(Arc::new(db)), mail_provider)?;
     Ok(database_router(app_state, cors_allowed_origins))
 }
 

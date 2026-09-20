@@ -18,8 +18,11 @@ use std::sync::{Arc, Mutex};
 /// provider errors.
 #[derive(Clone, PartialEq, Eq)]
 pub struct MailMessage {
+    /// Destination address owned by the account record; providers must not log it.
     pub recipient: String,
+    /// Human-readable subject selected by the account workflow, not by an adapter.
     pub subject: String,
+    /// Text template output, which may contain a secret and must never be persisted as an audit detail.
     pub text_body: String,
 }
 
@@ -62,6 +65,11 @@ impl fmt::Debug for MailMessage {
 }
 
 /// Stable provider outcomes that callers can audit without leaking adapter details.
+///
+/// These variants are intentionally closed: adapter-specific response codes,
+/// SMTP replies, URLs, and credentials stay inside the adapter. Callers can
+/// choose a public HTTP result and an audit category without turning provider
+/// diagnostics into an account-enumeration or secret-disclosure channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MailDeliveryError {
     InvalidMessage,
@@ -84,11 +92,34 @@ impl fmt::Display for MailDeliveryError {
     }
 }
 
+impl MailDeliveryError {
+    /// Return a stable category for audit details without exposing adapter diagnostics.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::InvalidMessage => "invalid_message",
+            Self::NotConfigured => "not_configured",
+            Self::Timeout => "timeout",
+            Self::TemporarilyUnavailable => "temporarily_unavailable",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
 /// Future returned by a provider without requiring an async-trait dependency.
+///
+/// Dropping the future is cancellation: an adapter must stop or detach its
+/// request and must not report delivery success after cancellation. The
+/// account workflow treats any returned error as a failed delivery and revokes
+/// the associated one-time token.
 pub type MailDeliveryFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(), MailDeliveryError>> + Send + 'a>>;
 
 /// Minimal asynchronous contract used by account self-service workflows.
+///
+/// Providers own transport resources and may implement SMTP or an external
+/// service, but they do not decide account state, token validity, retries, or
+/// audit contents. The caller owns the message value until this future
+/// resolves or is cancelled.
 pub trait MailProvider: Send + Sync {
     fn send<'a>(&'a self, message: MailMessage) -> MailDeliveryFuture<'a>;
 }
