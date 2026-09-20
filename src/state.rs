@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::mail::{DisabledMailProvider, MailProvider};
 use crate::models::MigrationBatchJob;
 use crate::models::{Keys, OidcUpstreamDiscovery, OidcUpstreamJwks};
 use bcrypt::verify;
@@ -26,6 +27,9 @@ pub struct AppState {
 
     /// 应用配置
     pub config: Arc<Config>,
+
+    /// Pluggable mail delivery boundary for account self-service workflows.
+    pub mail_provider: Arc<dyn MailProvider>,
 
     /// OAuth state 临时存储（用于防止 CSRF/replay）
     pub oauth_states: Arc<RwLock<HashMap<String, i64>>>,
@@ -300,6 +304,15 @@ impl AppState {
     }
 
     pub fn new(config: Config, db: Option<Arc<PgPool>>) -> Result<Self, anyhow::Error> {
+        Self::new_with_mail_provider(config, db, Arc::new(DisabledMailProvider))
+    }
+
+    /// Build application state with an explicit mail provider for runtime adapters or tests.
+    pub fn new_with_mail_provider(
+        config: Config,
+        db: Option<Arc<PgPool>>,
+        mail_provider: Arc<dyn MailProvider>,
+    ) -> Result<Self, anyhow::Error> {
         // 默认客户端，可以替换成从配置文件或数据库加载
         let mut clients = HashMap::new();
         clients.insert("web".into(), "web-secret".into());
@@ -318,6 +331,7 @@ impl AppState {
             audiences: Arc::new(audiences),
             db,
             config: Arc::new(config),
+            mail_provider,
             oauth_states: Arc::new(RwLock::new(HashMap::new())),
             login_attempts: Arc::new(RwLock::new(HashMap::new())),
             auth_rate_limits: Arc::new(RwLock::new(HashMap::new())),
