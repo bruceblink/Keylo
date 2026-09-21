@@ -69,6 +69,23 @@ pub struct EmailVerificationConfirmRequest {
     pub token: String,
 }
 
+/// Public input for a password-recovery request.
+///
+/// The value may be a username or email address, but the response never tells
+/// the caller whether it matched an account. This keeps account discovery out
+/// of the recovery endpoint's public contract.
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetRequest {
+    pub identifier: String,
+}
+
+/// One-time password-recovery proof and the replacement credential.
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetConfirmRequest {
+    pub token: String,
+    pub new_password: String,
+}
+
 /// 更改密码请求
 #[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {

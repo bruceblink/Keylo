@@ -277,13 +277,41 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 服务端只保存 token 的 SHA-256 摘要，不保存原文；token 绑定签发时的当前邮箱，成功消费后立即失效并将 `email_verified` 设为 `true`。未知、过期、重放、已撤销、停用用户或邮箱已变更的 token 均返回相同的 `400 invalid_email_verification_token`，不暴露账户状态。成功消费写入 `user.email_verified` 审计事件，审计详情不包含 token 原文。
 
-### 3.9 第三方 JIT 迁移注册
+### 3.9 自助密码恢复
+
+申请密码恢复：
+
+- **POST** `/v1/auth/password-reset/request`
+- 鉴权：否
+- 请求体：`{"identifier":"alice@example.com"}`，也可以提交用户名。
+
+对未知、停用、未验证邮箱、无本地密码的账户，以及邮件 provider 未配置或投递失败的情况，接口都返回相同的成功响应，不暴露账户是否存在。请求同时按 identifier 摘要和客户端 IP 限流；服务端只为 active、已验证邮箱且有本地密码的账户创建 token，并撤销该账户旧的待消费 token。
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "accepted",
+    "message": "If the account can be recovered, a password reset message will be sent"
+  }
+}
+```
+
+使用邮件中的 token 设置新密码：
+
+- **POST** `/v1/auth/password-reset/confirm`
+- 鉴权：否
+- 请求体：`{"token":"...","new_password":"NewPassword#123"}`
+
+服务端只保存 token 的 SHA-256 摘要；token 绑定签发时的已验证邮箱，成功消费后立即失效。成功重置会在同一数据库事务中更新密码、设置 `password_change_required=true`、撤销现有 refresh session 和 OIDC 浏览器会话，并写入不含 token 或密码的 `user.password_reset` 审计事件。未知、过期、重放、已撤销、停用、邮箱变化或未验证邮箱的 token 均返回相同的 `400 invalid_password_reset_token`。
+
+### 3.10 第三方 JIT 迁移注册
 
 - **POST** `/v1/auth/migrations/jit-register`
 - 鉴权：否
 - 请求体：`provider`、`external_user_id`、`username`、`email`、`password?`、`active?`、`roles?`、`metadata?`
 
-### 3.10 Token 内省（授权中心集成）
+### 3.11 Token 内省（授权中心集成）
 
 - **POST** `/v1/auth/introspect`
 - 鉴权：是（service_access + `read` + `aud=admin-backend`）

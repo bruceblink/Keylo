@@ -1,6 +1,6 @@
 # Keylo 线性开发主线与功能清单
 
-> 更新时间：2026-09-19
+> 更新时间：2026-09-21
 >
 > 整理基线：2026-09-19；交付后由 `main` 维护主线，`dev` 与 `main` 对齐；当前发布线为 `v2.1.1`。
 >
@@ -28,7 +28,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 顺序 | 阶段 | 状态 | 结果 |
 | --- | --- | --- | --- |
 | 0 | 认证、会话、授权、组织和运行基线 | 已完成 | 形成当前 `v2.1.1` 发布线的可用能力和安全边界。 |
-| 1 | 账户自助安全闭环 | 下一切片 | 补齐本地账户的邮箱验证、忘记密码和密码重置邮件流程。 |
+| 1 | 账户自助安全闭环 | 已完成 | 邮箱验证、忘记密码申请、密码重置邮件流程和会话撤销已完成并通过本机 Docker 验收。 |
 | 2 | 需求审查后的单一扩展 | 未排期 | 阶段 1 完成后，根据真实接入方需求只选择一个扩展，不预先并行实现协议或基础设施。 |
 
 阶段 2 不是功能承诺清单。没有真实客户端、组织或运维事件时，主线停留在阶段 1 的稳定维护和回归验证。
@@ -39,7 +39,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | --- | --- | --- |
 | 部署与首启 | SQLx 迁移、Docker Compose 依赖、PostgreSQL/Redis 就绪检查、启动 fail-fast、密文配置、RSA 密钥加载、setup wizard、healthz/readyz、固定基数 metrics。 | 当前以单实例 PostgreSQL/Redis 运行边界为准，不承诺多实例高可用或跨区域恢复。 |
 | 标准 OIDC | Discovery、Authorization Code + PKCE、state/nonce、JWKS、UserInfo、consent、浏览器会话、logout、public/confidential client 和 client secret rotation。 | 仅发布已实现的授权码流程；不包含 Dynamic Client Registration、Device Flow、CIBA、PAR、DPoP 或 Token Exchange。 |
-| 本地认证 | 用户注册、密码登录、密码复杂度、登录限流、登录锁定、`email_verified` 状态、用户/管理员改密、管理员重置密码。 | 当前没有 SMTP 或其他邮件投递；用户自助邮件流程属于下一切片。 |
+| 本地认证 | 用户注册、密码登录、密码复杂度、登录限流、登录锁定、`email_verified` 状态、用户/管理员改密、管理员重置密码、邮箱验证、忘记密码和密码重置。 | 当前邮件 provider 仍是可插拔边界；SMTP 或外部邮件服务适配器不属于认证核心。 |
 | MFA 与会话 | TOTP enrollment、近期 MFA、恢复码一次性消费、敏感管理操作 step-up、refresh session 原子轮换、replay 撤销、按主体/客户端/单会话撤销、组织状态联动撤销。 | 人类组织会话只使用当前显式组织上下文；不可把请求头当作组织授权依据。 |
 | 密钥与 Token | RS256/JWKS active/passive overlap、access/refresh/service access Token、Token introspection、黑名单、密钥轮换/回滚/下线和审计。 | passive key 只在配置的 overlap 窗口内用于验签，新 Token 只使用 active key。 |
 | Principal 与 RBAC | `user`、`service`、`device`、`client` Principal；platform/organization 角色；权限、资源树、单点和批量授权检查；默认拒绝和授权审计。 | 不提供任意策略脚本、composite role 或通用策略表达式引擎。 |
@@ -47,11 +47,11 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 机器身份 | `service_id + service_secret -> service_access`、`device` Principal、组织绑定 API key、hash-only 存储、轮换、撤销、过期、限流和审计。 | API key 只用于明确声明支持 machine credential 的接口，不进入人类登录或 Bearer Token 流程。 |
 | 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、固定组织策略、启停和来源会话撤销。 | `ldap` 目前只有身份源注册元数据，不代表已经支持 LDAP bind、组映射或目录同步。 |
 | 管理与运营 | 用户、Principal、客户端、服务、身份源、组织、成员、OIDC client、RBAC、资源、审计、customer-support API；列表接口统一有界分页；审计导出支持稳定游标。 | 当前保持 API-first，不把完整 Admin Console、Account Console、主题系统或管理 CLI 当作默认主线。 |
-| 接入与文档 | Node、Go、Rust Axum、Spring OIDC RP 和 Spring resource server 样例；数据库错误响应脱敏；Markdown 相对链接检查接入 CI。 | 样例构建和本地测试已通过；Keycloak 镜像、TLS、浏览器和跨系统矩阵仍为待环境验证。 |
+| 接入与文档 | Node、Go、Rust Axum、Spring OIDC RP 和 Spring resource server 样例；数据库错误响应脱敏；Markdown 相对链接检查接入 CI；自助安全 API 文档。 | 样例构建和本地测试已通过；Keycloak 镜像、TLS、浏览器和跨系统矩阵仍为待环境验证。 |
 
 ## 4. 当前基线验证证据
 
-以下证据记录于 2026-09-19，后续功能必须在相同边界上追加新的验证记录：
+以下证据记录于 2026-09-21，后续功能必须在相同边界上追加新的验证记录：
 
 | 验证 | 结果 |
 | --- | --- |
@@ -59,8 +59,9 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | `.\scripts\validate_oidc_rp_examples.ps1` | Node、Go、Rust Axum、Spring Boot OIDC RP 和 Spring resource server 样例通过；该结果不等同于 Keycloak/TLS/浏览器互操作通过。 |
 | `.\scripts\check_markdown_links.ps1` | README 和 `docs/` 下相对 Markdown 链接通过；外部 URL、锚点和围栏代码示例不在检查范围内。 |
 | `actionlint .github/workflows/ci.yml`、`git diff --check` | 通过。 |
+| `./scripts/run_tests.ps1 -DatabasePort 55441` | 使用本机 Docker `postgres:17-alpine`，宿主 `127.0.0.1:55441` 映射到容器 `5432`；PostgreSQL readiness、fmt、workspace Clippy、143 个单元、1 个 customer-support、26 个 database、76 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC 和 10 个 user 测试全部通过，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
 
-## 5. 下一切片：账户自助安全闭环
+## 5. 已完成切片：账户自助安全闭环
 
 ### 5.1 目标
 
@@ -72,13 +73,13 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | --- | --- | --- | --- |
 | 1 | 可插拔邮件投递边界 | 已完成：定义最小异步 `MailProvider` 接口、默认禁用 provider、稳定错误分类和内存测试 provider；邮件内容在 debug 输出中统一脱敏。 | provider 未配置、消息无效、超时和临时失败均有稳定结果；认证核心不依赖 SMTP 或外部邮件服务。 |
 | 2 | 用户邮箱验证 | 已完成：认证用户请求短时一次性 token；服务端仅保存 SHA-256 摘要，token 绑定当前邮箱；provider 失败会撤销未投递 token。 | `POST /v1/user/email-verification/request` 和 `POST /v1/auth/email-verification/confirm` 已覆盖成功、重放、过期、邮箱变更、限流和投递失败；审计不写入原 token。 |
-| 3 | 忘记密码申请 | 下一切片：以邮箱或用户名接收申请，但对已存在和不存在的账户返回相同公开结果；请求和发送均受限流保护。 | 无账户枚举；重复请求不会扩大有效 token 数量或绕过限流。 |
-| 4 | 密码重置 | 校验一次性恢复 token、密码复杂度和账户状态；成功后撤销该用户现有 refresh session 与 OIDC 浏览器会话，并记录原因。 | 旧密码、旧 refresh token、旧浏览器会话和已消费 token 均不能继续使用。 |
-| 5 | 接口、文档和回归 | 同步更新 API 参考、端到端指南、错误码、审计字段、限流说明和样例；补充 HTTP、数据库和敏感信息脱敏测试。 | 客户端能按公开接口完成闭环；数据库故障、邮件故障、token 重放和并发请求均默认拒绝。 |
+| 3 | 忘记密码申请 | 已完成：按邮箱或用户名申请；响应不区分账户存在性，identifier 和 IP 均受限流保护；只为 active、已验证邮箱且有本地密码的账户投递。 | 无账户枚举；每个账户只保留一个有效待消费 token；投递失败会撤销 token。 |
+| 4 | 密码重置 | 已完成：校验一次性恢复 token、密码复杂度和账户状态；成功后撤销该用户现有 refresh session 与 OIDC 浏览器会话，并保留首次登录强制改密标记。 | 旧密码、旧 refresh token、旧浏览器会话和已消费 token 均不能继续使用。 |
+| 5 | 接口、文档和回归 | 已完成：同步更新 API 参考、开发计划、匿名响应、错误码语义和 HTTP/数据库回归测试。外部邮件 provider 适配器仍保持在边界之外。 | 客户端能按公开接口完成闭环；数据库故障、邮件故障、token 重放、邮箱变更和并发消费默认拒绝。 |
 
 ### 5.3 实施顺序与提交边界
 
-邮件 provider 和用户邮箱验证已完成；后续按“忘记密码 -> 密码重置 -> 文档与回归”顺序实现。进入每个后续步骤前，先冻结该步骤的 token、限流、审计和会话撤销数据约定。每个可独立验收的步骤单独提交和推送，不把 SMTP、管理后台或其他协议扩展混入本切片。
+邮件 provider、用户邮箱验证、忘记密码申请和密码重置已完成。密码恢复 token 只保存 SHA-256 摘要，绑定当前已验证邮箱，成功消费在同一事务内更新密码、撤销 refresh/OIDC 会话并写入审计。阶段 2 仍未排期；在出现真实接入方需求前只做回归、兼容性和运维验证，不预先扩展协议或基础设施。
 
 这是面向用户的认证功能。若实现涉及 `web/` 页面，提交前必须完成真实窗口验收；真实窗口无法启动时，至少执行 headless 渲染和交互测试，并在验证记录中明确限制。仅修改 API 和服务端时，以真实 HTTP 测试和本机 Docker PostgreSQL 集成测试为准。
 

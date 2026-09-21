@@ -238,6 +238,189 @@ wwIDAQAB
         pool.close().await;
     }
 
+    #[tokio::test]
+    async fn test_password_reset_is_non_enumerating_single_use_and_revokes_sessions() {
+        let Some((server, provider)) = setup_email_verification_test_server().await else {
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let username = format!("password-reset-{suffix}");
+        let email = format!("password-reset-{suffix}@example.test");
+        let registration = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "Password123!"
+            }))
+            .await;
+        registration.assert_status_ok();
+        let user_id = registration.json::<serde_json::Value>()["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = db::init_db_pool(&database_url).await.unwrap();
+        assert!(db::mark_user_email_verified(&pool, &user_id, Some("test"))
+            .await
+            .unwrap());
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "Password123!"
+            }))
+            .await;
+        login.assert_status_ok();
+        let login_data: serde_json::Value = login.json::<serde_json::Value>();
+        let old_refresh_token = login_data["refresh_token"].as_str().unwrap().to_string();
+        let browser_cookie = format!("password-reset-{suffix}");
+        db::create_browser_session(
+            &pool,
+            &browser_cookie,
+            &keylo::models::OidcBrowserSession {
+                user_id: user_id.clone(),
+                expires_at: chrono::Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .unwrap();
+
+        let known = server
+            .post("/v1/auth/password-reset/request")
+            .json(&json!({"identifier": email}))
+            .await;
+        known.assert_status_ok();
+        let known_body: serde_json::Value = known.json::<serde_json::Value>();
+        assert_eq!(known_body["data"]["status"], "accepted");
+        let token = provider.deliveries()[0]
+            .text_body
+            .strip_prefix("Use this one-time Keylo password reset token: ")
+            .unwrap()
+            .to_string();
+
+        let unknown = server
+            .post("/v1/auth/password-reset/request")
+            .json(&json!({"identifier": format!("unknown-{suffix}@example.test")}))
+            .await;
+        unknown.assert_status_ok();
+        assert_eq!(unknown.json::<serde_json::Value>(), known_body);
+
+        let confirmation = server
+            .post("/v1/auth/password-reset/confirm")
+            .json(&json!({
+                "token": token.clone(),
+                "new_password": "ResetPassword#123"
+            }))
+            .await;
+        confirmation.assert_status_ok();
+        let confirmation_body: serde_json::Value = confirmation.json::<serde_json::Value>();
+        assert_eq!(confirmation_body["data"]["password_reset"], true);
+        assert_eq!(confirmation_body["data"]["password_change_required"], true);
+        assert!(db::resolve_browser_session(&pool, &browser_cookie)
+            .await
+            .unwrap()
+            .is_none());
+
+        let old_refresh = server
+            .post("/v1/auth/refresh")
+            .json(&json!({"refresh_token": old_refresh_token}))
+            .await;
+        assert_eq!(old_refresh.status_code(), 401);
+
+        let old_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "Password123!"
+            }))
+            .await;
+        assert_eq!(old_login.status_code(), 401);
+
+        let new_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "ResetPassword#123"
+            }))
+            .await;
+        new_login.assert_status_ok();
+        assert_eq!(
+            new_login.json::<serde_json::Value>()["password_change_required"],
+            true
+        );
+
+        let replay = server
+            .post("/v1/auth/password-reset/confirm")
+            .json(&json!({
+                "token": token,
+                "new_password": "AnotherPassword#123"
+            }))
+            .await;
+        assert_eq!(replay.status_code(), 400);
+
+        let user = db::get_user_by_id(&pool, &user_id).await.unwrap().unwrap();
+        assert!(user.password_change_required);
+        let stored_hash: String =
+            sqlx::query_scalar("SELECT token_hash FROM password_reset_tokens WHERE user_id = $1")
+                .bind(&user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!stored_hash.contains(&token));
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_password_reset_delivery_failure_keeps_public_response_and_revokes_token() {
+        let Some((server, provider)) = setup_email_verification_test_server().await else {
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let username = format!("password-failure-{suffix}");
+        let email = format!("password-failure-{suffix}@example.test");
+        let registration = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "Password123!"
+            }))
+            .await;
+        registration.assert_status_ok();
+        let user_id = registration.json::<serde_json::Value>()["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = db::init_db_pool(&database_url).await.unwrap();
+        db::mark_user_email_verified(&pool, &user_id, Some("test"))
+            .await
+            .unwrap();
+
+        provider.set_failure(Some(MailDeliveryError::Timeout));
+        let response = server
+            .post("/v1/auth/password-reset/request")
+            .json(&json!({"identifier": email}))
+            .await;
+        response.assert_status_ok();
+        assert!(provider.deliveries().is_empty());
+        let revoked_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM password_reset_tokens
+             WHERE user_id = $1 AND revoked_at IS NOT NULL",
+        )
+        .bind(&user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(revoked_count, 1);
+        pool.close().await;
+    }
+
     /// Generate the code expected by the enrollment endpoint using the same fixed RFC 6238 profile.
     fn current_totp_code(seed: &str) -> String {
         let secret = Secret::Encoded(seed.to_string()).to_bytes().unwrap();

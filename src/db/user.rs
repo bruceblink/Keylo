@@ -325,6 +325,14 @@ pub async fn update_user(
             .bind(&user.id)
             .execute(&mut *transaction)
             .await?;
+            sqlx::query(
+                "UPDATE password_reset_tokens
+                 SET revoked_at = COALESCE(revoked_at, NOW())
+                 WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL",
+            )
+            .bind(&user.id)
+            .execute(&mut *transaction)
+            .await?;
         }
         if active == Some(false) || password.is_some() {
             let (event_type, revoke_reason) = if active == Some(false) {

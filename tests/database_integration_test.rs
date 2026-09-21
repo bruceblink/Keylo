@@ -508,6 +508,49 @@ mod database_tests {
                 .unwrap(),
             db::ConsumeEmailVerificationTokenResult::Invalid
         );
+
+        let reset_user = db::create_user(
+            &pool,
+            &format!("password-reset-token-user-{}", uuid::Uuid::new_v4()),
+            &format!("password-reset-token-{}@example.test", uuid::Uuid::new_v4()),
+            Some("Password123!"),
+        )
+        .await
+        .unwrap();
+        db::mark_user_email_verified(&pool, &reset_user.id, Some("test-admin"))
+            .await
+            .unwrap();
+        let reset_token = db::issue_password_reset_token(&pool, &reset_user.email, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        db::update_user(
+            &pool,
+            &reset_user.id,
+            None,
+            Some("password-reset-token-changed@example.test"),
+            None,
+            None,
+            Some("test-admin"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db::consume_password_reset_token(&pool, &reset_token.token, "ResetPassword#123")
+                .await
+                .unwrap(),
+            db::ConsumePasswordResetTokenResult::Invalid
+        );
+        let reset_revoked: bool = sqlx::query_scalar(
+            "SELECT revoked_at IS NOT NULL
+             FROM password_reset_tokens
+             WHERE id = $1",
+        )
+        .bind(&reset_token.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(reset_revoked);
     }
 
     #[tokio::test]
