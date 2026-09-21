@@ -34,8 +34,6 @@ on:
       - 'examples/spring-boot-resource-server/build.gradle'
       - 'examples/spring-boot-resource-server/settings.gradle'
       - 'examples/spring-boot-resource-server/gradlew*'
-      - '.github/workflows/**'
-      - '.github/scripts/**'
   pull_request:
     branches: [ main, dev ]
     paths:
@@ -69,8 +67,6 @@ on:
       - 'examples/spring-boot-resource-server/build.gradle'
       - 'examples/spring-boot-resource-server/settings.gradle'
       - 'examples/spring-boot-resource-server/gradlew*'
-      - '.github/workflows/**'
-      - '.github/scripts/**'
 
 env:
   CARGO_TERM_COLOR: always
