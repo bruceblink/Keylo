@@ -31,6 +31,7 @@
 * ✅ 客户端密钥 bcrypt 哈希存储，杜绝明文泄露风险
 * ✅ 生产环境强制 Redis 限流，禁止降级为内存模式
 * ✅ 密码复杂度策略（大写、小写、数字、特殊字符）
+* ✅ 可配置 SMTP 账户邮件投递，支持一次性令牌失败撤销和生产密文密码校验
 * ✅ OAuth state 原子消费（GETDEL），消除 TOCTOU 竞态
 * ✅ 服务 Token audience 严格校验
 * ✅ 数据库连接池大小可通过 `DB_POOL_SIZE` 环境变量配置
@@ -63,6 +64,10 @@ Keylo 包含完整的测试套件，包括单元测试、集成测试、数据�
 # Windows (PowerShell)
 ./scripts/run_tests.ps1
 ```
+
+该脚本会使用本机 Docker 启动 PostgreSQL 17 和 Mailpit，并验证真实 SMTP 投递；
+测试完成后自动清理临时服务。SMTP 生产配置和密文密码生成见
+[密文配置](docs/operations/SECRET_ENCRYPTION.md)。
 
 ### 手动运行测试
 

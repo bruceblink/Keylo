@@ -5,6 +5,18 @@
 
 set -e
 
+MAILPIT_CONTAINER_NAME="${MAILPIT_CONTAINER_NAME:-keylo-test-mail}"
+MAILPIT_SMTP_PORT="${MAILPIT_SMTP_PORT:-11025}"
+MAILPIT_API_PORT="${MAILPIT_API_PORT:-18025}"
+MAILPIT_IMAGE="${MAILPIT_IMAGE:-axllent/mailpit:v1.21.8}"
+
+cleanup_test_services() {
+    docker rm -f "$MAILPIT_CONTAINER_NAME" > /dev/null 2>&1 || true
+    docker rm -f keylo-test-db > /dev/null 2>&1 || true
+}
+
+trap cleanup_test_services EXIT
+
 echo "🚀 Starting Keylo Integration Tests"
 
 # Colors for output
@@ -61,17 +73,44 @@ fi
 
 # Wait for database to be ready
 print_status "Waiting for database to be ready..."
+database_ready=false
 for i in {1..30}; do
     if docker exec keylo-test-db pg_isready -U postgres -d keylo_test > /dev/null 2>&1; then
         print_success "Database is ready"
+        database_ready=true
         break
     fi
     echo -n "."
     sleep 1
 done
 
-if [ $i -eq 30 ]; then
+if [ "$database_ready" != true ]; then
     print_error "Database failed to start within 30 seconds"
+    exit 1
+fi
+
+print_status "Starting Mailpit SMTP test service..."
+docker rm -f "$MAILPIT_CONTAINER_NAME" > /dev/null 2>&1 || true
+docker run -d --name "$MAILPIT_CONTAINER_NAME" \
+    -p "127.0.0.1:${MAILPIT_SMTP_PORT}:1025" \
+    -p "127.0.0.1:${MAILPIT_API_PORT}:8025" \
+    "$MAILPIT_IMAGE" > /dev/null
+print_success "Mailpit SMTP test service started"
+
+print_status "Waiting for Mailpit to be ready..."
+mailpit_ready=false
+for i in {1..30}; do
+    if curl --fail --silent "http://127.0.0.1:${MAILPIT_API_PORT}/api/v1/messages" > /dev/null; then
+        print_success "Mailpit is ready"
+        mailpit_ready=true
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+if [ "$mailpit_ready" != true ]; then
+    print_error "Mailpit failed to start within 30 seconds"
     exit 1
 fi
 
@@ -80,6 +119,9 @@ TEST_DB_PASSWORD="$(tr -d '\r\n' < .secrets/.test_postgres_password)"
 export TEST_DATABASE_URL="postgres://postgres:${TEST_DB_PASSWORD}@localhost:5432/keylo_test"
 export DATABASE_PASSWORD_ENC_FILE="$(pwd)/.secrets/.test_postgres_password.enc"
 export DATABASE_PASSWORD_KEY_FILE="$(pwd)/.secrets/.test_database_password.key"
+export SMTP_TEST_HOST="127.0.0.1"
+export SMTP_TEST_PORT="$MAILPIT_SMTP_PORT"
+export SMTP_TEST_API_URL="http://127.0.0.1:${MAILPIT_API_PORT}/api/v1/messages"
 export RUST_LOG=debug
 
 # Run tests
@@ -104,6 +146,14 @@ if cargo test --test user_integration_test -- --test-threads=1; then
     print_success "User integration tests passed"
 else
     print_error "User integration tests failed"
+    exit 1
+fi
+
+print_status "Running SMTP integration tests..."
+if cargo test --test smtp_integration_test -- --test-threads=1; then
+    print_success "SMTP integration tests passed"
+else
+    print_error "SMTP integration tests failed"
     exit 1
 fi
 
@@ -140,10 +190,9 @@ else
 fi
 
 # Clean up
-print_status "Cleaning up test database..."
-docker stop keylo-test-db > /dev/null 2>&1
-docker rm keylo-test-db > /dev/null 2>&1
-print_success "Test database cleaned up"
+print_status "Cleaning up Docker test services..."
+cleanup_test_services
+print_success "Docker test services cleaned up"
 
 print_success "🎉 All tests passed successfully!"
 

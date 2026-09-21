@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::mail::{DisabledMailProvider, MailProvider};
+use crate::mail::{provider_from_config, MailProvider};
 use crate::models::MigrationBatchJob;
 use crate::models::{Keys, OidcUpstreamDiscovery, OidcUpstreamJwks};
 use bcrypt::verify;
@@ -309,7 +309,8 @@ impl AppState {
     }
 
     pub fn new(config: Config, db: Option<Arc<PgPool>>) -> Result<Self, anyhow::Error> {
-        Self::new_with_mail_provider(config, db, Arc::new(DisabledMailProvider))
+        let mail_provider = provider_from_config(&config).map_err(anyhow::Error::msg)?;
+        Self::new_with_mail_provider(config, db, mail_provider)
     }
 
     /// Build application state with an explicit mail provider for runtime adapters or tests.

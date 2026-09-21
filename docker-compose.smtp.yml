@@ -1,0 +1,23 @@
+services:
+  keylo:
+    environment:
+      MAIL_PROVIDER: smtp
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST must be set}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_TLS_MODE: ${SMTP_TLS_MODE:-starttls}
+      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM must be set}
+      SMTP_USERNAME: ${SMTP_USERNAME:?SMTP_USERNAME must be set}
+      SMTP_PASSWORD_ENC_FILE: /run/secrets/.smtp_password.enc
+      SMTP_PASSWORD_KEY_FILE: /run/secrets/.smtp_password.key
+      SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-10}
+    secrets:
+      - source: smtp_password_enc
+        target: .smtp_password.enc
+      - source: smtp_password_key
+        target: .smtp_password.key
+
+secrets:
+  smtp_password_enc:
+    file: ./.secrets/.smtp_password.enc
+  smtp_password_key:
+    file: ./.secrets/.smtp_password.key

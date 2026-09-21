@@ -76,7 +76,7 @@ Keycloak 是协议、安全实践和可选互操作回归的参照，不是待�
 | 领域 | 当前代码能力 | 仍然存在的边界 |
 | --- | --- | --- |
 | 标准 OIDC | Discovery、Authorization Code、PKCE、state、nonce、ID Token、UserInfo、consent、浏览器会话、退出、confidential/public client 和 secret rotation；relying party client 支持显式 platform/organization scope | 只发布 authorization_code；组织 client 需要 owner/admin 的 active organization context；没有 Dynamic Client Registration、OIDC token revocation、Device/CIBA/PAR/DPoP |
-| 本地账户 | 注册、密码登录、密码复杂度、限流、登录锁定、用户/管理员密码修改或重置、email_verified 状态 | 没有 SMTP 或其他邮件投递；验证邮箱目前由可信上游或完成近期 MFA 的管理员触发；没有用户自助 forgot-password 邮件流程 |
+| 本地账户 | 注册、密码登录、密码复杂度、限流、登录锁定、用户/管理员密码修改或重置、email_verified 状态、用户邮箱验证、forgot-password 邮件和密码重置 | `MailProvider` 负责邮件边界；当前默认禁用并提供 SMTP 适配器，外部邮件服务适配器未纳入主线；邮件投递失败必须撤销新建的一次性 token，邮件服务不参与认证授权决策 |
 | MFA | TOTP enrollment、近期验证、恢复码、敏感管理操作的 step-up 和审计 | 没有 WebAuthn/Passkey；不把 TOTP 自动扩展成任意认证流编排 |
 | 外部身份 | OAuth provider 登录和账号关联；OIDC upstream Discovery、PKCE、JWKS、UserInfo、JIT、subject 映射、显式 user class/fixed organization 策略、邮箱变化记录、启停和会话撤销；Discovery/JWKS 有超时、按 source 配置版本缓存和未知 kid 强制刷新 | identity source 的 ldap 类型目前只是注册元数据，不包含 LDAP bind、同步、组映射或故障切换 |
 | 非人类调用 | `service_clients` 使用 `service_id + service_secret` 换取短期 `service_access`；service/device Principal 都可绑定多个 API key，显式为 platform 或单一 organization scope，组织调用每次实时重验组织与 membership | API key 只开放给明确声明的授权检查 API；不支持把 API key 作为人类 Bearer Token |

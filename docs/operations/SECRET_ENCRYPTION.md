@@ -156,6 +156,53 @@ REDIS_PASSWORD_KEY_FILE=./.secrets/.redis_password.key
 
 生产环境不要配置 `REDIS_URL` 或 `REDIS_URL_FILE`。它们属于明文来源，只保留给非生产排障和临时调试。
 
+## SMTP 账户邮件投递
+
+账户邮箱验证和密码重置通过 `MailProvider` 发送文本邮件。默认配置为
+`MAIL_PROVIDER=disabled`，不会发送邮件；启用真实投递时配置 `smtp`：
+
+```env
+MAIL_PROVIDER=smtp
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_TLS_MODE=starttls
+SMTP_FROM=Keylo <no-reply@example.com>
+SMTP_USERNAME=keylo@example.com
+SMTP_PASSWORD_ENC_FILE=./.secrets/.smtp_password.enc
+SMTP_PASSWORD_KEY_FILE=./.secrets/.smtp_password.key
+SMTP_TIMEOUT_SECONDS=10
+```
+
+`SMTP_TLS_MODE` 支持 `starttls`、`tls` 和 `plain`。`plain` 仅允许开发和测试环境，
+生产环境必须使用 TLS；生产环境的认证密码必须来自 `SMTP_PASSWORD_ENC` 或
+`SMTP_PASSWORD_ENC_FILE`，不能使用 `SMTP_PASSWORD` 或 `SMTP_PASSWORD_FILE`。
+服务启动时只把解密后的密码保留在进程内存，日志、配置调试输出和投递错误都不会包含密码、
+邮件正文或 SMTP 原始错误。
+
+可以使用统一 AES-256-GCM 格式生成 SMTP 密文并移除明文文件：
+
+```bash
+mkdir -p .secrets
+python scripts/secret_tool.py generate-key --out .secrets/.smtp_password.key
+python scripts/secret_tool.py encrypt-file-and-remove \
+  --text-file .secrets/.smtp_password \
+  --key-file .secrets/.smtp_password.key \
+  --out .secrets/.smtp_password.enc
+```
+
+使用仓库 Compose 服务时，可以在设置 `SMTP_HOST`、`SMTP_FROM` 和
+`SMTP_USERNAME` 后，通过可选覆盖文件挂载这两个密文文件：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.smtp.yml up -d
+```
+
+覆盖文件不会修改默认的禁用邮件配置；它要求 `.secrets/.smtp_password.enc` 和
+`.secrets/.smtp_password.key` 已存在，并将它们只读挂载到 Keylo 容器。
+
+账户安全流程只尝试一次投递，不在邮件适配器内部重试。若 SMTP 投递失败，刚生成的一次性
+验证或密码重置令牌会立即撤销，接口仍返回不暴露账户存在性的通用结果。
+
 ## RSA 与 JWT Secret
 
 Keylo 使用 RS256，推荐生成 PEM 文件：

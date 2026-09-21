@@ -8,6 +8,7 @@ use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::rand_core::OsRng;
 use rsa::RsaPrivateKey;
 use std::env;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -63,6 +64,16 @@ const DEFAULT_REDIS_PASSWORD_KEY_PATHS: [&str; 3] = [
     "./.secrets/.redis_password.key",
     "/run/secrets/.redis_password.key",
     "/run/secrets/redis_password.key",
+];
+const DEFAULT_SMTP_PASSWORD_ENC_PATHS: [&str; 3] = [
+    "./.secrets/.smtp_password.enc",
+    "/run/secrets/.smtp_password.enc",
+    "/run/secrets/smtp_password.enc",
+];
+const DEFAULT_SMTP_PASSWORD_KEY_PATHS: [&str; 3] = [
+    "./.secrets/.smtp_password.key",
+    "/run/secrets/.smtp_password.key",
+    "/run/secrets/smtp_password.key",
 ];
 
 /// Serializes test-only process environment reads and mutations across modules.
@@ -426,6 +437,27 @@ pub fn redis_password_from_env_result() -> Result<Option<String>, String> {
     Ok(None)
 }
 
+/// Resolve the SMTP credential from the shared encrypted-secret format.
+///
+/// Plaintext is accepted only for local development. Production validation
+/// rejects that source before startup, while the provider receives only the
+/// decrypted value held in memory for the transport lifetime.
+pub fn smtp_password_from_env_result() -> Result<Option<String>, String> {
+    let encrypted_password = read_env_or_file("SMTP_PASSWORD_ENC", "SMTP_PASSWORD_ENC_FILE")
+        .or_else(|| read_first_existing_file(&DEFAULT_SMTP_PASSWORD_ENC_PATHS));
+    if let Some(encrypted_password) = encrypted_password {
+        let key = read_env_or_file("SMTP_PASSWORD_KEY", "SMTP_PASSWORD_KEY_FILE")
+            .or_else(|| read_first_existing_file(&DEFAULT_SMTP_PASSWORD_KEY_PATHS))
+            .ok_or_else(|| {
+                "SMTP_PASSWORD_KEY or SMTP_PASSWORD_KEY_FILE must be set when using encrypted SMTP password"
+                    .to_string()
+            })?;
+        return decrypt_smtp_password(&encrypted_password, &key).map(Some);
+    }
+
+    Ok(read_env_or_file("SMTP_PASSWORD", "SMTP_PASSWORD_FILE"))
+}
+
 fn build_redis_url_from_env(password: String) -> String {
     let scheme = env::var("REDIS_SCHEME")
         .ok()
@@ -489,6 +521,16 @@ pub fn redis_password_source_is_encrypted() -> bool {
         || any_default_file_exists(&DEFAULT_REDIS_PASSWORD_ENC_PATHS)
 }
 
+pub fn smtp_password_source_is_plaintext() -> bool {
+    env_value_is_non_empty("SMTP_PASSWORD") || env_value_is_non_empty("SMTP_PASSWORD_FILE")
+}
+
+pub fn smtp_password_source_is_encrypted() -> bool {
+    env_value_is_non_empty("SMTP_PASSWORD_ENC")
+        || env_value_is_non_empty("SMTP_PASSWORD_ENC_FILE")
+        || any_default_file_exists(&DEFAULT_SMTP_PASSWORD_ENC_PATHS)
+}
+
 pub fn configured_database_url_contains_password() -> bool {
     env::var("DATABASE_URL")
         .ok()
@@ -510,6 +552,10 @@ pub fn decrypt_redis_url(encrypted: &str, key: &str) -> Result<String, String> {
 
 pub fn decrypt_redis_password(encrypted: &str, key: &str) -> Result<String, String> {
     decrypt_config_secret(encrypted, key, "REDIS_PASSWORD_ENC", "REDIS_PASSWORD_KEY")
+}
+
+pub fn decrypt_smtp_password(encrypted: &str, key: &str) -> Result<String, String> {
+    decrypt_config_secret(encrypted, key, "SMTP_PASSWORD_ENC", "SMTP_PASSWORD_KEY")
 }
 
 fn decrypt_config_secret(
@@ -568,7 +614,7 @@ fn decode_config_secret_key(key: &str, key_label: &str) -> Result<Vec<u8>, Strin
 }
 
 /// 应用配置
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     /// JWT Issuer
     pub jwt_issuer: String,
@@ -634,6 +680,22 @@ pub struct Config {
     pub auth_rate_limit_max_requests: u32,
     /// 全局认证接口限流窗口内最大请求数
     pub auth_global_rate_limit_max_requests: u32,
+    /// Account email delivery mode: disabled or smtp.
+    pub mail_provider: String,
+    /// SMTP server hostname used by the configured mail provider.
+    pub smtp_host: Option<String>,
+    /// SMTP server port.
+    pub smtp_port: u16,
+    /// Optional SMTP authentication username.
+    pub smtp_username: Option<String>,
+    /// SMTP authentication password, decrypted only in process memory.
+    pub smtp_password: Option<String>,
+    /// Sender address placed in outgoing account messages.
+    pub smtp_from: Option<String>,
+    /// SMTP transport security: starttls, tls, or plain.
+    pub smtp_tls_mode: String,
+    /// Maximum time allowed for one SMTP send operation.
+    pub smtp_timeout_seconds: i64,
     /// 是否信任代理转发头（X-Forwarded-For/X-Real-IP）
     pub trust_proxy_headers: bool,
     /// Allowed browser origins for credentialed CORS requests.
@@ -672,6 +734,39 @@ pub struct Config {
     pub enable_setup_wizard: bool,
     /// Directory where setup wizard can generate RSA key files.
     pub setup_keys_dir: String,
+}
+
+impl fmt::Debug for Config {
+    /// Keep operational context visible while excluding credentials, keys, and
+    /// connection strings that must never appear in logs or panic reports.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Config")
+            .field("environment", &self.environment)
+            .field("server_addr", &self.server_addr)
+            .field("server_port", &self.server_port)
+            .field("oidc_public_issuer", &self.oidc_public_issuer)
+            .field("mail_provider", &self.mail_provider)
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field(
+                "smtp_username",
+                &self.smtp_username.as_ref().map(|_| "[configured]"),
+            )
+            .field(
+                "smtp_password",
+                &self.smtp_password.as_ref().map(|_| "[redacted]"),
+            )
+            .field("smtp_from", &self.smtp_from)
+            .field("smtp_tls_mode", &self.smtp_tls_mode)
+            .field("smtp_timeout_seconds", &self.smtp_timeout_seconds)
+            .field("redis_configured", &self.redis_url.is_some())
+            .field("log_to_file", &self.log_to_file)
+            .field("log_dir", &self.log_dir)
+            .field("log_file_prefix", &self.log_file_prefix)
+            .field("enable_setup_wizard", &self.enable_setup_wizard)
+            .finish()
+    }
 }
 
 impl Default for Config {
@@ -770,6 +865,30 @@ impl Config {
         let auth_rate_limit_max_requests = parse_u32_env("AUTH_RATE_LIMIT_MAX_REQUESTS", 30);
         let auth_global_rate_limit_max_requests =
             parse_u32_env("AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS", 300);
+        let mail_provider = env::var("MAIL_PROVIDER")
+            .unwrap_or_else(|_| "disabled".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        let smtp_host = env::var("SMTP_HOST")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let smtp_port = env::var("SMTP_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(587);
+        let smtp_username = env::var("SMTP_USERNAME")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let smtp_password = smtp_password_from_env_result()
+            .unwrap_or_else(|err| panic!("Failed to load SMTP password: {err}"));
+        let smtp_from = env::var("SMTP_FROM")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let smtp_tls_mode = env::var("SMTP_TLS_MODE")
+            .unwrap_or_else(|_| "starttls".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        let smtp_timeout_seconds = parse_i64_env("SMTP_TIMEOUT_SECONDS", 10);
         let trust_proxy_headers = parse_bool_env("TRUST_PROXY_HEADERS", false);
         let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS").map_or_else(
             |_| default_cors_allowed_origins(),
@@ -833,6 +952,14 @@ impl Config {
             auth_rate_limit_window_seconds,
             auth_rate_limit_max_requests,
             auth_global_rate_limit_max_requests,
+            mail_provider,
+            smtp_host,
+            smtp_port,
+            smtp_username,
+            smtp_password,
+            smtp_from,
+            smtp_tls_mode,
+            smtp_timeout_seconds,
             trust_proxy_headers,
             cors_allowed_origins,
             admin_client_id,
@@ -953,6 +1080,8 @@ impl Config {
             }
         }
 
+        self.validate_mail_provider(&mut errors);
+
         self.validate_setup_wizard_startup(&mut errors);
 
         config_result(errors)
@@ -1024,6 +1153,47 @@ impl Config {
             errors.push(
                 "ADMIN_CLIENT_ID must not be empty when ADMIN_CLIENT_SECRET is set".to_string(),
             );
+        }
+    }
+
+    fn validate_mail_provider(&self, errors: &mut Vec<String>) {
+        match self.mail_provider.as_str() {
+            "disabled" => {}
+            "smtp" => {
+                require_non_empty_option(errors, "SMTP_HOST", self.smtp_host.as_deref());
+                require_non_empty_option(errors, "SMTP_FROM", self.smtp_from.as_deref());
+                if self.smtp_username.is_some() != self.smtp_password.is_some() {
+                    errors.push(
+                        "SMTP_USERNAME and SMTP_PASSWORD must be configured together".to_string(),
+                    );
+                }
+                if !matches!(self.smtp_tls_mode.as_str(), "starttls" | "tls" | "plain") {
+                    errors.push("SMTP_TLS_MODE must be one of starttls, tls, or plain".to_string());
+                }
+                if self.smtp_port == 0 {
+                    errors.push("SMTP_PORT must be greater than 0".to_string());
+                }
+                require_positive(errors, "SMTP_TIMEOUT_SECONDS", self.smtp_timeout_seconds);
+                if self.is_production() && smtp_password_source_is_plaintext() {
+                    errors.push(
+                        "SMTP_PASSWORD/SMTP_PASSWORD_FILE cannot be used in production; use SMTP_PASSWORD_ENC or SMTP_PASSWORD_ENC_FILE"
+                            .to_string(),
+                    );
+                }
+                if self.is_production() && self.smtp_tls_mode == "plain" {
+                    errors.push("SMTP_TLS_MODE=plain is not allowed in production".to_string());
+                }
+                if self.is_production()
+                    && self.smtp_username.is_some()
+                    && !smtp_password_source_is_encrypted()
+                {
+                    errors.push(
+                        "Authenticated SMTP requires encrypted SMTP_PASSWORD in production"
+                            .to_string(),
+                    );
+                }
+            }
+            _ => errors.push("MAIL_PROVIDER must be disabled or smtp".to_string()),
         }
     }
 
@@ -1230,6 +1400,12 @@ fn require_non_empty(errors: &mut Vec<String>, name: &str, value: &str) {
     }
 }
 
+fn require_non_empty_option(errors: &mut Vec<String>, name: &str, value: Option<&str>) {
+    if option_is_blank(value) {
+        errors.push(format!("{name} must not be empty"));
+    }
+}
+
 fn require_positive(errors: &mut Vec<String>, name: &str, value: i64) {
     if value <= 0 {
         errors.push(format!("{name} must be greater than 0"));
@@ -1289,6 +1465,14 @@ mod tests {
             auth_rate_limit_window_seconds: 60,
             auth_rate_limit_max_requests: 30,
             auth_global_rate_limit_max_requests: 300,
+            mail_provider: "disabled".to_string(),
+            smtp_host: None,
+            smtp_port: 587,
+            smtp_username: None,
+            smtp_password: None,
+            smtp_from: None,
+            smtp_tls_mode: "starttls".to_string(),
+            smtp_timeout_seconds: 10,
             trust_proxy_headers: false,
             cors_allowed_origins: default_cors_allowed_origins(),
             admin_client_id: Some("cli-admin-root".to_string()),
@@ -1526,6 +1710,67 @@ mod tests {
 
         let err = config.validate_for_database_startup().unwrap_err();
         assert!(err.contains("ADMIN_CLIENT_ID"));
+    }
+
+    #[test]
+    fn smtp_provider_requires_complete_and_safe_configuration() {
+        let mut config = valid_config();
+        config.mail_provider = "smtp".to_string();
+        config.smtp_host = None;
+        config.smtp_from = None;
+
+        let err = config.validate_for_database_startup().unwrap_err();
+        assert!(err.contains("SMTP_HOST"));
+        assert!(err.contains("SMTP_FROM"));
+
+        config.smtp_host = Some("smtp.example.test".to_string());
+        config.smtp_from = Some("Keylo <no-reply@example.test>".to_string());
+        config.smtp_port = 0;
+        config.smtp_tls_mode = "opportunistic".to_string();
+        let err = config.validate_for_database_startup().unwrap_err();
+        assert!(err.contains("SMTP_PORT"));
+        assert!(err.contains("SMTP_TLS_MODE"));
+    }
+
+    #[test]
+    fn production_smtp_rejects_plaintext_password_and_plain_transport() {
+        let _guard = test_process_env_lock();
+        let previous_password = std::env::var("SMTP_PASSWORD").ok();
+        std::env::set_var("SMTP_PASSWORD", "plaintext-test-password");
+
+        let mut config = valid_config();
+        config.environment = "production".to_string();
+        config.redis_url = Some("redis://keylo:redis-secret@localhost:6379".to_string());
+        config.mail_provider = "smtp".to_string();
+        config.smtp_host = Some("smtp.example.test".to_string());
+        config.smtp_from = Some("Keylo <no-reply@example.test>".to_string());
+        config.smtp_username = Some("keylo".to_string());
+        config.smtp_password = Some("plaintext-test-password".to_string());
+        config.smtp_tls_mode = "plain".to_string();
+
+        let err = config.validate_for_database_startup().unwrap_err();
+
+        restore_env("SMTP_PASSWORD", previous_password);
+        assert!(err.contains("SMTP_PASSWORD/SMTP_PASSWORD_FILE cannot be used"));
+        assert!(err.contains("SMTP_TLS_MODE=plain"));
+    }
+
+    #[test]
+    fn config_debug_redacts_credentials_and_private_keys() {
+        let mut config = valid_config();
+        config.database_url = "postgres://user:database-secret@example.test/keylo".to_string();
+        config.smtp_password = Some("smtp-secret".to_string());
+        config.admin_client_secret = Some("admin-secret".to_string());
+        config.jwt_private_key_pem = "private-key-material".to_string();
+
+        let rendered = format!("{config:?}");
+
+        assert!(rendered.contains("mail_provider"));
+        assert!(rendered.contains("[redacted]"));
+        assert!(!rendered.contains("database-secret"));
+        assert!(!rendered.contains("smtp-secret"));
+        assert!(!rendered.contains("admin-secret"));
+        assert!(!rendered.contains("private-key-material"));
     }
 
     #[test]
