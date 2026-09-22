@@ -208,6 +208,10 @@ docker compose -f docker-compose.yml -f docker-compose.smtp.yml up -d
 `temporarily_unavailable` 和 `rejected` 六个值。指标不包含收件人、用户标识、令牌、
 邮件正文或 SMTP 原始回复；应使用这些结果判断投递故障类别，再结合脱敏服务日志执行恢复。
 
+SMTP 配置在启动阶段检查。配置错误日志只包含稳定的 `error_category` 和 `next_action`；
+运行时投递日志将超时、TLS/证书、网络、暂时不可用和永久拒绝分别分类，不能从日志中看到
+SMTP 凭据、原始回复、收件人或邮件内容。修复配置、证书或网络后重启服务，未引入自动重试。
+
 ## RSA 与 JWT Secret
 
 Keylo 使用 RS256，推荐生成 PEM 文件：

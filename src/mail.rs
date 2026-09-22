@@ -111,6 +111,80 @@ impl MailDeliveryError {
     }
 }
 
+/// Stable startup failures for the SMTP adapter.
+///
+/// This closed set separates configuration mistakes from transport failures without carrying
+/// hostnames, credentials, certificate details, or library diagnostics into operational logs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MailProviderConfigError {
+    UnsupportedProvider,
+    MissingHost,
+    MissingSender,
+    InvalidSender,
+    InvalidPort,
+    InvalidTimeout,
+    CredentialsIncomplete,
+    InvalidTlsMode,
+    PlainProduction,
+    InvalidTransport,
+}
+
+impl MailProviderConfigError {
+    /// Return the stable log category and the next operator action for one startup failure.
+    pub fn classification(self) -> (&'static str, &'static str) {
+        match self {
+            Self::UnsupportedProvider => (
+                "unsupported_provider",
+                "set MAIL_PROVIDER to disabled or smtp",
+            ),
+            Self::MissingHost => ("missing_host", "set SMTP_HOST to the relay hostname"),
+            Self::MissingSender => ("missing_sender", "set SMTP_FROM to a valid sender"),
+            Self::InvalidSender => ("invalid_sender", "set SMTP_FROM to a valid mailbox"),
+            Self::InvalidPort => ("invalid_port", "set SMTP_PORT to a non-zero relay port"),
+            Self::InvalidTimeout => (
+                "invalid_timeout",
+                "set SMTP_TIMEOUT_SECONDS to a positive value",
+            ),
+            Self::CredentialsIncomplete => (
+                "incomplete_credentials",
+                "configure SMTP_USERNAME and SMTP_PASSWORD together",
+            ),
+            Self::InvalidTlsMode => (
+                "invalid_tls_mode",
+                "set SMTP_TLS_MODE to starttls, tls, or plain",
+            ),
+            Self::PlainProduction => (
+                "plain_disabled_in_production",
+                "use STARTTLS or implicit TLS in production",
+            ),
+            Self::InvalidTransport => (
+                "invalid_transport",
+                "verify SMTP_HOST and the selected TLS mode",
+            ),
+        }
+    }
+}
+
+impl fmt::Display for MailProviderConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::UnsupportedProvider => "MAIL_PROVIDER must be disabled or smtp",
+            Self::MissingHost => "SMTP_HOST must not be empty when MAIL_PROVIDER=smtp",
+            Self::MissingSender => "SMTP_FROM must not be empty when MAIL_PROVIDER=smtp",
+            Self::InvalidSender => "SMTP_FROM must be a valid mailbox",
+            Self::InvalidPort => "SMTP_PORT must be greater than 0",
+            Self::InvalidTimeout => "SMTP_TIMEOUT_SECONDS must be greater than 0",
+            Self::CredentialsIncomplete => {
+                "SMTP_USERNAME and SMTP_PASSWORD must be configured together"
+            }
+            Self::InvalidTlsMode => "SMTP_TLS_MODE must be starttls, tls, or plain",
+            Self::PlainProduction => "Plain SMTP is disabled in production",
+            Self::InvalidTransport => "SMTP transport configuration is invalid",
+        };
+        formatter.write_str(message)
+    }
+}
+
 /// Future returned by a provider without requiring an async-trait dependency.
 ///
 /// Dropping the future is cancellation: an adapter must stop or detach its
@@ -150,39 +224,39 @@ impl SmtpMailProvider {
     /// name. Plain SMTP is only available outside production and remains an
     /// explicit configuration choice. A bad address or relay configuration is a
     /// startup failure rather than a request-time failure for every account flow.
-    pub fn from_config(config: &Config) -> Result<Self, String> {
+    pub fn from_config(config: &Config) -> Result<Self, MailProviderConfigError> {
         let host = config
             .smtp_host
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "SMTP_HOST must not be empty when MAIL_PROVIDER=smtp".to_string())?;
+            .ok_or(MailProviderConfigError::MissingHost)?;
         let sender = config
             .smtp_from
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "SMTP_FROM must not be empty when MAIL_PROVIDER=smtp".to_string())?
+            .ok_or(MailProviderConfigError::MissingSender)?
             .parse::<Mailbox>()
-            .map_err(|_| "SMTP_FROM must be a valid mailbox".to_string())?;
+            .map_err(|_| MailProviderConfigError::InvalidSender)?;
         if config.smtp_port == 0 {
-            return Err("SMTP_PORT must be greater than 0".to_string());
+            return Err(MailProviderConfigError::InvalidPort);
         }
         if config.smtp_timeout_seconds <= 0 {
-            return Err("SMTP_TIMEOUT_SECONDS must be greater than 0".to_string());
+            return Err(MailProviderConfigError::InvalidTimeout);
         }
         if config.smtp_username.is_some() != config.smtp_password.is_some() {
-            return Err("SMTP_USERNAME and SMTP_PASSWORD must be configured together".to_string());
+            return Err(MailProviderConfigError::CredentialsIncomplete);
         }
         let timeout = Duration::from_secs(config.smtp_timeout_seconds as u64);
         let builder = match config.smtp_tls_mode.as_str() {
             "starttls" => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
-                .map_err(|_| "SMTP transport configuration is invalid".to_string())?,
+                .map_err(|_| MailProviderConfigError::InvalidTransport)?,
             "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(host)
-                .map_err(|_| "SMTP transport configuration is invalid".to_string())?,
+                .map_err(|_| MailProviderConfigError::InvalidTransport)?,
             "plain" if !config.is_production() => {
                 AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
             }
-            "plain" => return Err("Plain SMTP is disabled in production".to_string()),
-            _ => return Err("SMTP_TLS_MODE must be starttls, tls, or plain".to_string()),
+            "plain" => return Err(MailProviderConfigError::PlainProduction),
+            _ => return Err(MailProviderConfigError::InvalidTlsMode),
         };
         let mut builder = builder.port(config.smtp_port).timeout(Some(timeout));
         if let (Some(username), Some(password)) =
@@ -220,13 +294,57 @@ impl MailProvider for SmtpMailProvider {
         Box::pin(async move {
             let email = self.build_message(message)?;
             match tokio::time::timeout(self.send_timeout, self.transport.send(email)).await {
-                Err(_) => Err(MailDeliveryError::Timeout),
+                Err(_) => {
+                    log_smtp_failure("timeout", "check relay latency and network health");
+                    Err(MailDeliveryError::Timeout)
+                }
+                Ok(Err(error)) if error.is_timeout() => {
+                    log_smtp_failure("timeout", "check relay latency and network health");
+                    Err(MailDeliveryError::Timeout)
+                }
+                Ok(Err(error)) if error.is_tls() => {
+                    log_smtp_failure(
+                        "tls_certificate",
+                        "verify SMTP_TLS_MODE, hostname, certificate chain, and system CA bundle",
+                    );
+                    Err(MailDeliveryError::TemporarilyUnavailable)
+                }
                 Ok(Ok(_)) => Ok(()),
-                Ok(Err(error)) if error.is_permanent() => Err(MailDeliveryError::Rejected),
-                Ok(Err(_)) => Err(MailDeliveryError::TemporarilyUnavailable),
+                Ok(Err(error)) if error.is_permanent() => {
+                    log_smtp_failure(
+                        "rejected",
+                        "verify sender, recipient policy, relay policy, and authentication",
+                    );
+                    Err(MailDeliveryError::Rejected)
+                }
+                Ok(Err(error)) if error.is_transient() => {
+                    log_smtp_failure(
+                        "temporarily_unavailable",
+                        "check relay availability and network policy before retrying through the caller",
+                    );
+                    Err(MailDeliveryError::TemporarilyUnavailable)
+                }
+                Ok(Err(error)) => {
+                    let _ = error;
+                    log_smtp_failure(
+                        "network",
+                        "verify SMTP_HOST, SMTP_PORT, DNS, and network policy",
+                    );
+                    Err(MailDeliveryError::TemporarilyUnavailable)
+                }
             }
         })
     }
+}
+
+/// Emit only a stable SMTP failure category and an actionable next step.
+fn log_smtp_failure(error_category: &'static str, next_action: &'static str) {
+    tracing::warn!(
+        component = "smtp",
+        error_category,
+        next_action,
+        "SMTP delivery failed"
+    );
 }
 
 /// Select the configured delivery adapter once during application startup.
@@ -234,12 +352,25 @@ impl MailProvider for SmtpMailProvider {
 /// A disabled provider preserves the no-delivery default. SMTP initialization
 /// is explicit and fallible so a malformed sender or transport cannot leave a
 /// production process accepting account-security requests it can never deliver.
-pub fn provider_from_config(config: &Config) -> Result<Arc<dyn MailProvider>, String> {
-    match config.mail_provider.as_str() {
-        "disabled" => Ok(Arc::new(DisabledMailProvider)),
-        "smtp" => Ok(Arc::new(SmtpMailProvider::from_config(config)?)),
-        _ => Err("MAIL_PROVIDER must be disabled or smtp".to_string()),
+pub fn provider_from_config(
+    config: &Config,
+) -> Result<Arc<dyn MailProvider>, MailProviderConfigError> {
+    let result: Result<Arc<dyn MailProvider>, MailProviderConfigError> =
+        match config.mail_provider.as_str() {
+            "disabled" => Ok(Arc::new(DisabledMailProvider) as Arc<dyn MailProvider>),
+            "smtp" => Ok(Arc::new(SmtpMailProvider::from_config(config)?)),
+            _ => Err(MailProviderConfigError::UnsupportedProvider),
+        };
+    if let Err(error) = result.as_ref() {
+        let (error_category, next_action) = error.classification();
+        tracing::error!(
+            component = "smtp",
+            error_category,
+            next_action,
+            "SMTP provider startup check failed"
+        );
     }
+    result
 }
 
 /// Default provider used until an explicitly configured delivery adapter exists.
@@ -393,6 +524,17 @@ mod tests {
         let mut invalid_timeout = smtp_config();
         invalid_timeout.smtp_timeout_seconds = 0;
         assert!(SmtpMailProvider::from_config(&invalid_timeout).is_err());
+    }
+
+    #[test]
+    fn smtp_configuration_errors_have_stable_actions() {
+        let (category, action) = MailProviderConfigError::InvalidTransport.classification();
+        assert_eq!(category, "invalid_transport");
+        assert!(action.contains("SMTP_HOST"));
+        assert_eq!(
+            MailProviderConfigError::PlainProduction.to_string(),
+            "Plain SMTP is disabled in production"
+        );
     }
 
     #[tokio::test]
