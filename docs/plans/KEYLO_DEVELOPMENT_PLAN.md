@@ -1,6 +1,6 @@
 # Keylo 线性开发主线与功能清单
 
-> 更新时间：2026-09-21
+> 更新时间：2026-09-22
 >
 > 整理基线：2026-09-19；交付后由 `main` 维护主线，`dev` 与 `main` 对齐；当前发布线为 `v2.1.1`。
 >
@@ -28,7 +28,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 顺序 | 阶段 | 状态 | 结果 |
 | --- | --- | --- | --- |
 | 0 | 认证、会话、授权、组织和运行基线 | 已完成 | 形成当前 `v2.1.1` 发布线的可用能力和安全边界。 |
-| 1 | 账户自助安全闭环 | 已完成 | 邮箱验证、忘记密码申请、密码重置邮件流程和会话撤销已完成并通过本机 Docker 验收。 |
+| 1 | 账户自助安全闭环 | 已完成 | 邮箱验证、忘记密码申请、密码重置邮件流程、首次强制改密、会话撤销和真实 SMTP 账户链路已完成并通过本机 Docker 验收。 |
 | 2 | 需求审查后的单一扩展 | 未排期 | 阶段 1 完成后，根据真实接入方需求只选择一个扩展，不预先并行实现协议或基础设施。 |
 
 阶段 2 不是功能承诺清单。没有真实客户端、组织或运维事件时，主线停留在阶段 1 的稳定维护和回归验证。
@@ -55,7 +55,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 | 验证 | 结果 |
 | --- | --- |
-| `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、148 个单元、1 个 customer-support、26 个 database、76 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、1 个 SMTP 和 10 个 user 测试全部通过，真实邮件已从 Mailpit API 查到，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
+| `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、148 个单元、1 个 customer-support、26 个 database、76 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、1 个 SMTP 和 12 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，邮件已从 Mailpit API 查到，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
 | `.\scripts\validate_oidc_rp_examples.ps1` | Node、Go、Rust Axum、Spring Boot OIDC RP 和 Spring resource server 样例通过；该结果不等同于 Keycloak/TLS/浏览器互操作通过。 |
 | `.\scripts\check_markdown_links.ps1` | README 和 `docs/` 下相对 Markdown 链接通过；外部 URL、锚点和围栏代码示例不在检查范围内。 |
 | `actionlint .github/workflows/ci.yml`、`git diff --check` | 通过。 |
@@ -71,18 +71,33 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 顺序 | 功能 | 实现要求 | 验收结果 |
 | --- | --- | --- | --- |
 | 1 | 可插拔邮件投递边界 | 已完成：定义最小异步 `MailProvider` 接口、默认禁用 provider、SMTP 适配器、STARTTLS/隐式 TLS、开发测试明文模式、超时、稳定错误分类、加密密码配置和内存测试 provider；邮件内容及配置密钥在 debug 输出中统一脱敏。 | provider 未配置、消息无效、超时、临时失败和永久拒绝均有稳定结果；本机 Docker Mailpit 已验证真实 SMTP 投递；认证核心不依赖具体邮件服务。 |
-| 2 | 用户邮箱验证 | 已完成：认证用户请求短时一次性 token；服务端仅保存 SHA-256 摘要，token 绑定当前邮箱；provider 失败会撤销未投递 token。 | `POST /v1/user/email-verification/request` 和 `POST /v1/auth/email-verification/confirm` 已覆盖成功、重放、过期、邮箱变更、限流和投递失败；审计不写入原 token。 |
-| 3 | 忘记密码申请 | 已完成：按邮箱或用户名申请；响应不区分账户存在性，identifier 和 IP 均受限流保护；只为 active、已验证邮箱且有本地密码的账户投递。 | 无账户枚举；每个账户只保留一个有效待消费 token；投递失败会撤销 token。 |
-| 4 | 密码重置 | 已完成：校验一次性恢复 token、密码复杂度和账户状态；成功后撤销该用户现有 refresh session 与 OIDC 浏览器会话，并保留首次登录强制改密标记。 | 旧密码、旧 refresh token、旧浏览器会话和已消费 token 均不能继续使用。 |
+| 2 | 用户邮箱验证 | 已完成：认证用户请求短时一次性 token；服务端仅保存 SHA-256 摘要，token 绑定当前邮箱；provider 失败会撤销未投递 token；真实 SMTP 流程通过应用默认装配路径发送。 | `POST /v1/user/email-verification/request` 和 `POST /v1/auth/email-verification/confirm` 已覆盖真实 Mailpit 投递、成功、重放、过期、邮箱变更、限流和投递失败；审计不写入原 token。 |
+| 3 | 忘记密码申请 | 已完成：按邮箱或用户名申请；响应不区分账户存在性，identifier 和 IP 均受限流保护；只为 active、已验证邮箱且有本地密码的账户投递；真实 SMTP 流程通过应用默认装配路径发送。 | 无账户枚举；每个账户只保留一个有效待消费 token；Mailpit 已验证真实邮件内容和收件人；投递失败会撤销 token。 |
+| 4 | 密码重置 | 已完成：校验一次性恢复 token、密码复杂度和账户状态；成功后撤销该用户现有 refresh session 与 OIDC 浏览器会话，并保留首次登录强制改密标记；真实 SMTP 账户流程已验证首次登录和改密闭环。 | 旧密码、旧 refresh token、旧浏览器会话和已消费 token 均不能继续使用；改密后新登录不再携带强制改密标记。 |
 | 5 | 接口、文档和回归 | 已完成：同步更新 API 参考、开发计划、匿名响应、错误码语义和 HTTP/数据库回归测试。外部邮件 provider 适配器仍保持在边界之外。 | 客户端能按公开接口完成闭环；数据库故障、邮件故障、token 重放、邮箱变更和并发消费默认拒绝。 |
 
 ### 5.3 实施顺序与提交边界
 
-邮件 provider、用户邮箱验证、忘记密码申请和密码重置已完成。SMTP 适配器只负责一次投递尝试，密码可通过统一 AES-256-GCM 密文文件加载；投递失败会撤销新建的一次性 token。密码恢复 token 只保存 SHA-256 摘要，绑定当前已验证邮箱，成功消费在同一事务内更新密码、撤销 refresh/OIDC 会话并写入审计。阶段 2 仍未排期；在出现真实接入方需求前只做回归、兼容性和运维验证，不预先扩展协议或基础设施。
+邮件 provider、用户邮箱验证、忘记密码申请和密码重置已完成。真实 `AppState::new` 已验证会按配置装配 SMTP provider，账户接口能从 Mailpit 收到验证和重置邮件，并完成 token 消费、首次强制改密和失败撤销。SMTP 适配器只负责一次投递尝试，密码可通过统一 AES-256-GCM 密文文件加载；投递失败会撤销新建的一次性 token。密码恢复 token 只保存 SHA-256 摘要，绑定当前已验证邮箱，成功消费在同一事务内更新密码、撤销 refresh/OIDC 会话并写入审计。下一切片进入 SMTP 生产运维加固；阶段 2 协议和基础设施扩展仍未排期。
 
 这是面向用户的认证功能。若实现涉及 `web/` 页面，提交前必须完成真实窗口验收；真实窗口无法启动时，至少执行 headless 渲染和交互测试，并在验证记录中明确限制。仅修改 API 和服务端时，以真实 HTTP 测试和本机 Docker PostgreSQL 集成测试为准。
 
-## 6. 阶段 2 的进入条件
+## 6. 下一切片：SMTP 生产运维加固
+
+状态：下一切片。该切片只处理已经接入 SMTP 后的运维可见性和恢复验证，不引入 outbox、后台重试或新的邮件服务适配器。
+
+范围固定为：
+
+1. 为投递成功、超时、临时不可用、永久拒绝和配置禁用增加固定基数指标；指标不得包含收件人、账号标识、token、邮件正文或 SMTP 原始回复。
+2. 增加 SMTP 配置启动检查和证书/超时失败的可操作日志分类；日志只保留稳定错误类别和下一步动作。
+3. 增加本机 Docker Mailpit 的恢复回归：服务重启后重新投递、SMTP 端口不可达、TLS 配置错误和超时均必须保持失败关闭与 token 撤销。
+4. 更新运维文档和发布前验证记录，说明密文轮换、证书更新、故障恢复和清理步骤。
+
+验收条件：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、本机 Docker PostgreSQL 17 + Mailpit 集成测试、固定基数指标测试、失败分类测试和 Markdown/CI 检查全部通过；不得把 Mailpit 结果描述成真实外部 SMTP 供应商互操作结果。
+
+明确不在本切片内：投递队列、异步 outbox、自动重试、邮件模板系统、邮件供应商管理后台和新的外部邮件 API。
+
+## 7. 阶段 2 的进入条件
 
 账户自助安全闭环完成后，下一功能必须同时满足以下条件才可加入本文件：
 
@@ -94,7 +109,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 在满足上述条件前，以下内容保持未排期，不属于当前功能清单：LDAP/AD 登录与同步、SCIM、SAML、WebAuthn/Passkey、Device Flow/CIBA/PAR/DPoP/Token Exchange、完整管理控制台、计费/套餐、通用策略脚本、多实例 HA、outbox/webhook 和跨区域恢复。
 
-## 7. 每个功能的发布前检查
+## 8. 每个功能的发布前检查
 
 代码或配置变更完成后，至少执行与影响范围匹配的检查；Rust 仓库的提交前检查固定为：
 
@@ -107,7 +122,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 提交标题使用单一 Conventional Commit 前缀（`feat:`、`fix:`、`test:`、`docs:` 或 `chore:`），验证通过后立即推送当前分支。未完成、未验证或验证失败的功能不写入“已完成”清单。
 
-## 8. 文档职责
+## 9. 文档职责
 
 | 内容 | 唯一入口 |
 | --- | --- |

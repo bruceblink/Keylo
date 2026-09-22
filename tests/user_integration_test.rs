@@ -9,6 +9,7 @@ mod tests {
     };
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
     use totp_rs::{Algorithm, Secret, TOTP};
 
     const TEST_JWT_PRIVATE_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
@@ -117,6 +118,260 @@ wwIDAQAB
                 None
             }
         }
+    }
+
+    fn smtp_test_config(port: u16) -> Option<Config> {
+        let host = std::env::var("SMTP_TEST_HOST").ok()?;
+        let from = "Keylo Test <no-reply@example.test>".to_string();
+        Some(Config {
+            mail_provider: "smtp".to_string(),
+            smtp_host: Some(host),
+            smtp_port: port,
+            smtp_from: Some(from),
+            smtp_tls_mode: "plain".to_string(),
+            smtp_timeout_seconds: 2,
+            ..test_config()
+        })
+    }
+
+    async fn setup_smtp_test_server(port: u16) -> Option<TestServer> {
+        let Some(config) = smtp_test_config(port) else {
+            println!("Skipping SMTP account flow: SMTP_TEST_HOST is not configured");
+            return None;
+        };
+        let db_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        match init_app_router_with_db_and_admin(
+            config,
+            &db_url,
+            "user-test-admin",
+            "UserTestAdmin#123",
+        )
+        .await
+        {
+            Ok(router) => Some(TestServer::new(router)),
+            Err(error) => {
+                println!("Skipping SMTP account flow: DB unavailable ({error})");
+                None
+            }
+        }
+    }
+
+    async fn wait_for_smtp_token(prefix: &str, recipient: &str, subject: &str) -> String {
+        let api_url = std::env::var("SMTP_TEST_API_URL")
+            .expect("SMTP_TEST_API_URL must be set for SMTP account flow tests");
+        let api_base = api_url
+            .strip_suffix("/messages")
+            .expect("SMTP_TEST_API_URL must end with /messages");
+        let client = reqwest::Client::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        loop {
+            let list_result = client.get(&api_url).send().await;
+            if let Ok(response) = list_result {
+                if let Ok(payload) = response.json::<serde_json::Value>().await {
+                    let messages = payload
+                        .get("messages")
+                        .and_then(serde_json::Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    for message in messages {
+                        let summary = message.to_string();
+                        if !summary.contains(subject) || !summary.contains(recipient) {
+                            continue;
+                        }
+                        let Some(message_id) = ["ID", "id"]
+                            .iter()
+                            .find_map(|field| message.get(*field).and_then(|value| value.as_str()))
+                        else {
+                            continue;
+                        };
+                        let detail_url = format!("{api_base}/message/{message_id}");
+                        if let Ok(detail_response) = client.get(detail_url).send().await {
+                            if let Ok(detail) = detail_response.text().await {
+                                if let Some(start) = detail.find(prefix) {
+                                    let token_start = start + prefix.len();
+                                    let token = detail[token_start..]
+                                        .split(['\\', '"', '\r', '\n'])
+                                        .next()
+                                        .unwrap_or_default()
+                                        .trim();
+                                    if !token.is_empty() {
+                                        return token.to_string();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "Mailpit did not expose the expected message for {recipient}"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_smtp_account_flows_deliver_and_consume_real_tokens() {
+        let Some(server) = setup_smtp_test_server(
+            std::env::var("SMTP_TEST_PORT")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1025),
+        )
+        .await
+        else {
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let username = format!("smtp-flow-{suffix}");
+        let email = format!("smtp-flow-{suffix}@example.test");
+
+        let registration = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "Password123!"
+            }))
+            .await;
+        registration.assert_status_ok();
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "Password123!"
+            }))
+            .await;
+        login.assert_status_ok();
+        let access_token = login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let verification_request = server
+            .post("/v1/user/email-verification/request")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        verification_request.assert_status_ok();
+        let verification_token = wait_for_smtp_token(
+            "Use this one-time Keylo email verification token: ",
+            &email,
+            "Verify your Keylo email address",
+        )
+        .await;
+        let confirmation = server
+            .post("/v1/auth/email-verification/confirm")
+            .json(&json!({ "token": verification_token }))
+            .await;
+        confirmation.assert_status_ok();
+
+        let reset_request = server
+            .post("/v1/auth/password-reset/request")
+            .json(&json!({ "identifier": email }))
+            .await;
+        reset_request.assert_status_ok();
+        let reset_token = wait_for_smtp_token(
+            "Use this one-time Keylo password reset token: ",
+            &email,
+            "Reset your Keylo password",
+        )
+        .await;
+        let reset = server
+            .post("/v1/auth/password-reset/confirm")
+            .json(&json!({
+                "token": reset_token,
+                "new_password": "ResetPassword#123"
+            }))
+            .await;
+        reset.assert_status_ok();
+
+        let reset_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "ResetPassword#123"
+            }))
+            .await;
+        reset_login.assert_status_ok();
+        let reset_login_body: serde_json::Value = reset_login.json::<serde_json::Value>();
+        assert_eq!(reset_login_body["password_change_required"], true);
+        let reset_access_token = reset_login_body["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let change_password = server
+            .post("/v1/user/change-password")
+            .add_header("Authorization", format!("Bearer {reset_access_token}"))
+            .json(&json!({
+                "current_password": "ResetPassword#123",
+                "new_password": "FinalPassword#123"
+            }))
+            .await;
+        change_password.assert_status_ok();
+
+        let final_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "FinalPassword#123"
+            }))
+            .await;
+        final_login.assert_status_ok();
+        assert!(
+            !final_login.json::<serde_json::Value>()["password_change_required"]
+                .as_bool()
+                .unwrap_or(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_smtp_delivery_failure_revokes_password_reset_token() {
+        let Some(server) = setup_smtp_test_server(1).await else {
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let username = format!("smtp-failure-{suffix}");
+        let email = format!("smtp-failure-{suffix}@example.test");
+        let registration = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": email,
+                "password": "Password123!"
+            }))
+            .await;
+        registration.assert_status_ok();
+        let user_id = registration.json::<serde_json::Value>()["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let pool = db::init_db_pool(&database_url).await.unwrap();
+        db::mark_user_email_verified(&pool, &user_id, Some("test"))
+            .await
+            .unwrap();
+
+        let response = server
+            .post("/v1/auth/password-reset/request")
+            .json(&json!({ "identifier": email }))
+            .await;
+        response.assert_status_ok();
+        let revoked_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM password_reset_tokens
+             WHERE user_id = $1 AND revoked_at IS NOT NULL",
+        )
+        .bind(&user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(revoked_count, 1);
+        pool.close().await;
     }
 
     #[tokio::test]

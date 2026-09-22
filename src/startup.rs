@@ -1,6 +1,6 @@
 use crate::config::{build_database_url, database_password_from_env_result, Config};
 use crate::handlers::{favicon, healthz, index, metrics, protected, readyz};
-use crate::mail::{DisabledMailProvider, MailProvider};
+use crate::mail::{provider_from_config, MailProvider};
 use crate::middleware::{auth, http_log};
 use crate::routes;
 use crate::state::AppState;
@@ -453,12 +453,13 @@ pub async fn init_app_router_with_db_and_admin(
     admin_client_id: &str,
     admin_client_secret: &str,
 ) -> Result<Router, anyhow::Error> {
+    let mail_provider = provider_from_config(&config).map_err(anyhow::Error::msg)?;
     init_app_router_with_db_and_admin_and_mail_provider(
         config,
         database_url,
         admin_client_id,
         admin_client_secret,
-        Arc::new(DisabledMailProvider),
+        mail_provider,
     )
     .await
 }
