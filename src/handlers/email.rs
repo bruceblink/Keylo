@@ -177,7 +177,7 @@ pub async fn request_email_verification(
             issued.token
         ),
     );
-    if let Err(error) = state.mail_provider.send(message).await {
+    if let Err(error) = state.deliver_mail(message).await {
         let error_code = error.code();
         if let Err(revoke_error) = revoke_email_verification_token(db, &issued.id).await {
             tracing::warn!(%revoke_error, "Failed to revoke undelivered email verification token");

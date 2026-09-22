@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::mail::{provider_from_config, MailProvider};
+use crate::mail::{provider_from_config, MailDeliveryError, MailMessage, MailProvider};
 use crate::models::MigrationBatchJob;
 use crate::models::{Keys, OidcUpstreamDiscovery, OidcUpstreamJwks};
 use bcrypt::verify;
@@ -93,6 +93,12 @@ pub struct RuntimeMetrics {
     redis_readiness_duration_milliseconds_buckets: [AtomicU64; 5],
     redis_readiness_successes_total: AtomicU64,
     redis_readiness_failures_total: AtomicU64,
+    mail_delivery_successes_total: AtomicU64,
+    mail_delivery_invalid_message_total: AtomicU64,
+    mail_delivery_not_configured_total: AtomicU64,
+    mail_delivery_timeouts_total: AtomicU64,
+    mail_delivery_temporarily_unavailable_total: AtomicU64,
+    mail_delivery_rejected_total: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -125,6 +131,12 @@ impl RuntimeMetrics {
             }),
             redis_readiness_successes_total: AtomicU64::new(0),
             redis_readiness_failures_total: AtomicU64::new(0),
+            mail_delivery_successes_total: AtomicU64::new(0),
+            mail_delivery_invalid_message_total: AtomicU64::new(0),
+            mail_delivery_not_configured_total: AtomicU64::new(0),
+            mail_delivery_timeouts_total: AtomicU64::new(0),
+            mail_delivery_temporarily_unavailable_total: AtomicU64::new(0),
+            mail_delivery_rejected_total: AtomicU64::new(0),
         }
     }
 
@@ -219,10 +231,47 @@ impl RuntimeMetrics {
         );
     }
 
+    /// Record one mail attempt using a closed outcome set and return its original result.
+    ///
+    /// The outcome names are deliberately fixed so Prometheus cardinality cannot grow with
+    /// recipient addresses, account identifiers, tokens, message content, or SMTP replies.
+    pub fn observe_mail_delivery(
+        &self,
+        result: Result<(), MailDeliveryError>,
+    ) -> Result<(), MailDeliveryError> {
+        match result {
+            Ok(()) => {
+                self.mail_delivery_successes_total
+                    .fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(error) => {
+                let counter = match error {
+                    MailDeliveryError::InvalidMessage => &self.mail_delivery_invalid_message_total,
+                    MailDeliveryError::NotConfigured => &self.mail_delivery_not_configured_total,
+                    MailDeliveryError::Timeout => &self.mail_delivery_timeouts_total,
+                    MailDeliveryError::TemporarilyUnavailable => {
+                        &self.mail_delivery_temporarily_unavailable_total
+                    }
+                    MailDeliveryError::Rejected => &self.mail_delivery_rejected_total,
+                };
+                counter.fetch_add(1, Ordering::Relaxed);
+                Err(error)
+            }
+        }
+    }
+
     /// Render Prometheus text exposition without labels that could leak request or identity values.
     pub fn prometheus_text(&self) -> String {
         format!(
-            "# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_authentication_successes_total counter\nkeylo_authentication_successes_total {}\n# TYPE keylo_authentication_failures_total counter\nkeylo_authentication_failures_total {}\n# TYPE keylo_authorization_denials_total counter\nkeylo_authorization_denials_total {}\n# TYPE keylo_refresh_replays_total counter\nkeylo_refresh_replays_total {}\n# TYPE keylo_rate_limit_rejections_total counter\nkeylo_rate_limit_rejections_total {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds histogram\nkeylo_http_request_duration_milliseconds_bucket{{le=\"10\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"50\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"100\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"500\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"1000\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"+Inf\"}} {}\nkeylo_http_request_duration_milliseconds_sum {}\nkeylo_http_request_duration_milliseconds_count {}\n# TYPE keylo_database_readiness_duration_milliseconds histogram\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"10\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"50\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"100\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"500\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"1000\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"+Inf\"}} {}\nkeylo_database_readiness_duration_milliseconds_sum {}\nkeylo_database_readiness_duration_milliseconds_count {}\n# TYPE keylo_database_readiness_successes_total counter\nkeylo_database_readiness_successes_total {}\n# TYPE keylo_database_readiness_failures_total counter\nkeylo_database_readiness_failures_total {}\n# TYPE keylo_redis_readiness_duration_milliseconds histogram\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"10\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"50\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"100\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"500\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"1000\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"+Inf\"}} {}\nkeylo_redis_readiness_duration_milliseconds_sum {}\nkeylo_redis_readiness_duration_milliseconds_count {}\n# TYPE keylo_redis_readiness_successes_total counter\nkeylo_redis_readiness_successes_total {}\n# TYPE keylo_redis_readiness_failures_total counter\nkeylo_redis_readiness_failures_total {}\n",
+            "# TYPE keylo_mail_deliveries_total counter\nkeylo_mail_deliveries_total{{outcome=\"success\"}} {}\nkeylo_mail_deliveries_total{{outcome=\"invalid_message\"}} {}\nkeylo_mail_deliveries_total{{outcome=\"not_configured\"}} {}\nkeylo_mail_deliveries_total{{outcome=\"timeout\"}} {}\nkeylo_mail_deliveries_total{{outcome=\"temporarily_unavailable\"}} {}\nkeylo_mail_deliveries_total{{outcome=\"rejected\"}} {}\n# TYPE keylo_http_requests_total counter\nkeylo_http_requests_total {}\n# TYPE keylo_http_responses_total counter\nkeylo_http_responses_total{{status_class=\"2xx\"}} {}\nkeylo_http_responses_total{{status_class=\"4xx\"}} {}\nkeylo_http_responses_total{{status_class=\"5xx\"}} {}\n# TYPE keylo_authentication_successes_total counter\nkeylo_authentication_successes_total {}\n# TYPE keylo_authentication_failures_total counter\nkeylo_authentication_failures_total {}\n# TYPE keylo_authorization_denials_total counter\nkeylo_authorization_denials_total {}\n# TYPE keylo_refresh_replays_total counter\nkeylo_refresh_replays_total {}\n# TYPE keylo_rate_limit_rejections_total counter\nkeylo_rate_limit_rejections_total {}\n# TYPE keylo_http_requests_in_flight gauge\nkeylo_http_requests_in_flight {}\n# TYPE keylo_http_request_duration_milliseconds histogram\nkeylo_http_request_duration_milliseconds_bucket{{le=\"10\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"50\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"100\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"500\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"1000\"}} {}\nkeylo_http_request_duration_milliseconds_bucket{{le=\"+Inf\"}} {}\nkeylo_http_request_duration_milliseconds_sum {}\nkeylo_http_request_duration_milliseconds_count {}\n# TYPE keylo_database_readiness_duration_milliseconds histogram\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"10\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"50\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"100\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"500\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"1000\"}} {}\nkeylo_database_readiness_duration_milliseconds_bucket{{le=\"+Inf\"}} {}\nkeylo_database_readiness_duration_milliseconds_sum {}\nkeylo_database_readiness_duration_milliseconds_count {}\n# TYPE keylo_database_readiness_successes_total counter\nkeylo_database_readiness_successes_total {}\n# TYPE keylo_database_readiness_failures_total counter\nkeylo_database_readiness_failures_total {}\n# TYPE keylo_redis_readiness_duration_milliseconds histogram\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"10\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"50\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"100\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"500\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"1000\"}} {}\nkeylo_redis_readiness_duration_milliseconds_bucket{{le=\"+Inf\"}} {}\nkeylo_redis_readiness_duration_milliseconds_sum {}\nkeylo_redis_readiness_duration_milliseconds_count {}\n# TYPE keylo_redis_readiness_successes_total counter\nkeylo_redis_readiness_successes_total {}\n# TYPE keylo_redis_readiness_failures_total counter\nkeylo_redis_readiness_failures_total {}\n",
+            self.mail_delivery_successes_total.load(Ordering::Relaxed),
+            self.mail_delivery_invalid_message_total.load(Ordering::Relaxed),
+            self.mail_delivery_not_configured_total.load(Ordering::Relaxed),
+            self.mail_delivery_timeouts_total.load(Ordering::Relaxed),
+            self.mail_delivery_temporarily_unavailable_total
+                .load(Ordering::Relaxed),
+            self.mail_delivery_rejected_total.load(Ordering::Relaxed),
             self.requests_total.load(Ordering::Relaxed),
             self.responses_2xx_total.load(Ordering::Relaxed),
             self.responses_4xx_total.load(Ordering::Relaxed),
@@ -346,6 +395,16 @@ impl AppState {
             oidc_upstream_metadata_cache: Arc::new(RwLock::new(HashMap::new())),
             runtime_metrics: Arc::new(RuntimeMetrics::new()),
         })
+    }
+
+    /// Send one account-security message and record only its fixed delivery outcome.
+    ///
+    /// This is the single application boundary for mail delivery. The provider receives the
+    /// message and may retain transport state, while this method preserves the original error
+    /// for token rollback and records no message or recipient data in metrics.
+    pub async fn deliver_mail(&self, message: MailMessage) -> Result<(), MailDeliveryError> {
+        let result = self.mail_provider.send(message).await;
+        self.runtime_metrics.observe_mail_delivery(result)
     }
 
     /// 校验 client_id + secret 是否存在
@@ -655,6 +714,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::RuntimeMetrics;
+    use crate::mail::MailDeliveryError;
 
     #[test]
     fn prometheus_metrics_count_authentication_and_authorization_outcomes() {
@@ -676,6 +736,16 @@ mod tests {
         metrics.database_readiness_observed(4, false);
         metrics.redis_readiness_observed(3, true);
         metrics.redis_readiness_observed(5, false);
+        metrics.observe_mail_delivery(Ok(())).unwrap();
+        for error in [
+            MailDeliveryError::InvalidMessage,
+            MailDeliveryError::NotConfigured,
+            MailDeliveryError::Timeout,
+            MailDeliveryError::TemporarilyUnavailable,
+            MailDeliveryError::Rejected,
+        ] {
+            assert_eq!(metrics.observe_mail_delivery(Err(error)), Err(error));
+        }
 
         let text = metrics.prometheus_text();
 
@@ -690,6 +760,12 @@ mod tests {
         assert!(text.contains("keylo_redis_readiness_duration_milliseconds_count 2"));
         assert!(text.contains("keylo_redis_readiness_successes_total 1"));
         assert!(text.contains("keylo_redis_readiness_failures_total 1"));
+        assert!(text.contains("keylo_mail_deliveries_total{outcome=\"success\"} 1"));
+        assert!(text.contains("keylo_mail_deliveries_total{outcome=\"invalid_message\"} 1"));
+        assert!(text.contains("keylo_mail_deliveries_total{outcome=\"not_configured\"} 1"));
+        assert!(text.contains("keylo_mail_deliveries_total{outcome=\"timeout\"} 1"));
+        assert!(text.contains("keylo_mail_deliveries_total{outcome=\"temporarily_unavailable\"} 1"));
+        assert!(text.contains("keylo_mail_deliveries_total{outcome=\"rejected\"} 1"));
         assert!(text.contains("keylo_http_requests_in_flight 0"));
         assert!(text.contains("keylo_http_request_duration_milliseconds_bucket{le=\"10\"} 3"));
         assert!(text.contains("keylo_http_request_duration_milliseconds_bucket{le=\"+Inf\"} 3"));

@@ -203,6 +203,11 @@ docker compose -f docker-compose.yml -f docker-compose.smtp.yml up -d
 账户安全流程只尝试一次投递，不在邮件适配器内部重试。若 SMTP 投递失败，刚生成的一次性
 验证或密码重置令牌会立即撤销，接口仍返回不暴露账户存在性的通用结果。
 
+服务的 `/metrics` endpoint 会暴露固定基数的 `keylo_mail_deliveries_total` counter，
+其 `outcome` 只使用 `success`、`invalid_message`、`not_configured`、`timeout`、
+`temporarily_unavailable` 和 `rejected` 六个值。指标不包含收件人、用户标识、令牌、
+邮件正文或 SMTP 原始回复；应使用这些结果判断投递故障类别，再结合脱敏服务日志执行恢复。
+
 ## RSA 与 JWT Secret
 
 Keylo 使用 RS256，推荐生成 PEM 文件：
