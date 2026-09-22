@@ -122,6 +122,7 @@ export DATABASE_PASSWORD_KEY_FILE="$(pwd)/.secrets/.test_database_password.key"
 export SMTP_TEST_HOST="127.0.0.1"
 export SMTP_TEST_PORT="$MAILPIT_SMTP_PORT"
 export SMTP_TEST_API_URL="http://127.0.0.1:${MAILPIT_API_PORT}/api/v1/messages"
+export SMTP_TEST_CONTAINER_NAME="$MAILPIT_CONTAINER_NAME"
 export RUST_LOG=debug
 
 # Run tests

@@ -51,11 +51,11 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 ## 4. 当前基线验证证据
 
-以下证据记录于 2026-09-21，后续功能必须在相同边界上追加新的验证记录：
+以下证据记录于 2026-09-22，后续功能必须在相同边界上追加新的验证记录：
 
 | 验证 | 结果 |
 | --- | --- |
-| `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、148 个单元、1 个 customer-support、26 个 database、76 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、1 个 SMTP 和 12 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，邮件已从 Mailpit API 查到，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
+| `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、149 个单元、1 个 customer-support、26 个 database、76 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、4 个 SMTP 和 13 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，Mailpit 重启后再次投递成功，端口不可达和黑洞超时均撤销 token，无效 TLS 配置在投递前拒绝，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
 | `.\scripts\validate_oidc_rp_examples.ps1` | Node、Go、Rust Axum、Spring Boot OIDC RP 和 Spring resource server 样例通过；该结果不等同于 Keycloak/TLS/浏览器互操作通过。 |
 | `.\scripts\check_markdown_links.ps1` | README 和 `docs/` 下相对 Markdown 链接通过；外部 URL、锚点和围栏代码示例不在检查范围内。 |
 | `actionlint .github/workflows/ci.yml`、`git diff --check` | 通过。 |
@@ -78,25 +78,26 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 ### 5.3 实施顺序与提交边界
 
-邮件 provider、用户邮箱验证、忘记密码申请和密码重置已完成。真实 `AppState::new` 已验证会按配置装配 SMTP provider，账户接口能从 Mailpit 收到验证和重置邮件，并完成 token 消费、首次强制改密和失败撤销。SMTP 适配器只负责一次投递尝试，密码可通过统一 AES-256-GCM 密文文件加载；投递失败会撤销新建的一次性 token。密码恢复 token 只保存 SHA-256 摘要，绑定当前已验证邮箱，成功消费在同一事务内更新密码、撤销 refresh/OIDC 会话并写入审计。下一切片进入 SMTP 生产运维加固；阶段 2 协议和基础设施扩展仍未排期。
+邮件 provider、用户邮箱验证、忘记密码申请和密码重置已完成。真实 `AppState::new` 已验证会按配置装配 SMTP provider，账户接口能从 Mailpit 收到验证和重置邮件，并完成 token 消费、首次强制改密和失败撤销。SMTP 适配器只负责一次投递尝试，密码可通过统一 AES-256-GCM 密文文件加载；投递失败会撤销新建的一次性 token。密码恢复 token 只保存 SHA-256 摘要，绑定当前已验证邮箱，成功消费在同一事务内更新密码、撤销 refresh/OIDC 会话并写入审计。SMTP 生产运维加固已完成；阶段 2 协议和基础设施扩展仍未排期。
 
 这是面向用户的认证功能。若实现涉及 `web/` 页面，提交前必须完成真实窗口验收；真实窗口无法启动时，至少执行 headless 渲染和交互测试，并在验证记录中明确限制。仅修改 API 和服务端时，以真实 HTTP 测试和本机 Docker PostgreSQL 集成测试为准。
 
-## 6. 下一切片：SMTP 生产运维加固
+## 6. 已完成切片：SMTP 生产运维加固
 
-状态：进行中。该切片只处理已经接入 SMTP 后的运维可见性和恢复验证，不引入 outbox、后台重试或新的邮件服务适配器。
+状态：已完成。该切片只处理已经接入 SMTP 后的运维可见性和恢复验证，不引入 outbox、后台重试或新的邮件服务适配器。
 
-当前进度：固定基数投递指标、启动配置检查和 SMTP 失败分类日志已完成并通过本机 Docker
-全量验证。`/metrics` 暴露 `keylo_mail_deliveries_total`，应用只记录六种固定结果；启动和
-运行时日志只记录稳定分类与下一步动作，不包含敏感邮件或 SMTP 原始诊断。剩余工作是
-Mailpit 故障恢复回归和运维操作记录。
+交付结果：固定基数投递指标、启动配置检查、SMTP 失败分类日志、Mailpit 故障恢复回归和
+SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` 暴露
+`keylo_mail_deliveries_total`，应用只记录六种固定结果；启动和运行时日志只记录稳定分类
+与下一步动作，不包含敏感邮件或 SMTP 原始诊断。详细操作步骤见
+[SMTP 账户邮件运维](../operations/SMTP_OPERATIONS.md)。
 
 范围固定为：
 
 1. 为投递成功、超时、临时不可用、永久拒绝和配置禁用增加固定基数指标；指标不得包含收件人、账号标识、token、邮件正文或 SMTP 原始回复。
 2. 增加 SMTP 配置启动检查和证书/超时失败的可操作日志分类；日志只保留稳定错误类别和下一步动作。
-3. 增加本机 Docker Mailpit 的恢复回归：服务重启后重新投递、SMTP 端口不可达、TLS 配置错误和超时均必须保持失败关闭与 token 撤销。
-4. 更新运维文档和发布前验证记录，说明密文轮换、证书更新、故障恢复和清理步骤。
+3. 增加本机 Docker Mailpit 的恢复回归：服务重启后重新投递；SMTP 端口不可达和超时保持失败关闭并撤销 token；TLS 配置错误在启动阶段拒绝且不创建 token。已完成。
+4. 更新运维文档和发布前验证记录，说明密文轮换、证书更新、故障恢复和清理步骤。已完成。
 
 验收条件：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、本机 Docker PostgreSQL 17 + Mailpit 集成测试、固定基数指标测试、失败分类测试和 Markdown/CI 检查全部通过；不得把 Mailpit 结果描述成真实外部 SMTP 供应商互操作结果。
 

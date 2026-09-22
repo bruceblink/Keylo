@@ -192,6 +192,7 @@ try {
     $env:SMTP_TEST_HOST = "127.0.0.1"
     $env:SMTP_TEST_PORT = [string]$SmtpPort
     $env:SMTP_TEST_API_URL = $mailpitApiUrl
+    $env:SMTP_TEST_CONTAINER_NAME = $mailpitContainerName
     $env:RUST_TEST_THREADS = "1"
 
     Write-Info "Running formatting checks..."
@@ -217,6 +218,7 @@ try {
     Remove-Item Env:SMTP_TEST_HOST -ErrorAction SilentlyContinue
     Remove-Item Env:SMTP_TEST_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:SMTP_TEST_API_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:SMTP_TEST_CONTAINER_NAME -ErrorAction SilentlyContinue
     Write-Success "Docker test resources cleaned up."
 }
 
