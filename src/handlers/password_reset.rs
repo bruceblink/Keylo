@@ -17,6 +17,16 @@ const PASSWORD_RESET_SUBJECT: &str = "Reset your Keylo password";
 const PASSWORD_RESET_ACCEPTED_MESSAGE: &str =
     "If the account can be recovered, a password reset message will be sent";
 
+/// Build a same-origin recovery URL without putting the one-time proof in a
+/// request-visible query string; the frontend removes the fragment on load.
+fn password_reset_link(state: &AppState, token: &str) -> String {
+    format!(
+        "{}/account/password-reset#token={}",
+        state.config.oidc_issuer(),
+        urlencoding::encode(token)
+    )
+}
+
 fn error_response(
     status: StatusCode,
     error: &'static str,
@@ -121,8 +131,8 @@ pub async fn request_password_reset(
         issued.email,
         PASSWORD_RESET_SUBJECT,
         format!(
-            "Use this one-time Keylo password reset token: {}",
-            issued.token
+            "Open this one-time Keylo password reset link to choose a new password:\n{}\n\nThe link expires soon and can only be used once.",
+            password_reset_link(&state, &issued.token)
         ),
     );
     if let Err(error) = state.deliver_mail(message).await {

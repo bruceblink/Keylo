@@ -27,6 +27,27 @@ body {
   margin: 32px auto;
 }
 
+.account-page {
+  max-width: 620px;
+}
+
+.account-page .header {
+  margin-bottom: 16px;
+}
+
+.eyebrow {
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.recovery-panel {
+  max-width: 520px;
+}
+
+
 .header {
   display: flex;
   justify-content: space-between;

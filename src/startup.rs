@@ -205,6 +205,7 @@ fn base_public_routes(include_oauth: bool) -> Router<AppState> {
         .merge(routes::service::service_public_routes())
         .merge(routes::oidc::public_routes())
         .merge(routes::identity::identity_public_routes())
+        .merge(routes::account::account_routes())
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics))
         .route("/readyz", get(readyz))

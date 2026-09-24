@@ -5744,6 +5744,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_account_recovery_page_sets_token_safe_browser_headers() {
+        let server = setup_test_server().await;
+
+        let response = server.get("/account/password-reset").await;
+        response.assert_status_ok();
+        assert_eq!(response.header("cache-control"), "no-store");
+        assert_eq!(response.header("referrer-policy"), "no-referrer");
+        assert_eq!(response.header("x-content-type-options"), "nosniff");
+        assert_eq!(response.header("x-frame-options"), "DENY");
+        assert!(response
+            .header("content-security-policy")
+            .to_str()
+            .unwrap()
+            .contains("default-src 'self'"));
+        assert!(response.text().contains("<div id=\"root\"></div>"));
+    }
+
+    #[tokio::test]
     async fn test_setup_wizard_status_and_initialize() {
         let mut config = test_config();
         config.enable_setup_wizard = true;

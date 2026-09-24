@@ -115,7 +115,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 1. `/account/email-verification` 页面：从 URL fragment 读取 token，立即用 `history.replaceState` 清除 fragment，然后调用现有邮箱验证确认接口。
 2. `/account/password-reset` 页面：支持输入 identifier 申请重置；从 URL fragment 读取重置 token、设置新密码并调用现有确认接口。
-3. 邮件正文提供同源可点击链接；token 不放入查询参数，不写入服务端访问日志、审计记录或浏览器持久化存储。
+3. 邮件正文只提供同源可点击链接；token 仅位于 URL fragment，不放入查询参数，不写入服务端访问日志、审计记录或浏览器持久化存储。
 4. setup 页面与 account 页面共用前端构建和静态资源处理，但保持 setup 初始化和只读状态行为不变。
 5. 页面提供匿名、过期、重放、限流、投递失败和网络错误的稳定提示；申请页面不得泄露账户是否存在。
 
@@ -132,7 +132,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 1. `npm ci`、前端构建和页面交互测试通过；优先使用真实浏览器窗口完成桌面和移动宽度验收，无法启动真实窗口时使用 headless 并记录限制。
 2. 本机 Docker 使用 `postgres:17-alpine` 与 `axllent/mailpit:v1.21.8`，验证邮件链接、成功消费、过期、重放、邮箱变化、投递失败撤销和容器清理。
-3. 页面和邮件不泄露 token；token 不进入 query string、日志、审计详情、localStorage 或 sessionStorage。
+3. token 只作为收件人邮件中的一次性链接 fragment 传递；页面不将其写入 query string、日志、审计详情、localStorage 或 sessionStorage。
 4. Rust 提交前通过 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings` 和完整 `scripts/run_tests.ps1`；相关文档变更通过 Markdown 链接检查和 `git diff --check`。
 5. setup、OIDC、现有邮箱验证 API、密码重置 API 和会话撤销行为无回归。
 

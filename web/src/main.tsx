@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 // @ts-ignore: CSS side-effect import without type declarations
 import './styles.css';
@@ -41,6 +41,27 @@ type ApiError = {
   error?: string;
 };
 
+type AccountMode = 'setup' | 'password-reset';
+
+function accountMode(): AccountMode {
+  return window.location.pathname.endsWith('/account/password-reset')
+    ? 'password-reset'
+    : 'setup';
+}
+
+function takeFragmentToken(): string {
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const token = fragment.get('token')?.trim() ?? '';
+  if (window.location.hash) {
+    window.history.replaceState(null, document.title, window.location.pathname);
+  }
+  return token;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -52,6 +73,14 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 function App() {
+  const mode = accountMode();
+  if (mode === 'password-reset') {
+    return <PasswordResetPage />;
+  }
+  return <SetupPage />;
+}
+
+function SetupPage() {
   const [adminClientId, setAdminClientId] = useState('');
   const [adminClientSecret, setAdminClientSecret] = useState('');
   const [status, setStatus] = useState<SetupStatus | null>(null);
@@ -230,6 +259,117 @@ function App() {
       <section className="panel endpoints">
         <h2>接入端点</h2>
         <pre>{JSON.stringify(status?.endpoints ?? {}, null, 2)}</pre>
+      </section>
+    </main>
+  );
+}
+
+function PasswordResetPage() {
+  const [identifier, setIdentifier] = useState('');
+  const [token, setToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const fragmentConsumed = useRef(false);
+
+  useEffect(() => {
+    if (fragmentConsumed.current) return;
+    fragmentConsumed.current = true;
+    setToken(takeFragmentToken());
+  }, []);
+
+  async function requestReset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setMessage('正在提交申请...');
+    try {
+      await readJson(
+        await fetch('/v1/auth/password-reset/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: identifier.trim() })
+        })
+      );
+      setMessage('如果账户可以恢复，邮件会很快送达。请检查收件箱。');
+    } catch (error) {
+      setMessage(errorMessage(error, '申请失败，请稍后重试。'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function confirmReset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setMessage('正在更新密码...');
+    try {
+      await readJson(
+        await fetch('/v1/auth/password-reset/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, new_password: newPassword })
+        })
+      );
+      setToken('');
+      setNewPassword('');
+      setMessage('密码已更新。请使用新密码登录。');
+    } catch (error) {
+      setMessage(errorMessage(error, '链接无效或已过期，请重新申请。'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="page account-page">
+      <header className="header">
+        <div>
+          <p className="eyebrow">KEYLO ACCOUNT</p>
+          <h1>恢复账户访问</h1>
+          <p>使用邮件中的一次性链接设置新的登录密码。</p>
+        </div>
+      </header>
+      <section className="panel recovery-panel">
+        {token ? (
+          <form onSubmit={(event) => void confirmReset(event)}>
+            <h2>设置新密码</h2>
+            <label htmlFor="new-password">新密码</label>
+            <input
+              id="new-password"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              required
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+            <p className="hint">至少 8 个字符，并包含大小写字母、数字和特殊字符。</p>
+            <div className="actions">
+              <button type="submit" disabled={loading || newPassword.length < 8}>
+                更新密码
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={(event) => void requestReset(event)}>
+            <h2>发送恢复邮件</h2>
+            <label htmlFor="identifier">邮箱或用户名</label>
+            <input
+              id="identifier"
+              autoComplete="username"
+              required
+              value={identifier}
+              onChange={(event) => setIdentifier(event.target.value)}
+            />
+            <p className="hint">无论账户是否存在，页面都会显示相同结果。</p>
+            <div className="actions">
+              <button type="submit" disabled={loading || identifier.trim().length === 0}>
+                发送恢复邮件
+              </button>
+            </div>
+          </form>
+        )}
+        <p className="status" role="status" aria-live="polite">{message}</p>
       </section>
     </main>
   );

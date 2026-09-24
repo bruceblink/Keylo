@@ -284,7 +284,7 @@ wwIDAQAB
             .await;
         reset_request.assert_status_ok();
         let reset_token = wait_for_smtp_token(
-            "Use this one-time Keylo password reset token: ",
+            "http://127.0.0.1:2345/account/password-reset#token=",
             &email,
             "Reset your Keylo password",
         )
@@ -622,9 +622,19 @@ wwIDAQAB
         assert_eq!(known_body["data"]["status"], "accepted");
         let token = provider.deliveries()[0]
             .text_body
-            .strip_prefix("Use this one-time Keylo password reset token: ")
+            .split("http://127.0.0.1:2345/account/password-reset#token=")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
             .unwrap()
             .to_string();
+        assert!(!provider.deliveries()[0]
+            .text_body
+            .contains("Use this one-time Keylo password reset token:"));
+        assert!(!provider.deliveries()[0]
+            .text_body
+            .contains("/account/password-reset?"));
 
         let unknown = server
             .post("/v1/auth/password-reset/request")

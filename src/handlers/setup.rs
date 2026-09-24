@@ -282,13 +282,9 @@ pub async fn setup_status_page(State(state): State<AppState>) -> impl IntoRespon
 }
 
 pub async fn setup_asset(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    if !state.config.enable_setup_wizard {
-        return AuthError::NotFound.into_response();
-    }
-
     if path.contains("..") || path.starts_with('/') || path.starts_with('\\') {
         return AuthError::NotFound.into_response();
     }

@@ -1,3 +1,4 @@
+pub mod account;
 mod auth;
 mod common;
 pub mod email;
@@ -8,6 +9,7 @@ pub mod service;
 pub mod setup;
 pub mod user;
 
+pub use account::*;
 pub use auth::*;
 pub use common::*;
 pub use email::*;

@@ -7,7 +7,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/setup/status': 'http://127.0.0.1:2345',
-      '/setup/initialize': 'http://127.0.0.1:2345'
+      '/setup/initialize': 'http://127.0.0.1:2345',
+      '/v1': 'http://127.0.0.1:2345'
     }
   }
 });
