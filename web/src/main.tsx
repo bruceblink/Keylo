@@ -41,12 +41,14 @@ type ApiError = {
   error?: string;
 };
 
-type AccountMode = 'setup' | 'password-reset';
+type AccountMode = 'setup' | 'password-reset' | 'email-verification';
 
 function accountMode(): AccountMode {
   return window.location.pathname.endsWith('/account/password-reset')
     ? 'password-reset'
-    : 'setup';
+    : window.location.pathname.endsWith('/account/email-verification')
+      ? 'email-verification'
+      : 'setup';
 }
 
 function takeFragmentToken(): string {
@@ -76,6 +78,9 @@ function App() {
   const mode = accountMode();
   if (mode === 'password-reset') {
     return <PasswordResetPage />;
+  }
+  if (mode === 'email-verification') {
+    return <EmailVerificationPage />;
   }
   return <SetupPage />;
 }
@@ -371,6 +376,53 @@ function PasswordResetPage() {
         )}
         <p className="status" role="status" aria-live="polite">{message}</p>
       </section>
+    </main>
+  );
+}
+
+function EmailVerificationPage() {
+  const [token, setToken] = useState('');
+  const [message, setMessage] = useState('正在验证邮箱...');
+  const fragmentConsumed = useRef(false);
+
+  useEffect(() => {
+    if (fragmentConsumed.current) return;
+    fragmentConsumed.current = true;
+    const nextToken = takeFragmentToken();
+    setToken(nextToken);
+    if (!nextToken) {
+      setMessage('验证链接无效或已过期，请向系统重新申请验证邮件。');
+      return;
+    }
+
+    void (async () => {
+      try {
+        await readJson(
+          await fetch('/v1/auth/email-verification/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: nextToken })
+          })
+        );
+        setMessage('邮箱已验证，可以继续使用账户。');
+      } catch (error) {
+        setMessage(errorMessage(error, '验证链接无效或已过期，请重新申请。'));
+      } finally {
+        setToken('');
+      }
+    })();
+  }, []);
+
+  return (
+    <main className="page account-page">
+      <header className="header">
+        <div>
+          <p className="eyebrow">KEYLO ACCOUNT</p>
+          <h1>验证邮箱</h1>
+          <p role="status" aria-live="polite">{message}</p>
+        </div>
+      </header>
+      {token ? <div className="loading-mark" aria-hidden="true" /> : null}
     </main>
   );
 }

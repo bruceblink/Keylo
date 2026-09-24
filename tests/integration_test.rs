@@ -5759,6 +5759,12 @@ mod tests {
             .unwrap()
             .contains("default-src 'self'"));
         assert!(response.text().contains("<div id=\"root\"></div>"));
+
+        let response = server.get("/account/email-verification").await;
+        response.assert_status_ok();
+        assert_eq!(response.header("cache-control"), "no-store");
+        assert_eq!(response.header("referrer-policy"), "no-referrer");
+        assert!(response.text().contains("<div id=\"root\"></div>"));
     }
 
     #[tokio::test]

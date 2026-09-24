@@ -267,7 +267,7 @@ wwIDAQAB
             .await;
         verification_request.assert_status_ok();
         let verification_token = wait_for_smtp_token(
-            "Use this one-time Keylo email verification token: ",
+            "http://127.0.0.1:2345/account/email-verification#token=",
             &email,
             "Verify your Keylo email address",
         )
@@ -486,9 +486,16 @@ wwIDAQAB
         assert_eq!(deliveries[0].recipient, email);
         let token = deliveries[0]
             .text_body
-            .strip_prefix("Use this one-time Keylo email verification token: ")
+            .split("http://127.0.0.1:2345/account/email-verification#token=")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
             .unwrap()
             .to_string();
+        assert!(!deliveries[0]
+            .text_body
+            .contains("Use this one-time Keylo email verification token:"));
 
         let confirmation = server
             .post("/v1/auth/email-verification/confirm")

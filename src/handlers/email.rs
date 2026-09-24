@@ -14,6 +14,16 @@ use serde_json::{json, Value};
 
 const EMAIL_VERIFICATION_SUBJECT: &str = "Verify your Keylo email address";
 
+/// Build a same-origin verification URL without putting the one-time proof in
+/// a request-visible query string; the frontend removes the fragment on load.
+fn email_verification_link(state: &AppState, token: &str) -> String {
+    format!(
+        "{}/account/email-verification#token={}",
+        state.config.oidc_issuer(),
+        urlencoding::encode(token)
+    )
+}
+
 fn error_response(
     status: StatusCode,
     error: &'static str,
@@ -173,8 +183,8 @@ pub async fn request_email_verification(
         issued.email.clone(),
         EMAIL_VERIFICATION_SUBJECT,
         format!(
-            "Use this one-time Keylo email verification token: {}",
-            issued.token
+            "Open this one-time Keylo email verification link to verify your email address:\n{}\n\nThe link expires soon and can only be used once.",
+            email_verification_link(&state, &issued.token)
         ),
     );
     if let Err(error) = state.deliver_mail(message).await {

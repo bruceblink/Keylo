@@ -38,3 +38,9 @@ fn account_page_html() -> Response {
 pub async fn password_reset_page() -> Response {
     account_page_html()
 }
+
+/// Return the email verification shell; token consumption remains in the
+/// existing JSON API and keeps its rate limits and audit behavior.
+pub async fn email_verification_page() -> Response {
+    account_page_html()
+}
