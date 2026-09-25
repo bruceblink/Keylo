@@ -385,7 +385,26 @@ curl -s -X POST http://127.0.0.1:2345/v1/user/change-password \
   }'
 ```
 
-### 6.4 访问受保护示例
+### 6.4 使用托管账户恢复页面
+
+启用 SMTP 后，邮箱验证和密码恢复邮件会包含同源的一次性链接：
+
+- 邮箱验证：`/account/email-verification#token=...`
+- 密码恢复：`/account/password-reset#token=...`
+
+直接打开链接即可完成操作。页面会先清除 URL fragment，再调用现有确认 API；token 不会写入 query string、浏览器持久化存储或审计记录。密码恢复申请也可以直接打开 `/account/password-reset`，输入邮箱或用户名；无论账户是否存在，页面都会显示相同的申请结果。
+
+页面需要 `web` 前端构建产物；开发期可以运行：
+
+```powershell
+cd web
+npm ci
+npm run build
+```
+
+密码恢复成功后，首次登录 token 可能带有 `password_change_required=true`；按下节的自助改密流程完成首次改密。
+
+### 6.5 访问受保护示例
 
 ```bash
 curl -s -H "Authorization: Bearer ${USER_TOKEN}" \

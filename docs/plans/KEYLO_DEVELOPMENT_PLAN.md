@@ -1,8 +1,8 @@
 # Keylo 线性开发主线与功能清单
 
-> 更新时间：2026-09-24
+> 更新时间：2026-09-25
 >
-> 整理基线：2026-09-24；交付后由 `main` 维护主线，`dev` 与 `main` 对齐；当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；交付后由 `main` 维护主线，`dev` 与 `main` 对齐；当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -29,9 +29,9 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | --- | --- | --- | --- |
 | 0 | 认证、会话、授权、组织和运行基线 | 已完成 | 形成当前 `v2.1.2` 发布线的可用能力和安全边界。 |
 | 1 | 账户自助安全闭环 | 已完成 | 邮箱验证、忘记密码申请、密码重置邮件流程、首次强制改密、会话撤销和真实 SMTP 账户链路已完成并通过本机 Docker 验收。 |
-| 2 | 托管账户恢复页面 | 下一切片 | 将已交付的邮箱验证和密码恢复 API 接入同源可点击页面，降低终端用户完成账户恢复的使用成本。 |
+| 2 | 托管账户恢复页面 | 已完成 | 已将邮箱验证和密码恢复 API 接入同源可点击页面，并通过真实后端、Docker 邮件链路和 UI 验收。 |
 
-阶段 2 当前只包含一个已确认的账户恢复可用性切片。该切片完成并验证后，再根据真实客户端、组织或运维事件重新选择下一个扩展；不得并行展开多个协议或基础设施方向。
+阶段 2 当前只包含一个已确认的账户恢复可用性切片。该切片已完成并验证；下一功能必须根据真实客户端、组织或运维事件重新选择，不得并行展开多个协议或基础设施方向。
 
 ## 3. 当前已完成功能清单
 
@@ -51,14 +51,16 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 ## 4. 当前基线验证证据
 
-以下证据记录于 2026-09-24，后续功能必须在相同边界上追加新的验证记录：
+以下证据记录于 2026-09-25，后续功能必须在相同边界上追加新的验证记录：
 
 | 验证 | 结果 |
 | --- | --- |
-| `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、149 个单元、1 个 customer-support、26 个 database、76 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、4 个 SMTP 和 13 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，Mailpit 重启后再次投递成功，端口不可达和黑洞超时均撤销 token，无效 TLS 配置在投递前拒绝，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
+| `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、149 个单元、1 个 customer-support、26 个 database、77 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、4 个 SMTP 和 13 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，Mailpit 重启后再次投递成功，端口不可达和黑洞超时均撤销 token，无效 TLS 配置在投递前拒绝，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
 | `.\scripts\validate_oidc_rp_examples.ps1` | Node、Go、Rust Axum、Spring Boot OIDC RP 和 Spring resource server 样例通过；该结果不等同于 Keycloak/TLS/浏览器互操作通过。 |
 | `.\scripts\check_markdown_links.ps1` | README 和 `docs/` 下相对 Markdown 链接通过；外部 URL、锚点和围栏代码示例不在检查范围内。 |
 | `actionlint .github/workflows/ci.yml`、`git diff --check` | 通过。 |
+| 托管账户恢复页面 UI 验收 | 使用 computer-use 在可见 Codex In-app Browser 窗口完成真实交互；页面访问本地 Keylo `127.0.0.1:2345`，邮件来自本机 Docker Mailpit，覆盖恢复申请、邮箱验证成功、密码重置有效 token 表单、fragment 清除、无效 token 错误状态，并在 `390x844` 视口检查移动布局。Computer Use 要求最终改密步骤交由用户接管，因此未通过该工具提交新密码；此前 Playwright headless 真实后端流程已完成密码更新和新密码登录验证。 |
+| 托管账户恢复文档和全量回归 | API 参考、端到端快速开始、主线验证记录已更新；本机 Docker 全量测试使用 `postgres:17-alpine`（`127.0.0.1:55432`）和 `axllent/mailpit:v1.21.8`（SMTP `11025`、API `18025`），fmt、Clippy、149 单测、1 customer-support、26 database、77 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP、13 user 全部通过，容器和临时密钥已清理。 |
 | GitHub Actions `CI/CD Pipeline`（`main` run `35738231390`、`dev` run `35738263636`） | 均在提交 `b987a2a` 上完成；Security Audit、Run Tests 和 Code Coverage 全部通过。 |
 | GitHub Actions `Release`（run `35741991437`） | `v2.1.2` 发布成功，生成双语变更说明并发布 GHCR 镜像。 |
 
@@ -105,7 +107,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 明确不在本切片内：投递队列、异步 outbox、自动重试、邮件模板系统、邮件供应商管理后台和新的外部邮件 API。
 
-## 7. 下一切片：托管账户恢复页面
+## 7. 已完成切片：托管账户恢复页面
 
 ### 7.1 使用场景和边界
 
@@ -136,9 +138,9 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 4. Rust 提交前通过 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings` 和完整 `scripts/run_tests.ps1`；相关文档变更通过 Markdown 链接检查和 `git diff --check`。
 5. setup、OIDC、现有邮箱验证 API、密码重置 API 和会话撤销行为无回归。
 
-## 8. 阶段 2 的进入条件
+## 8. 下一切片的进入条件
 
-账户自助安全闭环完成后，下一功能必须同时满足以下条件才可加入本文件：
+托管账户恢复页面完成后，下一功能必须同时满足以下条件才可加入本文件：
 
 1. 有明确的真实客户端、组织或运维事件，并说明影响范围。
 2. 能用现有 Principal、组织和 RBAC 模型表达，若不能，必须说明新增数据模型或协议的必要性。

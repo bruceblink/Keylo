@@ -277,6 +277,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 服务端只保存 token 的 SHA-256 摘要，不保存原文；token 绑定签发时的当前邮箱，成功消费后立即失效并将 `email_verified` 设为 `true`。未知、过期、重放、已撤销、停用用户或邮箱已变更的 token 均返回相同的 `400 invalid_email_verification_token`，不暴露账户状态。成功消费写入 `user.email_verified` 审计事件，审计详情不包含 token 原文。
 
+启用托管账户页面时，验证邮件会提供同源 `/account/email-verification#token=...` 链接。页面在提交确认请求前用 `history.replaceState` 清除 fragment；token 不会进入 query string、服务端访问日志、审计详情、`localStorage` 或 `sessionStorage`。页面只调用上述确认接口，限流、一次性消费和错误语义保持不变。
+
 ### 3.9 自助密码恢复
 
 申请密码恢复：
@@ -304,6 +306,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 - 请求体：`{"token":"...","new_password":"NewPassword#123"}`
 
 服务端只保存 token 的 SHA-256 摘要；token 绑定签发时的已验证邮箱，成功消费后立即失效。成功重置会在同一数据库事务中更新密码、设置 `password_change_required=true`、撤销现有 refresh session 和 OIDC 浏览器会话，并写入不含 token 或密码的 `user.password_reset` 审计事件。未知、过期、重放、已撤销、停用、邮箱变化或未验证邮箱的 token 均返回相同的 `400 invalid_password_reset_token`。
+
+启用托管账户页面时，重置邮件会提供同源 `/account/password-reset#token=...` 链接。页面会立即清除 fragment，再提交新密码；申请页面对已知和未知 identifier 显示相同结果。页面响应设置 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`、同源 CSP、`X-Content-Type-Options: nosniff` 和 `X-Frame-Options: DENY`。
 
 ### 3.10 第三方 JIT 迁移注册
 
