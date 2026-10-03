@@ -1,6 +1,6 @@
 # Keylo 线性开发主线与功能清单
 
-> 更新时间：2026-09-25
+> 更新时间：2026-10-03
 >
 > 整理基线：2026-09-25；交付后由 `main` 维护主线，`dev` 与 `main` 对齐；当前发布线为 `v2.1.2`。
 >
@@ -20,6 +20,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 - `已完成`：代码、文档和与风险匹配的验证已经交付。
 - `下一切片`：当前唯一允许进入实现的功能范围。
+- `进行中`：范围已确认，正在实现或补齐验收证据。
 - `未排期`：不是当前主线任务；除非出现真实使用信号，否则不得转入实现。
 - `待环境验证`：功能边界已经写清，但验证所需的外部环境本次没有执行。
 
@@ -30,8 +31,17 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 0 | 认证、会话、授权、组织和运行基线 | 已完成 | 形成当前 `v2.1.2` 发布线的可用能力和安全边界。 |
 | 1 | 账户自助安全闭环 | 已完成 | 邮箱验证、忘记密码申请、密码重置邮件流程、首次强制改密、会话撤销和真实 SMTP 账户链路已完成并通过本机 Docker 验收。 |
 | 2 | 托管账户恢复页面 | 已完成 | 已将邮箱验证和密码恢复 API 接入同源可点击页面，并通过真实后端、Docker 邮件链路和 UI 验收。 |
+| 3 | 托管账户恢复 UI 自动化回归 | 进行中 | 为已交付恢复页面建立可重复的浏览器交互回归和 CI 门禁，不增加产品 API 或账户功能。 |
 
-阶段 2 当前只包含一个已确认的账户恢复可用性切片。该切片已完成并验证；下一功能必须根据真实客户端、组织或运维事件重新选择，不得并行展开多个协议或基础设施方向。
+阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归和 CI 门禁已加入；远端 CI 尚待本次推送后验证，因此阶段保持进行中。使用受控 API 响应的浏览器测试只证明 UI 契约，不替代真实 HTTP、PostgreSQL、Mailpit 集成测试或可见窗口验收。阶段 3 完成后，下一产品功能仍须根据真实客户端、组织或运维事件重新选择，不得并行展开多个协议或基础设施方向。
+
+阶段 3 验收条件：
+
+1. Chromium 浏览器回归覆盖密码恢复申请的统一成功提示、有效/无效重置 token、邮箱验证成功/失败及无 token 状态。
+2. 回归确认敏感 token 从 URL fragment 读取后立即清除、不进入 query string 或浏览器持久化存储，邮箱验证请求只发送一次。
+3. 在桌面和 `390x844` 移动视口检查页面可用且无横向溢出；页面控制台无应用错误。
+4. `npm ci`、`npm run build` 和浏览器回归通过，CI 对相关前端测试文件执行同一回归。
+5. 使用 Computer Use 对本地运行页面完成可见窗口交互验收；真实账户状态或真实密码变更不通过 Computer Use 提交。
 
 ## 3. 当前已完成功能清单
 
@@ -55,6 +65,9 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 | 验证 | 结果 |
 | --- | --- |
+| 托管账户恢复 UI 自动化回归（2026-10-03） | `web` 执行 `npm ci`、`npm run build` 和 `npm run test:e2e`；Chromium 7 项通过，覆盖账户存在性统一提示、密码重置成功/失败、邮箱验证成功/失败/缺失 token、fragment 清理与存储检查、重复提交防护、桌面和 `390x844` 无横向溢出，以及共享 setup 页面回归。API 响应由测试控制，只作为 UI 契约验证；页面运行时错误断言为空。Playwright 1.63.0、锁定的 Vite 7.3.6；`npm audit` 为 0 vulnerabilities。 |
+| Computer Use 可见窗口检查（2026-10-03） | Codex In-app Browser 在 `1280x720` 可见窗口打开本地 Vite 页面；核对密码恢复表单可输入并启用提交按钮（仅输入 `.test` 合成标识符、未提交），随后打开邮箱验证缺失 fragment 页面并确认稳定提示；浏览器控制台 error/warn 为空。真实密码变更未通过 UI 提交。 |
+| UI 自动化 CI 门禁 | `.github/workflows/ci.yml` 已将 Chromium UI 回归接入 Run Tests job，相关 `web/tests/**` 文件纳入触发路径；远端 workflow 尚未运行，待推送后核对结果。 |
 | `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、149 个单元、1 个 customer-support、26 个 database、77 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、4 个 SMTP 和 13 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，Mailpit 重启后再次投递成功，端口不可达和黑洞超时均撤销 token，无效 TLS 配置在投递前拒绝，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
 | `.\scripts\validate_oidc_rp_examples.ps1` | Node、Go、Rust Axum、Spring Boot OIDC RP 和 Spring resource server 样例通过；该结果不等同于 Keycloak/TLS/浏览器互操作通过。 |
 | `.\scripts\check_markdown_links.ps1` | README 和 `docs/` 下相对 Markdown 链接通过；外部 URL、锚点和围栏代码示例不在检查范围内。 |

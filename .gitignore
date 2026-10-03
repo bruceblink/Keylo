@@ -14,6 +14,8 @@
 /.secrets/
 /web/node_modules/
 /web/dist/
+/web/test-results/
+/web/playwright-report/
 /web/*.tsbuildinfo
 /examples/node-express-oidc/node_modules/
 /examples/go-net-http-oidc/.env

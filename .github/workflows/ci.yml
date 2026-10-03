@@ -14,6 +14,7 @@ on:
       - 'scripts/*.sh'
       - 'scripts/*.py'
       - 'web/src/**'
+      - 'web/tests/**'
       - 'web/index.html'
       - 'web/*.json'
       - 'web/*.ts'
@@ -47,6 +48,7 @@ on:
       - 'scripts/*.sh'
       - 'scripts/*.py'
       - 'web/src/**'
+      - 'web/tests/**'
       - 'web/index.html'
       - 'web/*.json'
       - 'web/*.ts'
@@ -151,6 +153,12 @@ jobs:
       run: |
         npm ci
         npm run build
+
+    - name: Test account recovery UI
+      working-directory: web
+      run: |
+        npx playwright install --with-deps chromium
+        npm run test:e2e
 
     - name: Wait for Postgres
       env:
