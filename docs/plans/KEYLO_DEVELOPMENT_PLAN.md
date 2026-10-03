@@ -73,7 +73,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | OIDC 账户恢复入口代码回归（2026-10-03） | `npm ci`、`npm run build`、原有 Chromium 7 项 UI 契约回归、`cargo build --bin keylo`、fmt、workspace Clippy、Markdown 链接和 `git diff --check` 通过。`scripts/run_tests.ps1 -DatabasePort 55432` 使用本机 Docker `postgres:17-alpine`（`127.0.0.1:55432` -> `5432`）与 `axllent/mailpit:v1.21.8`（SMTP `11025` -> `1025`，API `18025` -> `8025`）；readiness、150 单元、1 customer-support、26 database、77 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP 和 13 user 共 289 项全部通过；测试容器、匿名卷和脚本临时密钥目录已清理。 |
 | OIDC 账户恢复入口真实后端 headless 检查（2026-10-03） | 独立本机 Docker PostgreSQL 17（`55433`）、Mailpit `v1.21.8`（SMTP `11026`、API `18026`）与真实 Keylo（`127.0.0.1:2346`）readiness 通过。Chromium 在 `1280x720` 和 `390x844` 点击恢复入口，确认同源新标签、`window.opener=null`、无 Referer、原授权 URL/hidden fields/合成用户名不变、无横向溢出/持久化存储/应用错误/外部资源请求；匿名恢复申请经真实 HTTP 返回统一提示，未提交密码修改或真实凭据。后端与 Docker 容器、匿名卷和端口映射已清理；系统策略拒绝递归删除 `C:\Users\likanug\AppData\Local\Temp\keylo-oidc-recovery-ui-9dc0a119da3a`，本轮临时测试密钥、构建副本与辅助脚本待人工清理，不在 Git 中。截图保留在独立临时证据目录。 |
 | OIDC 账户恢复入口 Codex 内置浏览器（2026-10-03） | 在可见 Codex In-app Browser 打开真实 Keylo `/v1/oidc/authorize`，点击 `Forgot your password?` 后实际出现独立恢复标签；输入 `.test` 合成标识符并提交真实恢复申请，页面返回统一成功提示，关闭恢复标签后原登录页、原授权 URL 与 8 项 hidden fields 不变。`1280x720` 和 `390x844` 视口检查通过，缺失 token、表单启用/恢复和控制台 error/warn 均正常；截图保存于仓库外。Windows Chrome 首次状态读取因无法可靠判断 URL 而停止，未重试该窗口输入；按用户要求切换内置浏览器后验收通过。未输入真实凭据、未提交密码变更；本次可见交互不证明真实账户邮件投递，SMTP 证据来自独立 Docker Rust 测试。 |
-| OIDC 账户恢复入口远端 CI（2026-10-03） | 功能提交 `e789ea3` 已推送到 `main`；run `37104858502` 已创建，交付核对时 Run Tests、Security Audit 和 Code Coverage 均为 `in_progress`，结论待下一次核对。既有 `1d0b616` 的绿灯不作为本次提交的证据，也不把本地通过等同于远端通过。 |
+| OIDC 账户恢复入口远端 CI（2026-10-03） | 功能提交 `e789ea3` 已推送到 `main`；run `37104858502` 已完成，Run Tests、Security Audit 和 Code Coverage 全部通过。Run Tests 包含 UI 回归、完整 Rust 集成测试、OIDC relying-party 样例和 release 构建；Code Coverage 完成 tarpaulin 与 Codecov 上传。 |
 | 托管账户恢复 UI 自动化回归（2026-10-03） | `web` 执行 `npm ci`、`npm run build` 和 `npm run test:e2e`；Chromium 7 项通过，覆盖账户存在性统一提示、密码重置成功/失败、邮箱验证成功/失败/缺失 token、fragment 清理与存储检查、重复提交防护、桌面和 `390x844` 无横向溢出，以及共享 setup 页面回归。API 响应由测试控制，只作为 UI 契约验证；页面运行时错误断言为空。Playwright 1.63.0、锁定的 Vite 7.3.6；`npm audit` 为 0 vulnerabilities。 |
 | Computer Use 可见窗口检查（2026-10-03） | Codex In-app Browser 在 `1280x720` 可见窗口打开本地 Vite 页面；核对密码恢复表单可输入并启用提交按钮（仅输入 `.test` 合成标识符、未提交），随后打开邮箱验证缺失 fragment 页面并确认稳定提示；浏览器控制台 error/warn 为空。真实密码变更未通过 UI 提交。 |
 | UI 自动化 CI 门禁（2026-10-03） | `.github/workflows/ci.yml` 已将 Chromium UI 回归接入 Run Tests job，相关 `web/tests/**` 文件纳入触发路径；提交 `1d0b616` 的 run `37089762986` 已完成，Security Audit、Run Tests 和 Code Coverage 全部通过。该证据只对应此提交，不代表后续代码已经通过远端验证。 |
@@ -173,7 +173,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 1. 在服务器渲染的登录页增加固定同源 `/account/password-reset` 链接，放在登录表单外；补充页面标题、UTF-8 和移动 viewport 元数据，不重做登录或同意页布局。
 2. 使用独立标签和 `rel="noopener noreferrer"`；原登录页保留 `state`、`nonce`、redirect URI 和 PKCE hidden fields，恢复页不得接收这些参数、账号或密码。
 3. 不新增 API、配置或迁移；不自动继续授权、不跳过 consent、不新增任意 return URL，不修改认证、限流、审计或一次性 token 的边界。
-4. 同步更新 OIDC 接口与账户恢复使用说明；在一个功能提交中交付实现、回归和验证记录。
+4. 同步更新 OIDC 接口与账户恢复使用说明；以一个功能切片交付，代码回归使用功能提交 `e789ea3`，可见浏览器和 CI 证据记录使用后续文档提交 `809f5ee` 及本计划更新。
 
 验收条件：
 
@@ -186,7 +186,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 ### 8.2 后续顺序
 
-下次先核对功能提交 `e789ea3` 的 CI run `37104858502`，失败时先修复；并清理本轮剩余临时目录。通过后只推进阶段 5。阶段 6、7 依次等待前一切片交付，不并行实施：
+下次只清理本轮剩余临时目录，然后推进阶段 5。阶段 6、7 依次等待前一切片交付，不并行实施：
 
 1. 使用独立本机 Docker PostgreSQL 17 和 Mailpit，启动真实 Keylo 而非仅使用 Vite proxy 或受控 API 响应。
 2. 用合成账户和真实邮件驱动邮箱验证、密码恢复、重放拒绝及新密码登录；浏览器日志和失败产物不得包含原始 token、密码、密钥或收件人。
