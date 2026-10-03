@@ -980,6 +980,12 @@ mod tests {
             ))
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
+        assert_eq!(response.header("cache-control"), "no-store");
+        assert!(response
+            .header("content-security-policy")
+            .to_str()
+            .unwrap()
+            .contains("form-action 'self'"));
         let page = response.text();
         assert!(page.contains("<form method=\"post\" action=\"/v1/oidc/login\">"));
         assert!(page.contains("name=\"username\""));
@@ -987,6 +993,22 @@ mod tests {
         assert!(page.contains(&format!("name=\"client_id\" value=\"{client_id}\"")));
         assert!(page.contains("name=\"state\" value=\"client-state\""));
         assert!(page.contains("name=\"nonce\" value=\"test-nonce\""));
+        assert!(page.contains(&format!(
+            "name=\"code_challenge\" value=\"{}\"",
+            "a".repeat(43)
+        )));
+        let (_, after_form) = page.split_once("</form>").unwrap();
+        assert!(after_form.contains(
+            "<a href=\"/account/password-reset\" target=\"_blank\" rel=\"noopener noreferrer\">Forgot your password?</a>"
+        ));
+        assert!(!after_form.contains("client-state"));
+        assert!(!after_form.contains("test-nonce"));
+        assert!(!after_form.contains("redirect_uri"));
+
+        let recovery = server.get("/account/password-reset").await;
+        recovery.assert_status_ok();
+        assert_eq!(recovery.header("referrer-policy"), "no-referrer");
+        assert!(recovery.text().contains("<div id=\"root\"></div>"));
     }
 
     #[tokio::test]

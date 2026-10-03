@@ -91,6 +91,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 未建立 Keylo 浏览器会话的有效 `/v1/oidc/authorize` 请求会返回同站点 HTML 登录页，并保留原始授权参数；标准 OIDC relying party 只需把浏览器导航到 authorization endpoint，无需解析 Keylo 专用 `login_required` JSON。登录和同意页使用禁止外部资源、嵌入与跨站表单提交的 CSP，并设置 `Cache-Control: no-store`。登录后显示同意页，用户确认后才重定向并签发 code；用户拒绝时，Keylo 仅在 redirect URI 已通过精确注册校验后重定向 `error=access_denied`、原始 `state` 和 `iss`，不签发 code。
 
+登录页提供 `Forgot your password?` 入口，在独立标签打开固定同源 `/account/password-reset`。该链接位于登录表单外，使用 `noopener noreferrer`，不转发账号、密码、redirect URI、`state`、`nonce` 或 PKCE 参数；原标签中的授权表单保持不变。恢复完成后用户返回原登录标签，手动使用新密码登录并确认授权；恢复入口不会自动登录、重定向至客户端或跳过 consent。
+
 `/v1/oidc/token` 失败时使用 OAuth 2.0 错误响应：`invalid_request` 表示 grant 参数不支持，`invalid_client` 表示客户端认证失败（同时返回 `WWW-Authenticate`），`invalid_grant` 表示授权码、redirect URI 或 PKCE verifier 不匹配、失效或已被消费。内部错误统一返回 `server_error`，不泄露数据库或签名细节。
 
 ### 2.2 OIDC 客户端注册

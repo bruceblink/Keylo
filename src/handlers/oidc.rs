@@ -655,10 +655,11 @@ fn authorization_hidden_fields(request: &OidcAuthorizeRequest) -> String {
     )
 }
 
-/// Render the browser login step so standard OIDC clients can start an authorization flow without a Keylo-specific API response.
+/// Render the browser login step and an isolated recovery link. Authorization
+/// parameters stay in the original form and never enter the recovery URL.
 fn login_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
     let body = format!(
-        "<!doctype html><html><body><main><h1>Sign in to authorize {}</h1><p>Requested scopes: {}</p><form method=\"post\" action=\"/v1/oidc/login\">{}<label>Username <input name=\"username\" autocomplete=\"username\" required></label><label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\" required></label><button type=\"submit\">Sign in</button></form></main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Sign in - Keylo</title></head><body><main><h1>Sign in to authorize {}</h1><p>Requested scopes: {}</p><form method=\"post\" action=\"/v1/oidc/login\">{}<label>Username <input name=\"username\" autocomplete=\"username\" required></label><label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\" required></label><button type=\"submit\">Sign in</button></form><p><a href=\"/account/password-reset\" target=\"_blank\" rel=\"noopener noreferrer\">Forgot your password?</a></p></main></body></html>",
         html_escape(client_name),
         html_escape(&request.scope),
         authorization_hidden_fields(request)
@@ -1176,8 +1177,8 @@ mod tests {
         assert!(location.contains("iss=https%3A%2F%2Fidentity.example"));
     }
 
-    #[test]
-    fn login_page_preserves_authorization_parameters_and_escapes_client_metadata() {
+    #[tokio::test]
+    async fn login_page_preserves_authorization_parameters_and_escapes_client_metadata() {
         let request = OidcAuthorizeRequest {
             response_type: "code".to_string(),
             client_id: "portal-web".to_string(),
@@ -1206,11 +1207,49 @@ mod tests {
                 .unwrap(),
             "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
         );
-        let fields = authorization_hidden_fields(&request);
-        assert!(fields.contains("name=\"client_id\" value=\"portal-web\""));
-        assert!(fields.contains("name=\"state\" value=\"state-value\""));
-        assert!(fields.contains("name=\"nonce\" value=\"nonce-value\""));
-        assert!(fields.contains("name=\"code_challenge_method\" value=\"S256\""));
-        assert_eq!(html_escape("Portal <Admin>"), "Portal &lt;Admin&gt;");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page = std::str::from_utf8(&body).unwrap();
+        assert!(page.contains("name=\"client_id\" value=\"portal-web\""));
+        assert!(page.contains("name=\"state\" value=\"state-value\""));
+        assert!(page.contains("name=\"nonce\" value=\"nonce-value\""));
+        assert!(page.contains(&format!(
+            "name=\"code_challenge\" value=\"{}\"",
+            request.code_challenge
+        )));
+        assert!(page.contains("name=\"code_challenge_method\" value=\"S256\""));
+        assert!(page.contains("Sign in to authorize Portal &lt;Admin&gt;"));
+        assert!(!page.contains("Portal <Admin>"));
+        assert!(page.contains("<title>Sign in - Keylo</title>"));
+        assert!(page.contains("content=\"width=device-width, initial-scale=1\""));
+    }
+
+    #[tokio::test]
+    async fn login_recovery_link_is_isolated_from_the_authorization_form() {
+        let request = OidcAuthorizeRequest {
+            response_type: "code".to_string(),
+            client_id: "portal-web".to_string(),
+            redirect_uri: "https://client.example/callback?from=login".to_string(),
+            scope: "openid profile".to_string(),
+            state: Some("private-state".to_string()),
+            nonce: Some("private-nonce".to_string()),
+            code_challenge: "a".repeat(43),
+            code_challenge_method: "S256".to_string(),
+        };
+        let response = login_page(&request, "Portal");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page = std::str::from_utf8(&body).unwrap();
+        let (form, after_form) = page.split_once("</form>").unwrap();
+        let recovery_link = "<a href=\"/account/password-reset\" target=\"_blank\" rel=\"noopener noreferrer\">Forgot your password?</a>";
+
+        assert!(!form.contains("<a "));
+        assert!(after_form.contains(recovery_link));
+        assert!(!after_form.contains("private-state"));
+        assert!(!after_form.contains("private-nonce"));
+        assert!(!after_form.contains("redirect_uri"));
+        assert!(!after_form.contains("code_challenge"));
     }
 }

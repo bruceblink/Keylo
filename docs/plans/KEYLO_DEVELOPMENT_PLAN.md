@@ -2,7 +2,7 @@
 
 > 更新时间：2026-10-03
 >
-> 整理基线：2026-09-25；交付后由 `main` 维护主线，`dev` 与 `main` 对齐；当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；由 `main` 维护主线，本轮只更新当前 `main`，不调整其他分支；当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -21,6 +21,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 - `已完成`：代码、文档和与风险匹配的验证已经交付。
 - `下一切片`：当前唯一允许进入实现的功能范围。
 - `进行中`：范围已确认，正在实现或补齐验收证据。
+- `后续候选`：已有代码或验证缺口，但必须等当前切片完成后再确认实现范围。
 - `未排期`：不是当前主线任务；除非出现真实使用信号，否则不得转入实现。
 - `待环境验证`：功能边界已经写清，但验证所需的外部环境本次没有执行。
 
@@ -32,8 +33,12 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 1 | 账户自助安全闭环 | 已完成 | 邮箱验证、忘记密码申请、密码重置邮件流程、首次强制改密、会话撤销和真实 SMTP 账户链路已完成并通过本机 Docker 验收。 |
 | 2 | 托管账户恢复页面 | 已完成 | 已将邮箱验证和密码恢复 API 接入同源可点击页面，并通过真实后端、Docker 邮件链路和 UI 验收。 |
 | 3 | 托管账户恢复 UI 自动化回归 | 已完成 | Playwright/Chromium 回归、Computer Use 可见窗口验收和 CI 门禁均已通过；不增加产品 API 或账户功能。 |
+| 4 | OIDC 登录页的账户恢复入口 | 已完成 | 代码、单元/HTTP、真实后端 headless 和 Codex 内置浏览器可见交互通过；独立标签不转发授权参数，不改变登录和同意协议。 |
+| 5 | 真实后端账户恢复浏览器门禁 | 下一切片 | 把现有真实 HTTP/SMTP 测试与浏览器交互串成可重复执行的本机 Docker 回归，补齐受控 API 响应不能证明的装配与邮件链路。 |
+| 6 | OIDC 登录失败后的重试体验 | 后续候选 | 当前错误密码返回 JSON；在不改变认证判断和非浏览器 API 错误契约的前提下，让浏览器保留已验证授权参数并重试。 |
+| 7 | 接入样例的 CI 清单对齐 | 后续候选 | 核对本地样例验证脚本与 CI；当前 Spring resource server 已有本地验证，但 CI 的样例步骤未执行该样例。 |
 
-阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 门禁均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 契约，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。阶段 3 完成后，下一产品功能仍须根据真实客户端、组织或运维事件重新选择，不得并行展开多个协议或基础设施方向。
+阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 门禁均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 契约，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
 
 阶段 3 验收条件：
 
@@ -48,7 +53,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 领域 | 已交付能力 | 当前边界 |
 | --- | --- | --- |
 | 部署与首启 | SQLx 迁移、Docker Compose 依赖、PostgreSQL/Redis 就绪检查、启动 fail-fast、密文配置、RSA 密钥加载、setup wizard、healthz/readyz、固定基数 metrics。 | 当前以单实例 PostgreSQL/Redis 运行边界为准，不承诺多实例高可用或跨区域恢复。 |
-| 标准 OIDC | Discovery、Authorization Code + PKCE、state/nonce、JWKS、UserInfo、consent、浏览器会话、logout、public/confidential client 和 client secret rotation。 | 仅发布已实现的授权码流程；不包含 Dynamic Client Registration、Device Flow、CIBA、PAR、DPoP 或 Token Exchange。 |
+| 标准 OIDC | Discovery、Authorization Code + PKCE、state/nonce、JWKS、UserInfo、consent、浏览器会话、logout、public/confidential client、client secret rotation 与登录页的独立账户恢复入口。 | 仅发布已实现的授权码流程；不包含 Dynamic Client Registration、Device Flow、CIBA、PAR、DPoP 或 Token Exchange；恢复入口不自动继续授权或绕过 consent。 |
 | 本地认证 | 用户注册、密码登录、密码复杂度、登录限流、登录锁定、`email_verified` 状态、用户/管理员改密、管理员重置密码、邮箱验证、忘记密码和密码重置。 | `MailProvider` 保持可插拔；当前提供默认禁用模式和 SMTP 适配器，外部邮件服务适配器仍不在主线范围；邮件投递不参与认证授权决策。 |
 | MFA 与会话 | TOTP enrollment、近期 MFA、恢复码一次性消费、敏感管理操作 step-up、refresh session 原子轮换、replay 撤销、按主体/客户端/单会话撤销、组织状态联动撤销。 | 人类组织会话只使用当前显式组织上下文；不可把请求头当作组织授权依据。 |
 | 密钥与 Token | RS256/JWKS active/passive overlap、access/refresh/service access Token、Token introspection、黑名单、密钥轮换/回滚/下线和审计。 | passive key 只在配置的 overlap 窗口内用于验签，新 Token 只使用 active key。 |
@@ -61,13 +66,17 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 ## 4. 当前基线验证证据
 
-以下证据记录于 2026-09-25，后续功能必须在相同边界上追加新的验证记录：
+基线证据记录于 2026-09-25，后续切片按日期追加；不同工具、提交和环境的证据不能相互替代：
 
 | 验证 | 结果 |
 | --- | --- |
+| OIDC 账户恢复入口代码回归（2026-10-03） | `npm ci`、`npm run build`、原有 Chromium 7 项 UI 契约回归、`cargo build --bin keylo`、fmt、workspace Clippy、Markdown 链接和 `git diff --check` 通过。`scripts/run_tests.ps1 -DatabasePort 55432` 使用本机 Docker `postgres:17-alpine`（`127.0.0.1:55432` -> `5432`）与 `axllent/mailpit:v1.21.8`（SMTP `11025` -> `1025`，API `18025` -> `8025`）；readiness、150 单元、1 customer-support、26 database、77 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP 和 13 user 共 289 项全部通过；测试容器、匿名卷和脚本临时密钥目录已清理。 |
+| OIDC 账户恢复入口真实后端 headless 检查（2026-10-03） | 独立本机 Docker PostgreSQL 17（`55433`）、Mailpit `v1.21.8`（SMTP `11026`、API `18026`）与真实 Keylo（`127.0.0.1:2346`）readiness 通过。Chromium 在 `1280x720` 和 `390x844` 点击恢复入口，确认同源新标签、`window.opener=null`、无 Referer、原授权 URL/hidden fields/合成用户名不变、无横向溢出/持久化存储/应用错误/外部资源请求；匿名恢复申请经真实 HTTP 返回统一提示，未提交密码修改或真实凭据。后端与 Docker 容器、匿名卷和端口映射已清理；系统策略拒绝递归删除 `C:\Users\likanug\AppData\Local\Temp\keylo-oidc-recovery-ui-9dc0a119da3a`，本轮临时测试密钥、构建副本与辅助脚本待人工清理，不在 Git 中。截图保留在独立临时证据目录。 |
+| OIDC 账户恢复入口 Codex 内置浏览器（2026-10-03） | 在可见 Codex In-app Browser 打开真实 Keylo `/v1/oidc/authorize`，点击 `Forgot your password?` 后实际出现独立恢复标签；输入 `.test` 合成标识符并提交真实恢复申请，页面返回统一成功提示，关闭恢复标签后原登录页、原授权 URL 与 8 项 hidden fields 不变。`1280x720` 和 `390x844` 视口检查通过，缺失 token、表单启用/恢复和控制台 error/warn 均正常；截图保存于仓库外。Windows Chrome 首次状态读取因无法可靠判断 URL 而停止，未重试该窗口输入；按用户要求切换内置浏览器后验收通过。未输入真实凭据、未提交密码变更；本次可见交互不证明真实账户邮件投递，SMTP 证据来自独立 Docker Rust 测试。 |
+| OIDC 账户恢复入口远端 CI | 本次功能提交推送后触发 CI，远端结果单独核对；既有 `1d0b616` 的绿灯不作为本次提交的证据，也不把本地通过等同于远端通过。 |
 | 托管账户恢复 UI 自动化回归（2026-10-03） | `web` 执行 `npm ci`、`npm run build` 和 `npm run test:e2e`；Chromium 7 项通过，覆盖账户存在性统一提示、密码重置成功/失败、邮箱验证成功/失败/缺失 token、fragment 清理与存储检查、重复提交防护、桌面和 `390x844` 无横向溢出，以及共享 setup 页面回归。API 响应由测试控制，只作为 UI 契约验证；页面运行时错误断言为空。Playwright 1.63.0、锁定的 Vite 7.3.6；`npm audit` 为 0 vulnerabilities。 |
 | Computer Use 可见窗口检查（2026-10-03） | Codex In-app Browser 在 `1280x720` 可见窗口打开本地 Vite 页面；核对密码恢复表单可输入并启用提交按钮（仅输入 `.test` 合成标识符、未提交），随后打开邮箱验证缺失 fragment 页面并确认稳定提示；浏览器控制台 error/warn 为空。真实密码变更未通过 UI 提交。 |
-| UI 自动化 CI 门禁 | `.github/workflows/ci.yml` 已将 Chromium UI 回归接入 Run Tests job，相关 `web/tests/**` 文件纳入触发路径；远端 workflow 尚未运行，待推送后核对结果。 |
+| UI 自动化 CI 门禁（2026-10-03） | `.github/workflows/ci.yml` 已将 Chromium UI 回归接入 Run Tests job，相关 `web/tests/**` 文件纳入触发路径；提交 `1d0b616` 的 run `37089762986` 已完成，Security Audit、Run Tests 和 Code Coverage 全部通过。该证据只对应此提交，不代表后续代码已经通过远端验证。 |
 | `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、149 个单元、1 个 customer-support、26 个 database、77 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、4 个 SMTP 和 13 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，Mailpit 重启后再次投递成功，端口不可达和黑洞超时均撤销 token，无效 TLS 配置在投递前拒绝，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
 | `.\scripts\validate_oidc_rp_examples.ps1` | Node、Go、Rust Axum、Spring Boot OIDC RP 和 Spring resource server 样例通过；该结果不等同于 Keycloak/TLS/浏览器互操作通过。 |
 | `.\scripts\check_markdown_links.ps1` | README 和 `docs/` 下相对 Markdown 链接通过；外部 URL、锚点和围栏代码示例不在检查范围内。 |
@@ -153,7 +162,39 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 ## 8. 下一切片的进入条件
 
-托管账户恢复页面完成后，下一功能必须同时满足以下条件才可加入本文件：
+### 8.1 已完成切片：OIDC 登录页的账户恢复入口
+
+状态：代码、自动化验证和 Codex 内置浏览器可见交互均已完成。2026-10-03 在此边界结束开发，不启动阶段 5；独立 UI 环境已停止并移除 Docker 资源，受系统删除策略限制的临时文件保留为明确清理事项。
+
+使用场景：标准 OIDC 客户端把用户带到 `/v1/oidc/authorize` 后，切片前忘记密码的用户无法从登录页进入已有恢复流程。该缺口来自源码核对，不假设新的客户、协议或管理控制台需求。
+
+实施范围：
+
+1. 在服务器渲染的登录页增加固定同源 `/account/password-reset` 链接，放在登录表单外；补充页面标题、UTF-8 和移动 viewport 元数据，不重做登录或同意页布局。
+2. 使用独立标签和 `rel="noopener noreferrer"`；原登录页保留 `state`、`nonce`、redirect URI 和 PKCE hidden fields，恢复页不得接收这些参数、账号或密码。
+3. 不新增 API、配置或迁移；不自动继续授权、不跳过 consent、不新增任意 return URL，不修改认证、限流、审计或一次性 token 的边界。
+4. 同步更新 OIDC 接口与账户恢复使用说明；在一个功能提交中交付实现、回归和验证记录。
+
+验收条件：
+
+- 单元和真实 HTTP 测试确认链接地址、独立标签、安全属性、客户端名称转义以及完整授权参数保留；没有浏览器 session 时仍显示登录表单。
+- 浏览器验证点击入口后打开同源恢复页，`window.opener` 为 `null`，请求无 Referer，原表单和原授权 URL 不变；桌面和 `390x844` 视口可用。
+- Computer Use 在真实窗口点击入口并确认恢复表单，返回原标签后仍能看到原登录页；不输入或提交真实认证凭据、不提交密码变更。
+- `npm ci`、`npm run build`、现有 7 项 Chromium UI 回归、Rust fmt、workspace Clippy、构建、本机 Docker 全量测试、Markdown 链接和 diff 检查通过。
+
+回滚边界：移除该静态链接、页面元数据及其回归即可回到原登录 UI；账户恢复 API、邮件链接、数据库结构和已有会话均不变。
+
+### 8.2 后续顺序
+
+下次先核对本次提交的远端 CI，并清理本轮剩余临时目录，然后只推进阶段 5。阶段 6、7 依次等待前一切片交付，不并行实施：
+
+1. 使用独立本机 Docker PostgreSQL 17 和 Mailpit，启动真实 Keylo 而非仅使用 Vite proxy 或受控 API 响应。
+2. 用合成账户和真实邮件驱动邮箱验证、密码恢复、重放拒绝及新密码登录；浏览器日志和失败产物不得包含原始 token、密码、密钥或收件人。
+3. 增加有界启动、readiness、失败退出、端口隔离与清理；通过一个入口执行，并接入 CI。现有快速 UI 契约测试保留，真实链路测试单独标识。
+4. 阶段 6 只处理浏览器错误密码重试：保持统一错误提示、密码不回显、原始已验证授权参数保留，并验证停用用户、外部身份账户和组织状态拒绝；首次强制改密和 MFA 等认证流程不能因此被绕过。
+5. 阶段 7 检查接入样例与 CI 清单是否一致，补上 Spring resource server 构建和失败关闭回归；只补实际缺失的门禁，不借此新增 SDK、客户端协议或管理界面。
+
+阶段 5 不承诺外部 SMTP 供应商、Keycloak/TLS 矩阵或发布结果；这些仍需对应独立环境证据。新产品功能必须同时满足以下条件才可加入本文件：
 
 1. 有明确的真实客户端、组织或运维事件，并说明影响范围。
 2. 能用现有 Principal、组织和 RBAC 模型表达，若不能，必须说明新增数据模型或协议的必要性。

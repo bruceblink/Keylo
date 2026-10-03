@@ -31,6 +31,8 @@ code_challenge_method=S256
 
 Keylo 会显示同站点登录和同意页面。成功回调包含 `code`、原始 `state` 与 `iss`；拒绝包含 `error=access_denied`、原始 `state` 与 `iss`。回调处理器必须先验证 `state` 和 `iss`，再处理 `code` 或错误。
 
+登录页的 `Forgot your password?` 在独立标签打开同源账户恢复页，不转发授权参数、不发送原授权 URL 的 Referer，并隔离新标签的 opener。恢复完成后返回原标签，重新输入密码并确认授权；接入方不需要添加 return URL 或修改回调处理。
+
 ## 3. 兑换与校验
 
 向 token endpoint 提交 `grant_type=authorization_code`、`code`、`redirect_uri` 和保存的 `code_verifier`。public client 还提交 `client_id`；confidential client 使用 `client_secret_basic`，或使用已声明的 `client_secret_post`。

@@ -394,6 +394,8 @@ curl -s -X POST http://127.0.0.1:2345/v1/user/change-password \
 
 直接打开链接即可完成操作。页面会先清除 URL fragment，再调用现有确认 API；token 不会写入 query string、浏览器持久化存储或审计记录。密码恢复申请也可以直接打开 `/account/password-reset`，输入邮箱或用户名；无论账户是否存在，页面都会显示相同的申请结果。
 
+通过标准 OIDC 客户端登录时，可以点击 Keylo 登录页的 `Forgot your password?`。恢复页在独立标签打开，不接收原授权请求参数；恢复完成后返回原登录标签，使用新密码登录，再确认客户端授权。不要把授权 URL、账号或 token 追加到恢复链接中。
+
 页面需要 `web` 前端构建产物；开发期可以运行：
 
 ```powershell
