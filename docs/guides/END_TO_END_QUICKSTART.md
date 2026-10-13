@@ -406,6 +406,22 @@ npm run build
 
 密码恢复成功后，首次登录 token 可能带有 `password_change_required=true`；按下节的自助改密流程完成首次改密。
 
+开发者可以从 `web` 运行两组独立的浏览器回归：
+
+```powershell
+cd web
+npm ci
+npx playwright install chromium
+npm run test:e2e
+npm run test:e2e:real
+```
+
+`test:e2e` 使用受控 API 响应检查页面交互。`test:e2e:real` 需要本机 Docker、Node.js 和 Rust 工具链；它构建前端及 Keylo，在随机 loopback 端口启动独立 `postgres:17-alpine` 和 `axllent/mailpit:v1.21.8`，通过真实 HTTP、SMTP 和 Chromium 检查邮箱验证、密码恢复、重复使用拒绝、新密码登录和 OIDC 恢复入口。测试只创建合成账户，不读取当前部署的数据或配置。
+
+启动、readiness 和测试均有超时。成功或失败后，入口停止本轮 Keylo 进程、移除本轮容器及匿名卷，并删除临时密钥。失败输出只报告固定阶段；真实链路测试不保存 trace、视频、截图或敏感页面内容。不要为此测试开启含密码或 token 的产物。Mailpit 结果不代表外部 SMTP 服务验证。
+
+需要可见浏览器验收时运行 `npm run test:e2e:real -- --serve`，按输出的本机地址打开页面；完成后按 Ctrl+C 清理。该模式只启动服务，不运行回归，不作为测试通过证据。
+
 ### 6.5 访问受保护示例
 
 ```bash

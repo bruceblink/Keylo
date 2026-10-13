@@ -156,11 +156,16 @@ jobs:
         npm ci
         npm run build
 
-    - name: Test account recovery UI
+    - name: Test account recovery UI with controlled responses
       working-directory: web
       run: |
         npx playwright install --with-deps chromium
         npm run test:e2e
+
+    - name: Test account recovery against isolated Docker services
+      working-directory: web
+      timeout-minutes: 15
+      run: npm run test:e2e:real
 
     - name: Wait for Postgres
       env:

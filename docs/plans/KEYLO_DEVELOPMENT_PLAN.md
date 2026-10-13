@@ -1,8 +1,8 @@
 # Keylo 线性开发主线与功能清单
 
-> 更新时间：2026-10-03
+> 更新时间：2026-10-13
 >
-> 整理基线：2026-09-25；由 `main` 维护主线，本轮只更新当前 `main`，不调整其他分支；当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；本轮开发从提交 `192ede8` 开始，`main` 与 `origin/main` 已同步且工作区干净。本轮新增真实服务浏览器回归、CI 检查和相关文档，不改变认证或账户恢复功能；当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -32,13 +32,13 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 0 | 认证、会话、授权、组织和运行基线 | 已完成 | 形成当前 `v2.1.2` 发布线的可用能力和安全边界。 |
 | 1 | 账户自助安全闭环 | 已完成 | 邮箱验证、忘记密码申请、密码重置邮件流程、首次强制改密、会话撤销和真实 SMTP 账户链路已完成并通过本机 Docker 验收。 |
 | 2 | 托管账户恢复页面 | 已完成 | 已将邮箱验证和密码恢复 API 接入同源可点击页面，并通过真实后端、Docker 邮件链路和 UI 验收。 |
-| 3 | 托管账户恢复 UI 自动化回归 | 已完成 | Playwright/Chromium 回归、Computer Use 可见窗口验收和 CI 门禁均已通过；不增加产品 API 或账户功能。 |
+| 3 | 托管账户恢复 UI 自动化回归 | 已完成 | Playwright/Chromium 回归、Computer Use 可见窗口验收和 CI 检查均已通过；不增加产品 API 或账户功能。 |
 | 4 | OIDC 登录页的账户恢复入口 | 已完成 | 代码、单元/HTTP、真实后端 headless 和 Codex 内置浏览器可见交互通过；独立标签不转发授权参数，不改变登录和同意协议。 |
-| 5 | 真实后端账户恢复浏览器门禁 | 下一切片 | 把现有真实 HTTP/SMTP 测试与浏览器交互串成可重复执行的本机 Docker 回归，补齐受控 API 响应不能证明的装配与邮件链路。 |
-| 6 | OIDC 登录失败后的重试体验 | 后续候选 | 当前错误密码返回 JSON；在不改变认证判断和非浏览器 API 错误契约的前提下，让浏览器保留已验证授权参数并重试。 |
+| 5 | 真实后端账户恢复浏览器回归 | 进行中 | 使用独立本机 Docker、真实 Keylo 和真实邮件执行浏览器回归；本轮范围固定为测试入口、测试辅助代码、CI 接入和验证记录。 |
+| 6 | OIDC 登录失败后的重试体验 | 后续候选 | 当前错误密码返回 JSON；在不改变认证判断和非浏览器 API 错误格式和状态码的前提下，让浏览器保留已验证授权参数并重试。 |
 | 7 | 接入样例的 CI 清单对齐 | 后续候选 | 核对本地样例验证脚本与 CI；当前 Spring resource server 已有本地验证，但 CI 的样例步骤未执行该样例。 |
 
-阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 门禁均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 契约，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
+阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 检查均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 交互约定，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
 
 阶段 3 验收条件：
 
@@ -70,14 +70,15 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 | 验证 | 结果 |
 | --- | --- |
-| OIDC 账户恢复入口代码回归（2026-10-03） | `npm ci`、`npm run build`、原有 Chromium 7 项 UI 契约回归、`cargo build --bin keylo`、fmt、workspace Clippy、Markdown 链接和 `git diff --check` 通过。`scripts/run_tests.ps1 -DatabasePort 55432` 使用本机 Docker `postgres:17-alpine`（`127.0.0.1:55432` -> `5432`）与 `axllent/mailpit:v1.21.8`（SMTP `11025` -> `1025`，API `18025` -> `8025`）；readiness、150 单元、1 customer-support、26 database、77 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP 和 13 user 共 289 项全部通过；测试容器、匿名卷和脚本临时密钥目录已清理。 |
+| OIDC 账户恢复入口代码回归（2026-10-03） | `npm ci`、`npm run build`、原有 Chromium 7 项 UI 交互约定回归、`cargo build --bin keylo`、fmt、workspace Clippy、Markdown 链接和 `git diff --check` 通过。`scripts/run_tests.ps1 -DatabasePort 55432` 使用本机 Docker `postgres:17-alpine`（`127.0.0.1:55432` -> `5432`）与 `axllent/mailpit:v1.21.8`（SMTP `11025` -> `1025`，API `18025` -> `8025`）；readiness、150 单元、1 customer-support、26 database、77 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP 和 13 user 共 289 项全部通过；测试容器、匿名卷和脚本临时密钥目录已清理。 |
 | OIDC 账户恢复入口真实后端 headless 检查（2026-10-03） | 独立本机 Docker PostgreSQL 17（`55433`）、Mailpit `v1.21.8`（SMTP `11026`、API `18026`）与真实 Keylo（`127.0.0.1:2346`）readiness 通过。Chromium 在 `1280x720` 和 `390x844` 点击恢复入口，确认同源新标签、`window.opener=null`、无 Referer、原授权 URL/hidden fields/合成用户名不变、无横向溢出/持久化存储/应用错误/外部资源请求；匿名恢复申请经真实 HTTP 返回统一提示，未提交密码修改或真实凭据。后端与 Docker 容器、匿名卷和端口映射已清理；系统策略拒绝递归删除 `C:\Users\likanug\AppData\Local\Temp\keylo-oidc-recovery-ui-9dc0a119da3a`，本轮临时测试密钥、构建副本与辅助脚本待人工清理，不在 Git 中。截图保留在独立临时证据目录。 |
 | OIDC 账户恢复入口 Codex 内置浏览器（2026-10-03） | 在可见 Codex In-app Browser 打开真实 Keylo `/v1/oidc/authorize`，点击 `Forgot your password?` 后实际出现独立恢复标签；输入 `.test` 合成标识符并提交真实恢复申请，页面返回统一成功提示，关闭恢复标签后原登录页、原授权 URL 与 8 项 hidden fields 不变。`1280x720` 和 `390x844` 视口检查通过，缺失 token、表单启用/恢复和控制台 error/warn 均正常；截图保存于仓库外。Windows Chrome 首次状态读取因无法可靠判断 URL 而停止，未重试该窗口输入；按用户要求切换内置浏览器后验收通过。未输入真实凭据、未提交密码变更；本次可见交互不证明真实账户邮件投递，SMTP 证据来自独立 Docker Rust 测试。 |
 | OIDC 账户恢复入口远端 CI（2026-10-03） | 功能提交 `e789ea3` 已推送到 `main`；run `37104858502` 已完成，Run Tests、Security Audit 和 Code Coverage 全部通过。Run Tests 包含 UI 回归、完整 Rust 集成测试、OIDC relying-party 样例和 release 构建；Code Coverage 完成 tarpaulin 与 Codecov 上传。 |
-| 托管账户恢复 UI 自动化回归（2026-10-03） | `web` 执行 `npm ci`、`npm run build` 和 `npm run test:e2e`；Chromium 7 项通过，覆盖账户存在性统一提示、密码重置成功/失败、邮箱验证成功/失败/缺失 token、fragment 清理与存储检查、重复提交防护、桌面和 `390x844` 无横向溢出，以及共享 setup 页面回归。API 响应由测试控制，只作为 UI 契约验证；页面运行时错误断言为空。Playwright 1.63.0、锁定的 Vite 7.3.6；`npm audit` 为 0 vulnerabilities。 |
+| 真实服务账户恢复浏览器回归（2026-10-13） | `npm run test:e2e:real` 独立启动本机 Docker `postgres:17-alpine`（本次 loopback 端口 `9061`）、`axllent/mailpit:v1.21.8`（SMTP `9063`、API `9064`）和真实 Keylo（`127.0.0.1:9065`）。就绪检查、前端和后端构建均通过；桌面与移动视口共 4 项浏览器测试通过，覆盖真实 OIDC 恢复入口、授权字段保留、真实 SMTP 邮件链接、邮箱验证、密码重置、token 重放拒绝、新密码登录、旧密码与旧 refresh token 拒绝。`--skip-build -- --grep __force_no_test__` 的受控失败检查返回非零；两次运行都清理本轮容器、匿名卷、Keylo 进程和临时密钥。Computer Use 在 Codex 内置浏览器以 `.test` 合成标识符验证本机恢复申请提示和原登录标签保持；未输入真实账户或提交密码变更。 |
+| 托管账户恢复 UI 自动化回归（2026-10-03） | `web` 执行 `npm ci`、`npm run build` 和 `npm run test:e2e`；Chromium 7 项通过，覆盖账户存在性统一提示、密码重置成功/失败、邮箱验证成功/失败/缺失 token、fragment 清理与存储检查、重复提交防护、桌面和 `390x844` 无横向溢出，以及共享 setup 页面回归。API 响应由测试控制，只作为 UI 交互约定验证；页面运行时错误断言为空。Playwright 1.63.0、锁定的 Vite 7.3.6；`npm audit` 为 0 vulnerabilities。 |
 | Computer Use 可见窗口检查（2026-10-03） | Codex In-app Browser 在 `1280x720` 可见窗口打开本地 Vite 页面；核对密码恢复表单可输入并启用提交按钮（仅输入 `.test` 合成标识符、未提交），随后打开邮箱验证缺失 fragment 页面并确认稳定提示；浏览器控制台 error/warn 为空。真实密码变更未通过 UI 提交。 |
-| UI 自动化 CI 门禁（2026-10-03） | `.github/workflows/ci.yml` 已将 Chromium UI 回归接入 Run Tests job，相关 `web/tests/**` 文件纳入触发路径；提交 `1d0b616` 的 run `37089762986` 已完成，Security Audit、Run Tests 和 Code Coverage 全部通过。该证据只对应此提交，不代表后续代码已经通过远端验证。 |
-| `.\scripts\run_tests.ps1 -DatabasePort 55432` | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、149 个单元、1 个 customer-support、26 个 database、77 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、4 个 SMTP 和 13 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，Mailpit 重启后再次投递成功，端口不可达和黑洞超时均撤销 token，无效 TLS 配置在投递前拒绝，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
+| UI 自动化 CI 检查（2026-10-03） | `.github/workflows/ci.yml` 已将 Chromium UI 回归接入 Run Tests job，相关 `web/tests/**` 文件纳入触发路径；提交 `1d0b616` 的 run `37089762986` 已完成，Security Audit、Run Tests 和 Code Coverage 全部通过。该证据只对应此提交，不代表后续代码已经通过远端验证。 |
+| 本机 Docker 全量验证（2026-09-25） | 使用本机 Docker `postgres:17-alpine`（宿主 `127.0.0.1:55432` -> 容器 `5432`）和 `axllent/mailpit:v1.21.8`（SMTP `127.0.0.1:11025` -> `1025`，API `127.0.0.1:18025` -> `8025`）；PostgreSQL readiness、Mailpit readiness、fmt、workspace Clippy、149 个单元、1 个 customer-support、26 个 database、77 个 HTTP、3 个 load、3 个 OAuth、12 个 RBAC、4 个 SMTP 和 13 个 user 测试全部通过；真实 `AppState::new` 账户邮件流程已验证邮箱验证、密码重置、首次强制改密和失败撤销，Mailpit 重启后再次投递成功，端口不可达和黑洞超时均撤销 token，无效 TLS 配置在投递前拒绝，脚本结束后容器、匿名卷、端口映射和临时密钥目录已清理。 |
 | `.\scripts\validate_oidc_rp_examples.ps1` | Node、Go、Rust Axum、Spring Boot OIDC RP 和 Spring resource server 样例通过；该结果不等同于 Keycloak/TLS/浏览器互操作通过。 |
 | `.\scripts\check_markdown_links.ps1` | README 和 `docs/` 下相对 Markdown 链接通过；外部 URL、锚点和围栏代码示例不在检查范围内。 |
 | `actionlint .github/workflows/ci.yml`、`git diff --check` | 通过。 |
@@ -104,7 +105,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 ### 5.3 实施顺序与提交边界
 
-邮件 provider、用户邮箱验证、忘记密码申请和密码重置已完成。真实 `AppState::new` 已验证会按配置装配 SMTP provider，账户接口能从 Mailpit 收到验证和重置邮件，并完成 token 消费、首次强制改密和失败撤销。SMTP 适配器只负责一次投递尝试，密码可通过统一 AES-256-GCM 密文文件加载；投递失败会撤销新建的一次性 token。密码恢复 token 只保存 SHA-256 摘要，绑定当前已验证邮箱，成功消费在同一事务内更新密码、撤销 refresh/OIDC 会话并写入审计。SMTP 生产运维加固已完成；阶段 2 协议和基础设施扩展仍未排期。
+邮件 provider、用户邮箱验证、忘记密码申请和密码重置已完成。真实 `AppState::new` 已验证会按配置装配 SMTP provider，账户接口能从 Mailpit 收到验证和重置邮件，并完成 token 消费、首次强制改密和失败撤销。SMTP 适配器只负责一次投递尝试，密码可通过统一 AES-256-GCM 密文文件加载；投递失败会撤销新建的一次性 token。密码恢复 token 只保存 SHA-256 摘要，绑定当前已验证邮箱，成功消费在同一事务内更新密码、撤销 refresh/OIDC 会话并写入审计。SMTP 生产运维加固已完成；协议和基础设施扩展仍未排期。
 
 这是面向用户的认证功能。若实现涉及 `web/` 页面，提交前必须完成真实窗口验收；真实窗口无法启动时，至少执行 headless 渲染和交互测试，并在验证记录中明确限制。仅修改 API 和服务端时，以真实 HTTP 测试和本机 Docker PostgreSQL 集成测试为准。
 
@@ -164,7 +165,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 ### 8.1 已完成切片：OIDC 登录页的账户恢复入口
 
-状态：代码、自动化验证和 Codex 内置浏览器可见交互均已完成。2026-10-03 在此边界结束开发，不启动阶段 5；独立 UI 环境已停止并移除 Docker 资源，受系统删除策略限制的临时文件保留为明确清理事项。
+状态：代码、自动化验证和 Codex 内置浏览器可见交互均已完成。2026-10-11 复审确认阶段 4 已交付。独立 UI 环境已停止并移除 Docker 资源；系统策略拒绝递归删除的临时目录位于仓库外，不阻塞阶段 5，也不属于 Git 交付内容。
 
 使用场景：标准 OIDC 客户端把用户带到 `/v1/oidc/authorize` 后，切片前忘记密码的用户无法从登录页进入已有恢复流程。该缺口来自源码核对，不假设新的客户、协议或管理控制台需求。
 
@@ -186,13 +187,22 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 ### 8.2 后续顺序
 
-下次只清理本轮剩余临时目录，然后推进阶段 5。阶段 6、7 依次等待前一切片交付，不并行实施：
+2026-10-13 阶段 5 的本机浏览器回归和失败清理检查已通过；远端 CI 仍需验证后再将阶段标为完成。遗留临时目录只作为人工清理事项，不作为开发前置条件；阶段 6、7 依次等待前一切片交付，不并行实施：
 
 1. 使用独立本机 Docker PostgreSQL 17 和 Mailpit，启动真实 Keylo 而非仅使用 Vite proxy 或受控 API 响应。
 2. 用合成账户和真实邮件驱动邮箱验证、密码恢复、重放拒绝及新密码登录；浏览器日志和失败产物不得包含原始 token、密码、密钥或收件人。
-3. 增加有界启动、readiness、失败退出、端口隔离与清理；通过一个入口执行，并接入 CI。现有快速 UI 契约测试保留，真实链路测试单独标识。
+3. 增加有界启动、readiness、失败退出、端口隔离与清理；通过一个入口执行，并接入 CI。现有快速 UI 交互约定测试保留，真实链路测试单独标识。
 4. 阶段 6 只处理浏览器错误密码重试：保持统一错误提示、密码不回显、原始已验证授权参数保留，并验证停用用户、外部身份账户和组织状态拒绝；首次强制改密和 MFA 等认证流程不能因此被绕过。
-5. 阶段 7 检查接入样例与 CI 清单是否一致，补上 Spring resource server 构建和失败关闭回归；只补实际缺失的门禁，不借此新增 SDK、客户端协议或管理界面。
+5. 阶段 7 检查接入样例与 CI 清单是否一致，补上 Spring resource server 构建和失败关闭回归；只补实际缺失的检查，不借此新增 SDK、客户端协议或管理界面。
+
+阶段 5 的完成判定：
+
+1. 一个入口能够有界启动本机 Docker PostgreSQL 17、Mailpit 和真实 Keylo，等待 readiness，失败时退出非零，并在成功或失败后清理容器、端口映射、匿名卷和临时密钥。
+2. 测试使用合成账户和合成 OIDC 客户端，通过真实 HTTP/SMTP 和浏览器完成邮箱验证、密码恢复、重放拒绝和新密码登录；不得输出原始 token、密码、密钥或收件人。
+3. 浏览器证据覆盖 OIDC 登录页进入恢复页、独立标签安全属性、原授权参数保持、桌面与 `390x844` 视口、控制台错误和横向溢出；邮件投递证据来自本机 Docker Mailpit，并单独标注其边界。
+4. CI 执行该真实链路测试；现有受控 API UI 交互约定测试继续保留并单独命名。Rust fmt、workspace Clippy、相关集成测试、Markdown 链接和 `git diff --check` 全部通过。
+
+阶段 5 的回滚边界：移除测试入口、CI 步骤和测试辅助代码即可回滚；不修改生产认证判断、账户恢复 API、数据库迁移或邮件 provider 接口约定。
 
 阶段 5 不承诺外部 SMTP 供应商、Keycloak/TLS 矩阵或发布结果；这些仍需对应独立环境证据。新产品功能必须同时满足以下条件才可加入本文件：
 

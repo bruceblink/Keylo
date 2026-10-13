@@ -4,6 +4,7 @@ import path from 'node:path';
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: '**/*.real.spec.ts',
   outputDir: path.join(tmpdir(), 'keylo-account-recovery-playwright-results'),
   fullyParallel: true,
   reporter: 'list',
