@@ -143,6 +143,87 @@ test('OIDC recovery opens an isolated tab and preserves authorization state', as
   });
 });
 
+test('OIDC login failures can be retried without retaining passwords', async ({ page, request, context }) => {
+  await sensitiveFlow('OIDC login retry', async (setStage) => {
+    const errors: boolean[] = [];
+    watchRuntime(page, errors);
+    const admin = await post(request, '/v1/admin/token', {
+      client_id: process.env.KEYLO_REAL_ADMIN_ID, client_secret: process.env.KEYLO_REAL_ADMIN_SECRET
+    });
+    const clientID = `login-${randomUUID()}`;
+    setStage('create_oidc_client');
+    await post(request, '/v1/admin/oidc/clients', {
+      client_id: clientID, name: 'Real Browser Login Retry', client_type: 'public',
+      redirect_uris: ['http://127.0.0.1:32000/callback'], scopes: ['openid', 'profile'], grant_types: ['authorization_code']
+    }, admin.access_token);
+
+    const username = `oidc-retry-${randomUUID()}`;
+    const email = `${username}@example.test`;
+    const initialPassword = `Old#${randomBytes(18).toString('hex')}aA1`;
+    const password = `New#${randomBytes(18).toString('hex')}aA1`;
+    setStage('register_synthetic_account');
+    await post(request, '/v1/auth/register', { username, email, password: initialPassword });
+    setStage('prepare_local_password');
+    const initialLogin = await post(request, '/v1/auth/token', {
+      client_id: username, client_secret: initialPassword
+    });
+    await post(request, '/v1/user/change-password', {
+      current_password: initialPassword, new_password: password
+    }, initialLogin.access_token);
+
+    const params = new URLSearchParams({
+      response_type: 'code', client_id: clientID, redirect_uri: 'http://127.0.0.1:32000/callback',
+      scope: 'openid profile', state: 'synthetic-state', nonce: 'synthetic-nonce',
+      code_challenge: createHash('sha256').update(randomBytes(32)).digest('base64url'),
+      code_challenge_method: 'S256'
+    });
+    setStage('open_authorization_page');
+    await page.goto(`/v1/oidc/authorize?${params}`);
+    await expect(page.getByRole('heading', { name: 'Sign in to authorize Real Browser Login Retry' })).toBeVisible();
+    const pageFitsViewport = async () => page.evaluate(
+      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth
+    );
+    expect(await pageFitsViewport()).toBe(true);
+    await page.getByLabel('Username').fill(username);
+    const hiddenFields = () => page.locator('input[type=hidden]').evaluateAll((fields) => fields.map((field) => ({
+      name: (field as HTMLInputElement).name, value: (field as HTMLInputElement).value
+    })));
+    const originalFields = await hiddenFields();
+    expect(originalFields).toHaveLength(8);
+
+    const wrongPassword = `Wrong#${randomBytes(18).toString('hex')}aA1`;
+    await page.getByLabel('Password').fill(wrongPassword);
+    setStage('submit_wrong_password');
+    const wrongResponsePromise = page.waitForResponse((response) =>
+      response.url() === `${baseURL}/v1/oidc/login` && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    const wrongResponse = await wrongResponsePromise;
+    expect(wrongResponse.status()).toBe(200);
+    await expect(page.getByRole('alert')).toHaveText('Incorrect username or password. Please try again.');
+    await expect(page.getByLabel('Username')).toHaveValue(username);
+    await expect(page.getByLabel('Password')).toHaveValue('');
+    expect((await page.content()).includes(wrongPassword)).toBe(false);
+    expect(await hiddenFields()).toEqual(originalFields);
+    expect((await context.cookies()).some((cookie) => cookie.name === 'keylo_oidc_session')).toBe(false);
+    expect(await pageFitsViewport()).toBe(true);
+
+    setStage('retry_with_correct_password');
+    await page.getByLabel('Password').fill(password);
+    const successResponsePromise = page.waitForResponse((response) =>
+      response.url() === `${baseURL}/v1/oidc/login` && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    const successResponse = await successResponsePromise;
+    expect(successResponse.status()).toBe(200);
+    await expect(page.getByRole('heading', { name: 'Authorize Real Browser Login Retry' })).toBeVisible();
+    expect(await hiddenFields()).toEqual(originalFields);
+    expect((await context.cookies()).some((cookie) => cookie.name === 'keylo_oidc_session')).toBe(true);
+    expect(await pageFitsViewport()).toBe(true);
+    expect(errors).toEqual([]);
+  });
+});
+
 test('real SMTP links verify email and reset a password exactly once', async ({ page, request }) => {
   await sensitiveFlow('SMTP account recovery lifecycle', async (setStage) => {
     const runtimeErrors: boolean[] = [];

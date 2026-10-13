@@ -15,6 +15,7 @@ const SERVICE_READINESS_TIMEOUT_MS = 120_000;
 const CONTAINER_READINESS_TIMEOUT_MS = 60_000;
 const SAFE_TEST_TITLES = new Set([
   'OIDC recovery opens an isolated tab and preserves authorization state',
+  'OIDC login failures can be retried without retaining passwords',
   'real SMTP links verify email and reset a password exactly once'
 ]);
 
@@ -504,7 +505,7 @@ async function provisionPostgres(state) {
     });
     return ready.code === 0;
   }, 'postgres_readiness_timed_out', CONTAINER_READINESS_TIMEOUT_MS);
-  writeStatus(`PostgreSQL ready: ${POSTGRES_IMAGE} on 127.0.0.1:${state.databasePort}.`);
+  writeStatus(`PostgreSQL ready: ${POSTGRES_IMAGE} on 127.0.0.1:${state.databasePort} -> 5432.`);
 }
 
 async function provisionMailpit(state) {
@@ -528,7 +529,7 @@ async function provisionMailpit(state) {
     const response = await fetch(endpoint, { signal: AbortSignal.timeout(2_000) });
     return response.status === 200;
   }, 'mailpit_readiness_timed_out', CONTAINER_READINESS_TIMEOUT_MS);
-  writeStatus(`Mailpit ready: ${MAILPIT_IMAGE} on 127.0.0.1:${state.mailpitPort}.`);
+  writeStatus(`Mailpit ready: ${MAILPIT_IMAGE}; SMTP 127.0.0.1:${state.smtpPort} -> 1025; API/UI 127.0.0.1:${state.mailpitPort} -> 8025.`);
 }
 
 async function startKeylo(state) {

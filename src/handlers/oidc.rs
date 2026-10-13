@@ -655,14 +655,37 @@ fn authorization_hidden_fields(request: &OidcAuthorizeRequest) -> String {
     )
 }
 
-/// Render the browser login step and an isolated recovery link. Authorization
-/// parameters stay in the original form and never enter the recovery URL.
-fn login_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
+const LOGIN_RETRY_MESSAGE: &str = "Incorrect username or password. Please try again.";
+
+/// Render the browser login form with only the non-secret retry state retained.
+fn login_page_for_user(
+    request: &OidcAuthorizeRequest,
+    client_name: &str,
+    username: Option<&str>,
+) -> Response {
+    let (retry_message, username_value, username_description) = match username {
+        Some(username) => {
+            let username_value = if username.len() <= 255 {
+                format!(" value=\"{}\"", html_escape(username))
+            } else {
+                String::new()
+            };
+            (
+                format!("<p id=\"login-error\" role=\"alert\">{LOGIN_RETRY_MESSAGE}</p>"),
+                username_value,
+                " aria-describedby=\"login-error\"",
+            )
+        }
+        None => (String::new(), String::new(), ""),
+    };
     let body = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Sign in - Keylo</title></head><body><main><h1>Sign in to authorize {}</h1><p>Requested scopes: {}</p><form method=\"post\" action=\"/v1/oidc/login\">{}<label>Username <input name=\"username\" autocomplete=\"username\" required></label><label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\" required></label><button type=\"submit\">Sign in</button></form><p><a href=\"/account/password-reset\" target=\"_blank\" rel=\"noopener noreferrer\">Forgot your password?</a></p></main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Sign in - Keylo</title></head><body><main><h1>Sign in to authorize {}</h1><p>Requested scopes: {}</p>{}<form method=\"post\" action=\"/v1/oidc/login\">{}<label>Username <input name=\"username\" autocomplete=\"username\" required{}{}></label><label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\" required></label><button type=\"submit\">Sign in</button></form><p><a href=\"/account/password-reset\" target=\"_blank\" rel=\"noopener noreferrer\">Forgot your password?</a></p></main></body></html>",
         html_escape(client_name),
         html_escape(&request.scope),
-        authorization_hidden_fields(request)
+        retry_message,
+        authorization_hidden_fields(request),
+        username_value,
+        username_description
     );
     (
         StatusCode::OK,
@@ -677,6 +700,16 @@ fn login_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
         body,
     )
         .into_response()
+}
+
+/// Render the first browser login page without an error or retained username.
+fn login_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
+    login_page_for_user(request, client_name, None)
+}
+
+/// Render one generic credential failure while retaining only the username.
+fn login_retry_page(request: &OidcAuthorizeRequest, client_name: &str, username: &str) -> Response {
+    login_page_for_user(request, client_name, Some(username))
 }
 
 fn consent_page(request: &OidcAuthorizeRequest, client_name: &str) -> Response {
@@ -788,15 +821,27 @@ pub async fn login(
     let client = validated_authorization_client(&state, &request.authorization).await?;
     let user = crate::db::user::get_user_by_username(db, &request.username)
         .await
-        .map_err(|error| AuthError::DatabaseError(error.to_string()))?
-        .filter(|user| user.active)
-        .ok_or(AuthError::WrongCredentials)?;
-    let password_hash = user
-        .password_hash
-        .as_deref()
-        .ok_or(AuthError::WrongCredentials)?;
+        .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
+    let Some(user) = user.filter(|user| user.active) else {
+        return Ok(login_retry_page(
+            &request.authorization,
+            &client.name,
+            &request.username,
+        ));
+    };
+    let Some(password_hash) = user.password_hash.as_deref() else {
+        return Ok(login_retry_page(
+            &request.authorization,
+            &client.name,
+            &request.username,
+        ));
+    };
     if !verify(&request.password, password_hash).unwrap_or(false) {
-        return Err(AuthError::WrongCredentials);
+        return Ok(login_retry_page(
+            &request.authorization,
+            &client.name,
+            &request.username,
+        ));
     }
     if user.password_change_required {
         return Err(AuthError::PasswordChangeRequired);
@@ -810,7 +855,11 @@ pub async fn login(
     .await
     .map_err(|error| AuthError::DatabaseError(error.to_string()))?
     {
-        return Err(AuthError::WrongCredentials);
+        return Ok(login_retry_page(
+            &request.authorization,
+            &client.name,
+            &request.username,
+        ));
     }
     let raw_session = Uuid::new_v4().simple().to_string();
     crate::db::create_browser_session(
@@ -1223,6 +1272,67 @@ mod tests {
         assert!(!page.contains("Portal <Admin>"));
         assert!(page.contains("<title>Sign in - Keylo</title>"));
         assert!(page.contains("content=\"width=device-width, initial-scale=1\""));
+    }
+
+    #[tokio::test]
+    async fn login_retry_page_retains_only_escaped_username_and_validated_authorization_data() {
+        let request = OidcAuthorizeRequest {
+            response_type: "code".to_string(),
+            client_id: "portal-web".to_string(),
+            redirect_uri: "https://client.example/callback".to_string(),
+            scope: "openid profile".to_string(),
+            state: Some("state-value".to_string()),
+            nonce: Some("nonce-value".to_string()),
+            code_challenge: "a".repeat(43),
+            code_challenge_method: "S256".to_string(),
+        };
+        let response = login_retry_page(&request, "Portal", "alice\"<admin>");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::SET_COOKIE).is_none());
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page = std::str::from_utf8(&body).unwrap();
+        assert!(page.contains(
+            "name=\"username\" autocomplete=\"username\" required value=\"alice&quot;&lt;admin&gt;\" aria-describedby=\"login-error\""
+        ));
+        assert!(page.contains("<p id=\"login-error\" role=\"alert\">Incorrect username or password. Please try again.</p>"));
+        assert!(page.contains("name=\"state\" value=\"state-value\""));
+        assert!(page.contains("name=\"nonce\" value=\"nonce-value\""));
+        assert!(page.contains(&format!(
+            "name=\"code_challenge\" value=\"{}\"",
+            request.code_challenge
+        )));
+        assert!(page.contains(
+            "name=\"password\" type=\"password\" autocomplete=\"current-password\" required>"
+        ));
+        assert!(!page.contains("value=\"alice\""));
+        assert!(!page.contains("<admin>"));
+    }
+
+    #[tokio::test]
+    async fn login_retry_page_does_not_echo_unbounded_usernames() {
+        let request = OidcAuthorizeRequest {
+            response_type: "code".to_string(),
+            client_id: "portal-web".to_string(),
+            redirect_uri: "https://client.example/callback".to_string(),
+            scope: "openid".to_string(),
+            state: None,
+            nonce: None,
+            code_challenge: "a".repeat(43),
+            code_challenge_method: "S256".to_string(),
+        };
+        let response = login_retry_page(&request, "Portal", &"x".repeat(256));
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page = std::str::from_utf8(&body).unwrap();
+
+        assert!(page.contains(
+            "name=\"username\" autocomplete=\"username\" required aria-describedby=\"login-error\""
+        ));
+        assert!(!page.contains(&"x".repeat(256)));
     }
 
     #[tokio::test]

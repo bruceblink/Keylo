@@ -125,6 +125,31 @@ mod tests {
         setup_test_server_with_config(test_config()).await
     }
 
+    /// Post a browser OIDC login form with the same validated authorization fields on every attempt.
+    async fn post_oidc_browser_login(
+        server: &TestServer,
+        client_id: &str,
+        username: &str,
+        password: &str,
+    ) -> axum_test::TestResponse {
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.append_pair("response_type", "code")
+            .append_pair("client_id", client_id)
+            .append_pair("redirect_uri", "https://client.example.test/callback")
+            .append_pair("scope", "openid profile")
+            .append_pair("state", "synthetic-state")
+            .append_pair("nonce", "synthetic-nonce")
+            .append_pair("code_challenge", &"a".repeat(43))
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("username", username)
+            .append_pair("password", password);
+        server
+            .post("/v1/oidc/login")
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .bytes(Bytes::from(form.finish()))
+            .await
+    }
+
     async fn setup_test_server_with_config(mut config: Config) -> TestServer {
         config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
         config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
@@ -1009,6 +1034,262 @@ mod tests {
         recovery.assert_status_ok();
         assert_eq!(recovery.header("referrer-policy"), "no-referrer");
         assert!(recovery.text().contains("<div id=\"root\"></div>"));
+    }
+
+    #[tokio::test]
+    async fn test_oidc_browser_login_retries_wrong_credentials_without_changing_api_errors() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let client_id = format!("oidc-browser-retry-{suffix}");
+        db::create_oidc_client(
+            &pool,
+            &keylo::models::CreateOidcClientRequest {
+                client_id: client_id.clone(),
+                client_secret: None,
+                name: "OIDC browser retry test".to_string(),
+                description: None,
+                client_type: "public".to_string(),
+                redirect_uris: vec!["https://client.example.test/callback".to_string()],
+                grant_types: None,
+                scopes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let username = format!("oidc-browser-retry-user-{suffix}");
+        let password = "OidcBrowserRetry#123";
+        let user = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some(password),
+        )
+        .await
+        .unwrap();
+        let wrong_password =
+            post_oidc_browser_login(&server, &client_id, &username, "WrongBrowserPassword#123")
+                .await;
+        assert_eq!(wrong_password.status_code(), StatusCode::OK);
+        assert!(wrong_password.maybe_header("set-cookie").is_none());
+        assert_eq!(wrong_password.header("cache-control"), "no-store");
+        let wrong_page = wrong_password.text();
+        assert!(
+            wrong_page.contains("role=\"alert\">Incorrect username or password. Please try again.")
+        );
+        assert!(wrong_page.contains(&format!("value=\"{username}\"")));
+        assert!(wrong_page.contains("name=\"state\" value=\"synthetic-state\""));
+        assert!(wrong_page.contains("name=\"nonce\" value=\"synthetic-nonce\""));
+        assert!(wrong_page.contains("name=\"password\" type=\"password\""));
+        assert!(!wrong_page.contains("value=\"WrongBrowserPassword#123\""));
+        let session_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM oidc_browser_sessions WHERE user_id = $1")
+                .bind(&user.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(session_count, 0);
+
+        let api_wrong_password = server
+            .post("/v1/auth/token")
+            .json(&json!({"client_id": username, "client_secret": "WrongBrowserPassword#123"}))
+            .await;
+        assert_eq!(api_wrong_password.status_code(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            api_wrong_password.json::<serde_json::Value>()["error"],
+            "wrong_credentials"
+        );
+
+        let retry = post_oidc_browser_login(&server, &client_id, &username, password).await;
+        assert_eq!(retry.status_code(), StatusCode::OK);
+        assert!(retry
+            .header("set-cookie")
+            .to_str()
+            .unwrap()
+            .contains("keylo_oidc_session="));
+        let consent_page = retry.text();
+        assert!(consent_page.contains("Authorize OIDC browser retry test"));
+        assert!(!consent_page.contains("login-error"));
+        let session_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM oidc_browser_sessions WHERE user_id = $1")
+                .bind(&user.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(session_count, 1);
+
+        let inactive_username = format!("oidc-inactive-login-{suffix}");
+        let inactive_user = db::create_user(
+            &pool,
+            &inactive_username,
+            &format!("{inactive_username}@example.test"),
+            Some(password),
+        )
+        .await
+        .unwrap();
+        db::set_user_active(&pool, &inactive_user.id, false)
+            .await
+            .unwrap();
+        let inactive =
+            post_oidc_browser_login(&server, &client_id, &inactive_username, password).await;
+        assert_eq!(inactive.status_code(), StatusCode::OK);
+        assert!(inactive.maybe_header("set-cookie").is_none());
+        assert!(inactive
+            .text()
+            .contains("role=\"alert\">Incorrect username or password."));
+
+        let external_username = format!("oidc-external-login-{suffix}");
+        let external_user = db::create_user(
+            &pool,
+            &external_username,
+            &format!("{external_username}@example.test"),
+            None,
+        )
+        .await
+        .unwrap();
+        db::create_external_user_mapping(
+            &pool,
+            "browser-login-test-provider",
+            &format!("subject-{suffix}"),
+            &external_user.id,
+            None,
+        )
+        .await
+        .unwrap();
+        let external =
+            post_oidc_browser_login(&server, &client_id, &external_username, password).await;
+        assert_eq!(external.status_code(), StatusCode::OK);
+        assert!(external.maybe_header("set-cookie").is_none());
+        assert!(external
+            .text()
+            .contains("role=\"alert\">Incorrect username or password."));
+
+        let forced_username = format!("oidc-forced-change-{suffix}");
+        let forced_user = db::create_user(
+            &pool,
+            &forced_username,
+            &format!("{forced_username}@example.test"),
+            Some(password),
+        )
+        .await
+        .unwrap();
+        db::reset_user_password(&pool, &forced_user.id, password, None)
+            .await
+            .unwrap();
+        let forced_change =
+            post_oidc_browser_login(&server, &client_id, &forced_username, password).await;
+        assert_eq!(forced_change.status_code(), StatusCode::FORBIDDEN);
+        assert!(forced_change.maybe_header("set-cookie").is_none());
+        assert_eq!(
+            forced_change.json::<serde_json::Value>()["error"],
+            "password_change_required"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_oidc_browser_login_rejects_suspended_members_and_disabled_organizations() {
+        let Some(pool) = setup_organization_test_pool().await else {
+            return;
+        };
+        let server = setup_test_server().await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let organization = db::create_organization(
+            &pool,
+            &format!("oidc-login-org-{suffix}"),
+            "OIDC browser login organization test",
+            keylo::models::ORGANIZATION_KIND_CUSTOMER,
+        )
+        .await
+        .unwrap();
+        let owner = db::create_user(
+            &pool,
+            &format!("oidc-login-owner-{suffix}"),
+            &format!("oidc-login-owner-{suffix}@example.test"),
+            Some("OidcLoginOwner#123"),
+        )
+        .await
+        .unwrap();
+        let owner_principal = db::get_principal_by_ref(&pool, "user", &owner.id)
+            .await
+            .unwrap()
+            .unwrap();
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &owner_principal.id,
+            "active",
+            None,
+            Some(keylo::models::ORGANIZATION_MANAGEMENT_ROLE_OWNER),
+        )
+        .await
+        .unwrap();
+        let client_id = format!("oidc-organization-login-{suffix}");
+        db::create_oidc_client_as_organization_manager(
+            &pool,
+            &organization.id,
+            &owner_principal.id,
+            &keylo::models::CreateOidcClientRequest {
+                client_id: client_id.clone(),
+                client_secret: None,
+                name: "OIDC organization browser login test".to_string(),
+                description: None,
+                client_type: "public".to_string(),
+                redirect_uris: vec!["https://client.example.test/callback".to_string()],
+                grant_types: None,
+                scopes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let username = format!("oidc-suspended-member-{suffix}");
+        let password = "OidcSuspendedMember#123";
+        let member = db::create_user(
+            &pool,
+            &username,
+            &format!("{username}@example.test"),
+            Some(password),
+        )
+        .await
+        .unwrap();
+        let member_principal = db::get_principal_by_ref(&pool, "user", &member.id)
+            .await
+            .unwrap()
+            .unwrap();
+        db::upsert_organization_membership(
+            &pool,
+            &organization.id,
+            &member_principal.id,
+            "suspended",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let suspended = post_oidc_browser_login(&server, &client_id, &username, password).await;
+        assert_eq!(suspended.status_code(), StatusCode::OK);
+        assert!(suspended.maybe_header("set-cookie").is_none());
+        assert!(suspended
+            .text()
+            .contains("role=\"alert\">Incorrect username or password."));
+        let session_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM oidc_browser_sessions WHERE user_id = $1")
+                .bind(&member.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(session_count, 0);
+
+        db::set_organization_status(&pool, &organization.id, "disabled")
+            .await
+            .unwrap();
+        let disabled = post_oidc_browser_login(&server, &client_id, &username, password).await;
+        assert_eq!(disabled.status_code(), StatusCode::NOT_FOUND);
+        assert!(disabled.maybe_header("set-cookie").is_none());
     }
 
     #[tokio::test]

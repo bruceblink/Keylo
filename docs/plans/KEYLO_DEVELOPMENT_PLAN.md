@@ -2,7 +2,7 @@
 
 > 更新时间：2026-10-13
 >
-> 整理基线：2026-09-25；本轮开发从提交 `192ede8` 开始，`main` 与 `origin/main` 已同步且工作区干净。本轮新增真实服务浏览器回归、CI 检查和相关文档，不改变认证或账户恢复功能；当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；本轮先从提交 `192ede8` 完成真实服务浏览器回归，再以 `148b4b8` 修复 CI 发现的 Rust 依赖漏洞；该安全修复的 CI run `38395463385` 已通过。当前阶段是 OIDC 登录失败重试；实现已在本机验收，等待新提交的远端 CI；`main` 与 `origin/main` 仍指向安全修复基线；当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -34,8 +34,8 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 2 | 托管账户恢复页面 | 已完成 | 已将邮箱验证和密码恢复 API 接入同源可点击页面，并通过真实后端、Docker 邮件链路和 UI 验收。 |
 | 3 | 托管账户恢复 UI 自动化回归 | 已完成 | Playwright/Chromium 回归、Computer Use 可见窗口验收和 CI 检查均已通过；不增加产品 API 或账户功能。 |
 | 4 | OIDC 登录页的账户恢复入口 | 已完成 | 代码、单元/HTTP、真实后端 headless 和 Codex 内置浏览器可见交互通过；独立标签不转发授权参数，不改变登录和同意协议。 |
-| 5 | 真实后端账户恢复浏览器回归 | 进行中 | 使用独立本机 Docker、真实 Keylo 和真实邮件执行浏览器回归；本轮范围固定为测试入口、测试辅助代码、CI 接入和验证记录。 |
-| 6 | OIDC 登录失败后的重试体验 | 后续候选 | 当前错误密码返回 JSON；在不改变认证判断和非浏览器 API 错误格式和状态码的前提下，让浏览器保留已验证授权参数并重试。 |
+| 5 | 真实后端账户恢复浏览器回归 | 已完成 | 本机独立 Docker、真实 Keylo、Mailpit 和 4 项桌面/移动浏览器测试通过；CI 的 Run Tests 与 Code Coverage 通过。 |
+| 6 | OIDC 登录失败后的重试体验 | 进行中 | 只将浏览器 `WrongCredentials` 显示为可重试表单；保留已验证授权参数，不回显密码，不改变认证判定或 API 错误契约。 |
 | 7 | 接入样例的 CI 清单对齐 | 后续候选 | 核对本地样例验证脚本与 CI；当前 Spring resource server 已有本地验证，但 CI 的样例步骤未执行该样例。 |
 
 阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 检查均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 交互约定，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
@@ -75,6 +75,10 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | OIDC 账户恢复入口 Codex 内置浏览器（2026-10-03） | 在可见 Codex In-app Browser 打开真实 Keylo `/v1/oidc/authorize`，点击 `Forgot your password?` 后实际出现独立恢复标签；输入 `.test` 合成标识符并提交真实恢复申请，页面返回统一成功提示，关闭恢复标签后原登录页、原授权 URL 与 8 项 hidden fields 不变。`1280x720` 和 `390x844` 视口检查通过，缺失 token、表单启用/恢复和控制台 error/warn 均正常；截图保存于仓库外。Windows Chrome 首次状态读取因无法可靠判断 URL 而停止，未重试该窗口输入；按用户要求切换内置浏览器后验收通过。未输入真实凭据、未提交密码变更；本次可见交互不证明真实账户邮件投递，SMTP 证据来自独立 Docker Rust 测试。 |
 | OIDC 账户恢复入口远端 CI（2026-10-03） | 功能提交 `e789ea3` 已推送到 `main`；run `37104858502` 已完成，Run Tests、Security Audit 和 Code Coverage 全部通过。Run Tests 包含 UI 回归、完整 Rust 集成测试、OIDC relying-party 样例和 release 构建；Code Coverage 完成 tarpaulin 与 Codecov 上传。 |
 | 真实服务账户恢复浏览器回归（2026-10-13） | `npm run test:e2e:real` 独立启动本机 Docker `postgres:17-alpine`（本次 loopback 端口 `9061`）、`axllent/mailpit:v1.21.8`（SMTP `9063`、API `9064`）和真实 Keylo（`127.0.0.1:9065`）。就绪检查、前端和后端构建均通过；桌面与移动视口共 4 项浏览器测试通过，覆盖真实 OIDC 恢复入口、授权字段保留、真实 SMTP 邮件链接、邮箱验证、密码重置、token 重放拒绝、新密码登录、旧密码与旧 refresh token 拒绝。`--skip-build -- --grep __force_no_test__` 的受控失败检查返回非零；两次运行都清理本轮容器、匿名卷、Keylo 进程和临时密钥。Computer Use 在 Codex 内置浏览器以 `.test` 合成标识符验证本机恢复申请提示和原登录标签保持；未输入真实账户或提交密码变更。 |
+| 真实服务账户恢复浏览器远端 CI（2026-10-13） | 提交 `b7b059e` 的 run `38391938023` 与 `38391937263` 均通过 Run Tests（含真实服务浏览器回归）和 Code Coverage。两次唯一失败项是 Security Audit：锁定的 `quinn-proto 0.11.15` 命中 5 条 RustSec 漏洞。提交 `148b4b8` 将其更新到 `0.11.18`，并满足该版本的 `rand 0.10.1` 依赖；本机 fmt、Clippy 和 289 项 Rust 测试通过。后续 CI run `38395463385` 已全部通过 Security Audit、Run Tests 和 Code Coverage。 |
+| OIDC 登录失败重试本机验证（2026-10-13） | `scripts/run_tests.ps1 -DatabasePort 55432` 使用本机 Docker PostgreSQL `17-alpine`（`55432` -> `5432`）和 Mailpit `v1.21.8`（SMTP `11025` -> `1025`，API `18025` -> `8025`）；启动和 readiness 通过，fmt、workspace Clippy 和 293 项 Rust 测试通过，容器、匿名卷与临时密钥目录已清理。`npm run build`、`git diff --check` 和 Markdown 相对链接检查通过。 |
+| OIDC 登录失败重试真实服务浏览器测试（2026-10-13） | `npm run test:e2e:real` 启动本机 Docker PostgreSQL `17-alpine`（本次 `8321` -> `5432`）、Mailpit `v1.21.8`（SMTP `8323` -> `1025`，API/UI `8324` -> `8025`）和真实 Keylo（`127.0.0.1:8326`）。前端、后端构建及 readiness 通过；桌面和移动 Chromium 共 6 项测试通过，覆盖真实 OIDC 登录失败、清空密码、保留授权字段、同标签正确重试进入 consent，以及账户恢复和 SMTP 流程；容器、匿名卷和临时密钥目录已清理。 |
+| OIDC 登录失败重试 Computer Use 可见窗口检查（2026-10-13） | Codex 内置浏览器连接本机真实 Keylo（`127.0.0.1:3901`）、Docker PostgreSQL `17-alpine`（`3894` -> `5432`）和 Mailpit `v1.21.8`（SMTP `3896` -> `1025`，API/UI `3897` -> `8025`）。只使用合成账户；可见窗口显示统一错误提示、同标签重试页保留用户名且密码为空，正确密码进入 consent。服务进程与带本次 run 标签的 Docker 容器已移除。Shell 自动审批拒绝删除本次 `--serve` 运行的临时目录；临时配置与合成测试密钥仍在本机，未加入 Git。 |
 | 托管账户恢复 UI 自动化回归（2026-10-03） | `web` 执行 `npm ci`、`npm run build` 和 `npm run test:e2e`；Chromium 7 项通过，覆盖账户存在性统一提示、密码重置成功/失败、邮箱验证成功/失败/缺失 token、fragment 清理与存储检查、重复提交防护、桌面和 `390x844` 无横向溢出，以及共享 setup 页面回归。API 响应由测试控制，只作为 UI 交互约定验证；页面运行时错误断言为空。Playwright 1.63.0、锁定的 Vite 7.3.6；`npm audit` 为 0 vulnerabilities。 |
 | Computer Use 可见窗口检查（2026-10-03） | Codex In-app Browser 在 `1280x720` 可见窗口打开本地 Vite 页面；核对密码恢复表单可输入并启用提交按钮（仅输入 `.test` 合成标识符、未提交），随后打开邮箱验证缺失 fragment 页面并确认稳定提示；浏览器控制台 error/warn 为空。真实密码变更未通过 UI 提交。 |
 | UI 自动化 CI 检查（2026-10-03） | `.github/workflows/ci.yml` 已将 Chromium UI 回归接入 Run Tests job，相关 `web/tests/**` 文件纳入触发路径；提交 `1d0b616` 的 run `37089762986` 已完成，Security Audit、Run Tests 和 Code Coverage 全部通过。该证据只对应此提交，不代表后续代码已经通过远端验证。 |
@@ -187,13 +191,10 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 ### 8.2 后续顺序
 
-2026-10-13 阶段 5 的本机浏览器回归和失败清理检查已通过；远端 CI 仍需验证后再将阶段标为完成。遗留临时目录只作为人工清理事项，不作为开发前置条件；阶段 6、7 依次等待前一切片交付，不并行实施：
+2026-10-13 阶段 5 已完成。本机 Docker 真实服务回归和受控失败清理检查通过；提交 `b7b059e` 的远端 Run Tests 与 Code Coverage 通过。其 Security Audit 发现旧锁文件中的 `quinn-proto 0.11.15` 漏洞，已在独立提交 `148b4b8` 修复；CI run `38395463385` 的 Security Audit、Run Tests 和 Code Coverage 均已通过。阶段 6 按用户要求开始；阶段 7 等待阶段 6 验收后再实施：
 
-1. 使用独立本机 Docker PostgreSQL 17 和 Mailpit，启动真实 Keylo 而非仅使用 Vite proxy 或受控 API 响应。
-2. 用合成账户和真实邮件驱动邮箱验证、密码恢复、重放拒绝及新密码登录；浏览器日志和失败产物不得包含原始 token、密码、密钥或收件人。
-3. 增加有界启动、readiness、失败退出、端口隔离与清理；通过一个入口执行，并接入 CI。现有快速 UI 交互约定测试保留，真实链路测试单独标识。
-4. 阶段 6 只处理浏览器错误密码重试：保持统一错误提示、密码不回显、原始已验证授权参数保留，并验证停用用户、外部身份账户和组织状态拒绝；首次强制改密和 MFA 等认证流程不能因此被绕过。
-5. 阶段 7 检查接入样例与 CI 清单是否一致，补上 Spring resource server 构建和失败关闭回归；只补实际缺失的检查，不借此新增 SDK、客户端协议或管理界面。
+1. 阶段 6 只处理浏览器错误密码重试：显示统一错误提示，不回显密码，保留已验证授权参数；验证停用用户、外部身份账户、组织和成员状态拒绝；其他认证错误继续走原处理。
+2. 阶段 7 检查接入样例与 CI 清单是否一致，补上 Spring resource server 构建和失败关闭回归；只补实际缺失的检查，不借此新增 SDK、客户端协议或管理界面。
 
 阶段 5 的完成判定：
 
@@ -213,6 +214,23 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 5. 只选择一个扩展方向，完成后再重新评估下一方向。
 
 在满足上述条件前，以下内容保持未排期，不属于当前功能清单：LDAP/AD 登录与同步、SCIM、SAML、WebAuthn/Passkey、Device Flow/CIBA/PAR/DPoP/Token Exchange、完整管理控制台、计费/套餐、通用策略脚本、多实例 HA、outbox/webhook 和跨区域恢复。
+
+### 8.3 进行中的切片：OIDC 登录失败后的重试体验
+
+当前 `/v1/oidc/login` 把错误凭据返回为 JSON。浏览器用户不能从该响应继续登录。本切片只调整浏览器错误呈现，不改变用户查找、密码校验、组织成员状态检查或授权判断。
+
+实现与本机验收已完成：Rust 单元/HTTP 集成测试、真实服务 Chromium 桌面/移动回归和 Computer Use 可见窗口检查均通过。阶段状态保持“进行中”，直到本切片提交的远端 CI 全部通过。可见窗口测试的 Docker 容器已清理；系统策略拒绝删除 `--serve` 运行的临时测试目录，目录中的测试密钥仍待本机清理，不在 Git 中。
+
+验收条件：
+
+1. 仅 `WrongCredentials` 返回登录重试页，并使用统一错误提示；表单保留用户名和已验证授权参数，不包含密码值。
+2. 错误页不设置 OIDC 浏览器会话 Cookie，不签发授权码；输入正确凭据后，浏览器可从同一表单进入既有 consent 流程。
+3. 停用用户、无本地密码的外部身份账户、非活动组织或成员关系继续拒绝登录，且失败时不创建浏览器会话。
+4. `PasswordChangeRequired` 和其他错误不转换为重试成功；`/v1/auth/token` 的状态码和 JSON 错误格式保持不变。
+5. 真实服务 Chromium 回归覆盖错误后在同一标签重试、授权字段保留、密码清空和错误账户拒绝；在 `1280x720` 与 `390x844` 下检查无横向溢出和控制台错误。使用 Computer Use 在可见窗口检查真实服务登录错误和重试，不提交真实凭据。
+6. Rust fmt、workspace Clippy、全量本机 Docker 测试、真实服务浏览器测试、Markdown 链接和 diff 检查通过；CI 执行同一真实服务浏览器回归。
+
+回滚边界：撤销错误重试页、对应测试和本节记录即可回到当前 JSON 错误呈现；不修改认证规则、非浏览器 API、数据库结构、MFA 策略或 token 生命周期。
 
 ## 9. 每个功能的发布前检查
 
