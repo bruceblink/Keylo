@@ -36,6 +36,7 @@ on:
       - 'examples/spring-boot-resource-server/build.gradle'
       - 'examples/spring-boot-resource-server/settings.gradle'
       - 'examples/spring-boot-resource-server/gradlew*'
+      - 'examples/spring-boot-resource-server/gradle/wrapper/**'
   pull_request:
     branches: [ main, dev ]
     paths:
@@ -71,6 +72,7 @@ on:
       - 'examples/spring-boot-resource-server/build.gradle'
       - 'examples/spring-boot-resource-server/settings.gradle'
       - 'examples/spring-boot-resource-server/gradlew*'
+      - 'examples/spring-boot-resource-server/gradle/wrapper/**'
 
 env:
   CARGO_TERM_COLOR: always
@@ -219,6 +221,12 @@ jobs:
         cd ../rust-axum-oidc
         cargo test
         cd ../spring-boot-oidc
+        chmod +x gradlew
+        ./gradlew test --no-daemon
+
+    - name: Validate Spring Boot resource server example
+      run: |
+        cd examples/spring-boot-resource-server
         chmod +x gradlew
         ./gradlew test --no-daemon
 

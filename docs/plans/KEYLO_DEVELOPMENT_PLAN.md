@@ -2,7 +2,7 @@
 
 > 更新时间：2026-10-13
 >
-> 整理基线：2026-09-25；本轮先从提交 `192ede8` 完成真实服务浏览器回归，再以 `148b4b8` 修复 CI 发现的 Rust 依赖漏洞；该安全修复的 CI run `38395463385` 已通过。当前阶段是 OIDC 登录失败重试；实现已在本机验收，等待新提交的远端 CI；`main` 与 `origin/main` 仍指向安全修复基线；当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；本轮先从提交 `192ede8` 完成真实服务浏览器回归，再以 `148b4b8` 修复 CI 发现的 Rust 依赖漏洞；该安全修复的 CI run `38395463385` 已通过。OIDC 登录失败重试已提交到 `main` 和 `origin/main`（`0f15c56`），正在等待该提交的远端 CI；同时补齐 Spring Boot 资源服务样例的 CI 检查。当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -36,7 +36,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 4 | OIDC 登录页的账户恢复入口 | 已完成 | 代码、单元/HTTP、真实后端 headless 和 Codex 内置浏览器可见交互通过；独立标签不转发授权参数，不改变登录和同意协议。 |
 | 5 | 真实后端账户恢复浏览器回归 | 已完成 | 本机独立 Docker、真实 Keylo、Mailpit 和 4 项桌面/移动浏览器测试通过；CI 的 Run Tests 与 Code Coverage 通过。 |
 | 6 | OIDC 登录失败后的重试体验 | 进行中 | 只将浏览器 `WrongCredentials` 显示为可重试表单；保留已验证授权参数，不回显密码，不改变认证判定或 API 错误契约。 |
-| 7 | 接入样例的 CI 清单对齐 | 后续候选 | 核对本地样例验证脚本与 CI；当前 Spring resource server 已有本地验证，但 CI 的样例步骤未执行该样例。 |
+| 7 | 接入样例的 CI 清单对齐 | 进行中 | CI 已触发资源服务样例文件变更，但验证步骤漏掉 Spring resource server；补上 Gradle 测试和 wrapper 配置触发路径，并执行失败关闭回归。 |
 
 阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 检查均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 交互约定，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
 
@@ -231,6 +231,19 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 6. Rust fmt、workspace Clippy、全量本机 Docker 测试、真实服务浏览器测试、Markdown 链接和 diff 检查通过；CI 执行同一真实服务浏览器回归。
 
 回滚边界：撤销错误重试页、对应测试和本节记录即可回到当前 JSON 错误呈现；不修改认证规则、非浏览器 API、数据库结构、MFA 策略或 token 生命周期。
+
+### 8.4 进行中的切片：Spring Boot 资源服务样例 CI 对齐
+
+本地脚本已运行 Spring Boot 资源服务样例，但 CI 只运行 Spring Boot OIDC RP。此切片把资源服务 Gradle 测试加入 `Run Tests`，并让 Gradle wrapper 配置文件变更也触发 CI。样例测试必须验证只有 Keylo 明确允许时才放行，并在 Keylo 无法返回授权结果时拒绝请求。
+
+验收条件：
+
+1. CI 的 push 和 pull request 路径规则都覆盖资源服务 Gradle wrapper 配置文件。
+2. `Run Tests` 执行 `examples/spring-boot-resource-server` 的 `gradlew test`，并运行明确允许与 Keylo 不可用时拒绝授权的测试。
+3. 本机 `.\examples\spring-boot-resource-server\gradlew.bat test --no-daemon`、`actionlint`、Markdown 链接检查和 `git diff --check` 通过。
+4. Rust 检查、Docker 服务集成测试和 UI 验收不适用：本切片只调整 CI 路径与测试调用，不改 Rust 代码、服务协议或用户界面。
+
+回滚边界：移除资源服务 CI 步骤及对应路径触发规则即可回滚；不修改样例运行逻辑、授权结果格式或生产服务行为。
 
 ## 9. 每个功能的发布前检查
 
