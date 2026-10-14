@@ -1,8 +1,8 @@
 # Keylo 线性开发主线与功能清单
 
-> 更新时间：2026-10-13
+> 更新时间：2026-10-14
 >
-> 整理基线：2026-09-25；本轮先从提交 `192ede8` 完成真实服务浏览器回归，再以 `148b4b8` 修复 CI 发现的 Rust 依赖漏洞；该安全修复的 CI run `38395463385` 已通过。OIDC 登录失败重试已提交到 `main` 和 `origin/main`（`0f15c56`），正在等待该提交的远端 CI；同时补齐 Spring Boot 资源服务样例的 CI 检查。当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；本轮完成了 OIDC 登录失败后的重试体验和 Spring Boot 资源服务样例的 CI 对齐。最新提交 `7eb85c0` 对应 GitHub Actions run `38401038528`，`Run Tests`、`Security Audit`、`Code Coverage` 均通过。当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -35,8 +35,8 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 3 | 托管账户恢复 UI 自动化回归 | 已完成 | Playwright/Chromium 回归、Computer Use 可见窗口验收和 CI 检查均已通过；不增加产品 API 或账户功能。 |
 | 4 | OIDC 登录页的账户恢复入口 | 已完成 | 代码、单元/HTTP、真实后端 headless 和 Codex 内置浏览器可见交互通过；独立标签不转发授权参数，不改变登录和同意协议。 |
 | 5 | 真实后端账户恢复浏览器回归 | 已完成 | 本机独立 Docker、真实 Keylo、Mailpit 和 4 项桌面/移动浏览器测试通过；CI 的 Run Tests 与 Code Coverage 通过。 |
-| 6 | OIDC 登录失败后的重试体验 | 进行中 | 只将浏览器 `WrongCredentials` 显示为可重试表单；保留已验证授权参数，不回显密码，不改变认证判定或 API 错误契约。 |
-| 7 | 接入样例的 CI 清单对齐 | 进行中 | CI 已触发资源服务样例文件变更，但验证步骤漏掉 Spring resource server；补上 Gradle 测试和 wrapper 配置触发路径，并执行失败关闭回归。 |
+| 6 | OIDC 登录失败后的重试体验 | 已完成 | 只将浏览器 `WrongCredentials` 显示为可重试表单；保留已验证授权参数，不回显密码，不改变认证判定或 API 错误契约。 |
+| 7 | 接入样例的 CI 清单对齐 | 已完成 | CI 已触发资源服务样例文件变更，但验证步骤漏掉 Spring resource server；补上 Gradle 测试和 wrapper 配置触发路径，并执行失败关闭回归。 |
 
 阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 检查均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 交互约定，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
 
@@ -70,6 +70,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 | 验证 | 结果 |
 | --- | --- |
+| OIDC 登录重试与 Spring Boot 资源服务 CI（2026-10-13） | 提交 `7eb85c0` 的 [GitHub Actions run 38401038528](https://github.com/bruceblink/Keylo/actions/runs/38401038528) 中，`Run Tests`、`Security Audit` 和 `Code Coverage` 全部通过。测试任务包含真实服务 Chromium 回归和 Spring Boot resource server 的 Gradle 测试。该结果关闭阶段 6、7。 |
 | OIDC 账户恢复入口代码回归（2026-10-03） | `npm ci`、`npm run build`、原有 Chromium 7 项 UI 交互约定回归、`cargo build --bin keylo`、fmt、workspace Clippy、Markdown 链接和 `git diff --check` 通过。`scripts/run_tests.ps1 -DatabasePort 55432` 使用本机 Docker `postgres:17-alpine`（`127.0.0.1:55432` -> `5432`）与 `axllent/mailpit:v1.21.8`（SMTP `11025` -> `1025`，API `18025` -> `8025`）；readiness、150 单元、1 customer-support、26 database、77 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP 和 13 user 共 289 项全部通过；测试容器、匿名卷和脚本临时密钥目录已清理。 |
 | OIDC 账户恢复入口真实后端 headless 检查（2026-10-03） | 独立本机 Docker PostgreSQL 17（`55433`）、Mailpit `v1.21.8`（SMTP `11026`、API `18026`）与真实 Keylo（`127.0.0.1:2346`）readiness 通过。Chromium 在 `1280x720` 和 `390x844` 点击恢复入口，确认同源新标签、`window.opener=null`、无 Referer、原授权 URL/hidden fields/合成用户名不变、无横向溢出/持久化存储/应用错误/外部资源请求；匿名恢复申请经真实 HTTP 返回统一提示，未提交密码修改或真实凭据。后端与 Docker 容器、匿名卷和端口映射已清理；系统策略拒绝递归删除 `C:\Users\likanug\AppData\Local\Temp\keylo-oidc-recovery-ui-9dc0a119da3a`，本轮临时测试密钥、构建副本与辅助脚本待人工清理，不在 Git 中。截图保留在独立临时证据目录。 |
 | OIDC 账户恢复入口 Codex 内置浏览器（2026-10-03） | 在可见 Codex In-app Browser 打开真实 Keylo `/v1/oidc/authorize`，点击 `Forgot your password?` 后实际出现独立恢复标签；输入 `.test` 合成标识符并提交真实恢复申请，页面返回统一成功提示，关闭恢复标签后原登录页、原授权 URL 与 8 项 hidden fields 不变。`1280x720` 和 `390x844` 视口检查通过，缺失 token、表单启用/恢复和控制台 error/warn 均正常；截图保存于仓库外。Windows Chrome 首次状态读取因无法可靠判断 URL 而停止，未重试该窗口输入；按用户要求切换内置浏览器后验收通过。未输入真实凭据、未提交密码变更；本次可见交互不证明真实账户邮件投递，SMTP 证据来自独立 Docker Rust 测试。 |
@@ -191,10 +192,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 ### 8.2 后续顺序
 
-2026-10-13 阶段 5 已完成。本机 Docker 真实服务回归和受控失败清理检查通过；提交 `b7b059e` 的远端 Run Tests 与 Code Coverage 通过。其 Security Audit 发现旧锁文件中的 `quinn-proto 0.11.15` 漏洞，已在独立提交 `148b4b8` 修复；CI run `38395463385` 的 Security Audit、Run Tests 和 Code Coverage 均已通过。阶段 6 按用户要求开始；阶段 7 等待阶段 6 验收后再实施：
-
-1. 阶段 6 只处理浏览器错误密码重试：显示统一错误提示，不回显密码，保留已验证授权参数；验证停用用户、外部身份账户、组织和成员状态拒绝；其他认证错误继续走原处理。
-2. 阶段 7 检查接入样例与 CI 清单是否一致，补上 Spring resource server 构建和失败关闭回归；只补实际缺失的检查，不借此新增 SDK、客户端协议或管理界面。
+2026-10-13 阶段 5 已完成。本机 Docker 真实服务回归和受控失败清理检查通过；提交 `b7b059e` 的远端 Run Tests 与 Code Coverage 通过。其 Security Audit 发现旧锁文件中的 `quinn-proto 0.11.15` 漏洞，已在独立提交 `148b4b8` 修复；CI run `38395463385` 的 Security Audit、Run Tests 和 Code Coverage 均已通过。阶段 6 和阶段 7 随后完成；阶段 6、7 的合并验收证据见本计划第 4 节。
 
 阶段 5 的完成判定：
 
@@ -215,11 +213,11 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 在满足上述条件前，以下内容保持未排期，不属于当前功能清单：LDAP/AD 登录与同步、SCIM、SAML、WebAuthn/Passkey、Device Flow/CIBA/PAR/DPoP/Token Exchange、完整管理控制台、计费/套餐、通用策略脚本、多实例 HA、outbox/webhook 和跨区域恢复。
 
-### 8.3 进行中的切片：OIDC 登录失败后的重试体验
+### 8.3 已完成切片：OIDC 登录失败后的重试体验
 
 当前 `/v1/oidc/login` 把错误凭据返回为 JSON。浏览器用户不能从该响应继续登录。本切片只调整浏览器错误呈现，不改变用户查找、密码校验、组织成员状态检查或授权判断。
 
-实现与本机验收已完成：Rust 单元/HTTP 集成测试、真实服务 Chromium 桌面/移动回归和 Computer Use 可见窗口检查均通过。阶段状态保持“进行中”，直到本切片提交的远端 CI 全部通过。可见窗口测试的 Docker 容器已清理；系统策略拒绝删除 `--serve` 运行的临时测试目录，目录中的测试密钥仍待本机清理，不在 Git 中。
+实现与本机验收已完成：Rust 单元/HTTP 集成测试、真实服务 Chromium 桌面/移动回归和 Computer Use 可见窗口检查均通过。提交 `0f15c56` 已包含在 `main`；后续提交 `7eb85c0` 的 GitHub Actions run `38401038528` 中，`Run Tests`、`Security Audit` 和 `Code Coverage` 均通过，故本切片已完成。可见窗口测试的 Docker 容器已清理；系统策略拒绝删除 `--serve` 运行的临时测试目录，目录中的测试密钥仍待本机清理，不在 Git 中。
 
 验收条件：
 
@@ -232,9 +230,11 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 回滚边界：撤销错误重试页、对应测试和本节记录即可回到当前 JSON 错误呈现；不修改认证规则、非浏览器 API、数据库结构、MFA 策略或 token 生命周期。
 
-### 8.4 进行中的切片：Spring Boot 资源服务样例 CI 对齐
+### 8.4 已完成切片：Spring Boot 资源服务样例 CI 对齐
 
 本地脚本已运行 Spring Boot 资源服务样例，但 CI 只运行 Spring Boot OIDC RP。此切片把资源服务 Gradle 测试加入 `Run Tests`，并让 Gradle wrapper 配置文件变更也触发 CI。样例测试必须验证只有 Keylo 明确允许时才放行，并在 Keylo 无法返回授权结果时拒绝请求。
+
+交付与验收：提交 `7eb85c0` 补齐 push/PR 路径和 Gradle 测试步骤；GitHub Actions run `38401038528` 的 `Run Tests`、`Security Audit`、`Code Coverage` 均通过。本切片已完成。
 
 验收条件：
 
