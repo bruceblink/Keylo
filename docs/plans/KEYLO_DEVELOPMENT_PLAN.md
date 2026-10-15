@@ -2,7 +2,7 @@
 
 > 更新时间：2026-10-15
 >
-> 整理基线：2026-09-25；代码审查基于 `94c4565`，审查计划已由 `19dfa50` 推送。阶段 8 已完成 R1 修复及本地验证，阶段 9 为下一切片；本次远端 CI 尚未确认。阶段 0–7 的交付记录继续保留；提交 `7eb85c0` 对应 GitHub Actions run `38401038528` 的历史通过结果，不代表覆盖了本次发现的路径。当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；代码审查基于 `94c4565`，审查计划已由 `19dfa50` 推送。阶段 8 已完成 R1 修复及本地验证，阶段 9 为下一切片。远端 CI run `38684723853` 的 Run Tests 和 Code Coverage 已通过；Security Audit 因 `rustls 0.23.45` 的四条新漏洞失败，现已升级至 `0.23.46` 并通过相同本地审计，补丁提交的远端 CI 待确认。阶段 0–7 的交付记录继续保留；提交 `7eb85c0` 对应 GitHub Actions run `38401038528` 的历史通过结果，不代表覆盖了本次发现的路径。当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -79,6 +79,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 | 验证 | 结果 |
 | --- | --- |
+| CI 安全依赖修复（2026-10-15） | [run 38684723853](https://github.com/bruceblink/Keylo/actions/runs/38684723853) 的 Security Audit 失败；本地复现为 `rustls 0.23.45` 命中 RUSTSEC-2026-0346、0347、0348、0349。仅将锁文件中的 rustls 更新为 `0.23.46`，未新增审计豁免；同一 `cargo audit --ignore RUSTSEC-2023-0071` 以 0 退出，原有 6 条非阻塞警告保留。补丁提交的远端结果待确认。 |
 | 阶段 8：统一授权强制改密限制（2026-10-15） | 先执行新增回归，原实现因实际 200、预期 403 失败；共享检查接入后新增 3 项全部通过。`tests/authorization/password_change.rs` 由现有 `integration_test` 引入，CI 的 PostgreSQL 测试入口会执行。不可达 `TEST_DATABASE_URL` 的故障注入以 101 退出，不回退内存或跳过。fmt、workspace Clippy、Markdown 相对链接和 diff 检查通过；最终 152 单元、1 customer-support、26 database、82 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP、13 user，共 296 项 Rust 测试通过。本机 Docker 使用独立 PostgreSQL 17（宿主 `32768`）和 Mailpit `v1.21.8`（SMTP `32769`、API `32770`）；首轮 Mailpit 使用随机宿主端口，重启后端口变化导致恢复测试失败，改用固定映射后重跑 SMTP 和尚未执行的 user 套件通过。容器及匿名卷已清理；本切片不改 UI，未执行浏览器回归或确认本次远端 CI。 |
 | 代码审查与定向复现（2026-10-15，`94c4565`） | 当前库 `cargo build --lib --locked` 通过。仓库外合成账户 harness 在独立本机 Docker PostgreSQL 17 中确认：受限改密 token 得到 `allowed=true`、普通改密/管理员 reset 后旧恢复链接仍能覆盖密码、组织角色类型变更漏查绑定、成员暂停后恢复使旧 OIDC code 重新可兑换。直接调用真实 OIDC handler 确认已有账号锁不能阻止创建浏览器会话。启动加载器实验确认 1 秒 overlap 到期后旧 token 被拒绝，但重新加载配置又可验签。`docker compose config --format json` 确认生产模板缺少两个必需变量。显式使用不可达 `TEST_DATABASE_URL` 运行迁移测试，错误地得到退出码 0、1 passed；这是测试门禁缺陷的证据，不是数据库验收通过。MFA 猜码保护与 enrollment 竞争仅做静态调用链审查，未运行穷举或并发复现。测试容器及匿名卷已清理；未执行全量测试、外部 SMTP 或远端 CI。 |
 | OIDC 登录重试与 Spring Boot 资源服务 CI（2026-10-13） | 提交 `7eb85c0` 的 [GitHub Actions run 38401038528](https://github.com/bruceblink/Keylo/actions/runs/38401038528) 中，`Run Tests`、`Security Audit` 和 `Code Coverage` 全部通过。测试任务包含真实服务 Chromium 回归和 Spring Boot resource server 的 Gradle 测试。该结果关闭阶段 6、7。 |
