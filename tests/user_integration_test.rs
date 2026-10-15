@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use axum::{extract::ConnectInfo, Extension};
     use axum_test::TestServer;
     use keylo::config::Config;
     use keylo::db;
@@ -8,6 +9,7 @@ mod tests {
         init_app_router_with_db_and_admin, init_app_router_with_db_and_admin_and_mail_provider,
     };
     use serde_json::json;
+    use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use tokio::net::TcpListener;
@@ -768,6 +770,72 @@ wwIDAQAB
         TestServer::new(router)
     }
 
+    async fn setup_mfa_rate_limit_server(config: Config) -> TestServer {
+        let db_url = test_database_url();
+        let router = init_app_router_with_db_and_admin(
+            config,
+            &db_url,
+            "user-test-admin",
+            "UserTestAdmin#123",
+        )
+        .await
+        .expect("The explicitly configured PostgreSQL test database must initialize");
+        TestServer::new(router.layer(Extension(ConnectInfo(SocketAddr::from((
+            [198, 51, 100, 37],
+            3001,
+        ))))))
+    }
+
+    async fn register_and_login_user(server: &TestServer, suffix: &str) -> (String, String) {
+        let username = format!("mfa-rate-{suffix}");
+        let password = "MfaRateProtection#123";
+        let register = server
+            .post("/v1/auth/register")
+            .json(&json!({
+                "username": username,
+                "email": format!("{username}@example.test"),
+                "password": password,
+            }))
+            .await;
+        assert_eq!(register.status_code(), 200);
+
+        let login = server
+            .post("/v1/auth/token")
+            .json(&json!({"client_id": username, "client_secret": password}))
+            .await;
+        assert_eq!(login.status_code(), 200);
+        let token = login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("User login must return an access token")
+            .to_string();
+        (username, token)
+    }
+
+    async fn enroll_totp_and_return_recovery_code(
+        server: &TestServer,
+        access_token: &str,
+    ) -> String {
+        let enrollment = server
+            .post("/v1/user/mfa/totp/enroll")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .await;
+        assert_eq!(enrollment.status_code(), 200);
+        let enrollment_data: serde_json::Value = enrollment.json::<serde_json::Value>();
+        let seed = enrollment_data["data"]["manual_entry_key"]
+            .as_str()
+            .expect("Enrollment must return the synthetic TOTP seed");
+        let confirmation = server
+            .post("/v1/user/mfa/totp/verify")
+            .add_header("Authorization", format!("Bearer {access_token}"))
+            .json(&json!({"code": current_totp_code(seed)}))
+            .await;
+        assert_eq!(confirmation.status_code(), 200);
+        confirmation.json::<serde_json::Value>()["data"]["recovery_codes"][0]
+            .as_str()
+            .expect("Enrollment must return one synthetic recovery code")
+            .to_string()
+    }
+
     #[tokio::test]
     async fn test_auth_me_returns_non_empty_uid() {
         let server = setup_test_server().await;
@@ -1169,5 +1237,75 @@ wwIDAQAB
             .add_header("Authorization", format!("Bearer {access_token}"))
             .await;
         assert_eq!(reset_again.status_code(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_mfa_account_quota_is_shared_across_factor_routes_and_access_tokens() {
+        let mut config = test_config();
+        config.auth_rate_limit_max_requests = 3;
+        config.auth_global_rate_limit_max_requests = 100;
+        config.auth_rate_limit_window_seconds = 60;
+        let server = setup_mfa_rate_limit_server(config).await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let (username, first_token) = register_and_login_user(&server, &suffix).await;
+        let recovery_code = enroll_totp_and_return_recovery_code(&server, &first_token).await;
+
+        for _ in 0..2 {
+            let invalid = server
+                .post("/v1/user/mfa/verify")
+                .add_header("Authorization", format!("Bearer {first_token}"))
+                .json(&json!({"totp_code": "abcdef"}))
+                .await;
+            assert_eq!(invalid.status_code(), 400);
+        }
+
+        let second_login = server
+            .post("/v1/auth/token")
+            .json(&json!({
+                "client_id": username,
+                "client_secret": "MfaRateProtection#123",
+            }))
+            .await;
+        assert_eq!(second_login.status_code(), 200);
+        let second_token = second_login.json::<serde_json::Value>()["access_token"]
+            .as_str()
+            .expect("Second login must return a fresh access token")
+            .to_string();
+
+        let limited_valid_factor = server
+            .post("/v1/user/mfa/verify")
+            .add_header("Authorization", format!("Bearer {second_token}"))
+            .json(&json!({"recovery_code": recovery_code}))
+            .await;
+        assert_eq!(limited_valid_factor.status_code(), 429);
+        let limited_body: serde_json::Value = limited_valid_factor.json::<serde_json::Value>();
+        assert_eq!(limited_body["error"], "too_many_requests");
+        let limited_enrollment = server
+            .post("/v1/user/mfa/totp/verify")
+            .add_header("Authorization", format!("Bearer {second_token}"))
+            .json(&json!({"code": "abcdef"}))
+            .await;
+        assert_eq!(limited_enrollment.status_code(), 429);
+    }
+
+    #[tokio::test]
+    async fn test_mfa_source_quota_is_shared_between_accounts() {
+        let mut config = test_config();
+        config.auth_rate_limit_max_requests = 10;
+        config.auth_global_rate_limit_max_requests = 2;
+        config.auth_rate_limit_window_seconds = 600;
+        let server = setup_mfa_rate_limit_server(config).await;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let (_, first_token) = register_and_login_user(&server, &format!("{suffix}-one")).await;
+        let first_recovery = enroll_totp_and_return_recovery_code(&server, &first_token).await;
+        let (_, second_token) = register_and_login_user(&server, &format!("{suffix}-two")).await;
+        let _second_recovery = enroll_totp_and_return_recovery_code(&server, &second_token).await;
+
+        let limited = server
+            .post("/v1/user/mfa/verify")
+            .add_header("Authorization", format!("Bearer {first_token}"))
+            .json(&json!({"recovery_code": first_recovery}))
+            .await;
+        assert_eq!(limited.status_code(), 429);
     }
 }

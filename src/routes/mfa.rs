@@ -1,6 +1,13 @@
-use axum::{extract::State, http::StatusCode, response::Json, routing::post, Router};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::Json,
+    routing::post,
+    Router,
+};
 use chrono::Utc;
 use serde_json::json;
+use std::net::SocketAddr;
 
 use crate::{
     db::{
@@ -9,6 +16,7 @@ use crate::{
         enable_totp_credential_with_recovery_codes, get_totp_credential,
         has_recent_mfa_verification, save_pending_totp_credential,
     },
+    handlers::{extract_client_ip, PeerAddr},
     models::{
         decrypt_totp_seed, encrypt_totp_seed, generate_recovery_codes, generate_totp_seed,
         totp_provisioning_uri, verify_totp_code, Claims, MfaVerificationRequest,
@@ -26,6 +34,42 @@ pub fn mfa_routes() -> Router<AppState> {
         .route("/v1/user/mfa/totp/verify", post(verify_totp_enrollment))
         .route("/v1/user/mfa/totp/reset", post(reset_totp_enrollment))
         .route("/v1/user/mfa/verify", post(verify_recent_mfa))
+}
+
+/// Apply one shared account and source quota to all expensive MFA proof checks.
+/// The account key is based on the stable user id, so issuing another access token
+/// cannot reset the guessing budget or switch between TOTP, recovery, and enrollment.
+async fn enforce_mfa_verification_rate_limit(
+    state: &AppState,
+    user_id: &str,
+    headers: &HeaderMap,
+    peer_addr: Option<SocketAddr>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let client_ip = extract_client_ip(headers, peer_addr, state.config.trust_proxy_headers);
+    let account_bucket = format!("mfa:account:{user_id}");
+    let source_bucket = format!("mfa:source:{client_ip}");
+    if state
+        .allow_auth_request_pair(
+            &account_bucket,
+            state.config.auth_rate_limit_max_requests,
+            &source_bucket,
+            state.config.auth_global_rate_limit_max_requests,
+            state.config.auth_rate_limit_window_seconds,
+        )
+        .await
+    {
+        return Ok(());
+    }
+
+    state.runtime_metrics.rate_limit_rejection_observed();
+    Err((
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({
+            "success": false,
+            "error": "too_many_requests",
+            "message": "Too many requests",
+        })),
+    ))
 }
 
 /// Require a fresh, token-bound MFA proof when this user has enabled TOTP.
@@ -88,6 +132,8 @@ fn mfa_required_for_claims(claims: &Claims) -> bool {
 async fn verify_recent_mfa(
     claims: Claims,
     State(state): State<AppState>,
+    PeerAddr(peer_addr): PeerAddr,
+    headers: HeaderMap,
     Json(request): Json<MfaVerificationRequest>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
@@ -97,6 +143,7 @@ async fn verify_recent_mfa(
     if has_totp == has_recovery {
         return Err(bad_request_response("Provide exactly one MFA factor"));
     }
+    enforce_mfa_verification_rate_limit(&state, &user_id, &headers, peer_addr).await?;
     let credential = match get_totp_credential(db, &user_id).await {
         Ok(Some(credential)) if credential.enabled_at.is_some() => credential,
         Ok(_) => return Err(bad_request_response("TOTP is not enabled")),
@@ -253,10 +300,13 @@ async fn start_totp_enrollment(claims: Claims, State(state): State<AppState>) ->
 async fn verify_totp_enrollment(
     claims: Claims,
     State(state): State<AppState>,
+    PeerAddr(peer_addr): PeerAddr,
+    headers: HeaderMap,
     Json(request): Json<VerifyTotpEnrollmentRequest>,
 ) -> ApiResponse {
     let db = require_db(&state)?;
     let user_id = require_user_id(&claims)?;
+    enforce_mfa_verification_rate_limit(&state, &user_id, &headers, peer_addr).await?;
     let key = match state.config.mfa_secret_key_bytes() {
         Ok(key) => key,
         Err(_) => return Err(mfa_unavailable_response()),
@@ -360,8 +410,11 @@ fn internal_error_response(
 
 #[cfg(test)]
 mod tests {
-    use super::{mfa_required_for_claims, require_user_id};
+    use super::{enforce_mfa_verification_rate_limit, mfa_required_for_claims, require_user_id};
     use crate::models::Claims;
+    use crate::{config::Config, state::AppState};
+    use axum::http::HeaderMap;
+    use std::net::SocketAddr;
 
     fn claims(uid: Option<&str>, principal_type: Option<&str>) -> Claims {
         Claims {
@@ -421,5 +474,53 @@ mod tests {
         };
         assert!(mfa_required_for_claims(&user));
         assert!(!mfa_required_for_claims(&client));
+    }
+
+    #[tokio::test]
+    async fn mfa_verification_quota_covers_account_source_and_window() {
+        let config = Config {
+            environment: "test".to_string(),
+            redis_url: None,
+            auth_rate_limit_window_seconds: 60,
+            auth_rate_limit_max_requests: 1,
+            auth_global_rate_limit_max_requests: 2,
+            ..Config::default()
+        };
+        let state = AppState::new(config, None).expect("Test AppState must initialize");
+        let headers = HeaderMap::new();
+        let ip_one = Some(SocketAddr::from(([198, 51, 100, 41], 3001)));
+        let ip_two = Some(SocketAddr::from(([198, 51, 100, 42], 3001)));
+
+        assert!(
+            enforce_mfa_verification_rate_limit(&state, "user-a", &headers, ip_one)
+                .await
+                .is_ok()
+        );
+        assert!(
+            enforce_mfa_verification_rate_limit(&state, "user-a", &headers, ip_two)
+                .await
+                .is_err()
+        );
+        assert!(
+            enforce_mfa_verification_rate_limit(&state, "user-b", &headers, ip_one)
+                .await
+                .is_ok()
+        );
+        assert!(
+            enforce_mfa_verification_rate_limit(&state, "user-c", &headers, ip_one)
+                .await
+                .is_err()
+        );
+
+        let expired_at =
+            chrono::Utc::now().timestamp() - state.config.auth_rate_limit_window_seconds - 1;
+        for timestamps in state.auth_rate_limits.write().await.values_mut() {
+            timestamps.fill(expired_at);
+        }
+        assert!(
+            enforce_mfa_verification_rate_limit(&state, "user-c", &headers, ip_one)
+                .await
+                .is_ok()
+        );
     }
 }

@@ -436,6 +436,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 `POST /v1/user/mfa/verify` 请求体必须且只能提交 `totp_code` 或 `recovery_code` 其中之一。验证成功后，Keylo 将最近 MFA 凭据绑定到当前 access token 的 `jti`，有效期为 10 分钟；TOTP 的同一时间步只能成功一次，恢复码成功后立即作废。该接口为改密和管理敏感操作提供二次认证前置条件，审计记录仅保存验证方式。
 
+`POST /v1/user/mfa/verify` 和 `POST /v1/user/mfa/totp/verify` 共用账号及来源 IP 请求额度，在读取待验证凭据、解密 TOTP seed 或比较恢复码 bcrypt hash 前检查。账号额度按稳定 `uid` 计数，切换 access token 或在 TOTP、恢复码、enrollment 之间切换不会重置额度；每次只提交一种因子的请求都会计数，包括成功提交。限额复用 `AUTH_RATE_LIMIT_MAX_REQUESTS`、`AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS` 和 `AUTH_RATE_LIMIT_WINDOW_SECONDS`，超限返回 HTTP `429` 与 `too_many_requests`。来源地址遵循 `TRUST_PROXY_HEADERS`；配置 Redis 时不同服务实例共享额度，非生产且未配置 Redis 时额度仅在同一进程内共享。生产环境需要配置 Redis，否则现有认证限流会拒绝请求。
+
 已启用 TOTP 的用户调用 `POST /v1/user/change-password` 前必须先调用 `/v1/user/mfa/verify` 并使用同一 access token；缺少或过期的近期 MFA 凭据会返回 `403` 与 `mfa_required=true`，不会修改密码。尚未启用 MFA 的既有用户在管理员强制 MFA 策略上线前保持兼容。
 
 如果 access token 的 `password_change_required` 为 `true`，除 `/v1/auth/me`、`/v1/auth/logout`、`/v1/user/mfa/verify` 和 `/v1/user/change-password` 外的受保护接口都会返回 `403` 与 `error=password_change_required`。`POST /v1/user/change-password` 成功后清除该标记；重置密码用户不能通过 OIDC 浏览器登录绕过首次改密要求。
