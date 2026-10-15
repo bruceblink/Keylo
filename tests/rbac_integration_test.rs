@@ -9,25 +9,24 @@ mod tests {
     const RBAC_ADMIN_CLIENT_ID: &str = "cli-rbac-test";
     const RBAC_ADMIN_CLIENT_SECRET: &str = "CliRbacTest#123";
 
-    async fn setup_test_server() -> Option<TestServer> {
+    async fn setup_test_server() -> TestServer {
         let config = Config::default();
         let db_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-
-        match init_app_router_with_db_and_admin(
+            .expect("RBAC PostgreSQL integration tests require TEST_DATABASE_URL");
+        let router = init_app_router_with_db_and_admin(
             config,
             &db_url,
             RBAC_ADMIN_CLIENT_ID,
             RBAC_ADMIN_CLIENT_SECRET,
         )
         .await
-        {
-            Ok(router) => Some(TestServer::new(router)),
-            Err(e) => {
-                println!("Skipping test: DB unavailable ({})", e);
-                None
-            }
-        }
+        .unwrap_or_else(|error| {
+            panic!(
+                "RBAC test failed to connect, apply migrations, or initialize the application using TEST_DATABASE_URL: {error}"
+            )
+        });
+
+        TestServer::new(router)
     }
 
     async fn get_access_token(server: &TestServer) -> String {
@@ -82,9 +81,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_role() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let role_name = format!(
             "admin-{}",
@@ -112,9 +109,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_role_change_history_records_before_and_after_snapshots() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -182,9 +177,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_roles() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
 
         let response = server
@@ -203,9 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_permission() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let permission_name = format!(
             "user.manage.{}",
@@ -298,9 +289,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_permissions() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
 
         let response = server
@@ -319,9 +308,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_bindings_and_effective_permissions() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -429,9 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_user_role_assignment_rejects_service_only_roles_without_lingering_binding() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -512,9 +497,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_external_users_cannot_receive_platform_roles_or_partial_batches() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -613,9 +596,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_role_assignable_to_update_rejects_existing_incompatible_bindings() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -687,9 +668,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_keylo_2_0_service_principal_authorization_flow() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1040,9 +1019,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_keylo_2_0_user_menu_resource_tree_flow() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let admin_token = get_access_token(&server).await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1169,9 +1146,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_keystone_wildcard_permission_allows_any_rbac_check_and_resource_tree() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let admin_token = get_access_token(&server).await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)

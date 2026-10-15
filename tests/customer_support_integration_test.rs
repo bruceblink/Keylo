@@ -12,28 +12,19 @@ mod tests {
     const SUPPORT_TEST_ADMIN_CLIENT_SECRET: &str = "CustomerSupportIntegration#123";
     const SUPPORT_USER_PASSWORD: &str = "CustomerSupportUser#123";
 
-    /// Open the Docker-backed test database and apply the current migration set.
-    ///
-    /// Customer-support behavior depends on PostgreSQL constraints and live queries,
-    /// so this test deliberately skips when TEST_DATABASE_URL is not configured
-    /// instead of accidentally exercising the in-memory application fallback.
-    async fn setup_support_test_pool() -> Option<PgPool> {
-        let database_url = match std::env::var("TEST_DATABASE_URL") {
-            Ok(database_url) => database_url,
-            Err(_) => {
-                eprintln!(
-                    "Skipping customer-support integration test: TEST_DATABASE_URL is required"
-                );
-                return None;
-            }
-        };
+    /// Open the explicitly configured PostgreSQL test database and apply migrations.
+    async fn setup_support_test_pool() -> PgPool {
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .expect("customer-support integration test requires TEST_DATABASE_URL");
         let pool = db::init_db_pool(&database_url)
             .await
-            .expect("TEST_DATABASE_URL must reach the local Docker PostgreSQL database");
-        db::run_migrations(&pool)
-            .await
-            .expect("Customer-support migrations must apply on the test database");
-        Some(pool)
+            .unwrap_or_else(|error| {
+                panic!("customer-support test could not connect using TEST_DATABASE_URL: {error}")
+            });
+        db::run_migrations(&pool).await.unwrap_or_else(|error| {
+            panic!("customer-support migrations failed using TEST_DATABASE_URL: {error}")
+        });
+        pool
     }
 
     /// Configure one isolated human platform administrator for this test run.
@@ -87,9 +78,7 @@ mod tests {
 
     #[tokio::test]
     async fn customer_support_grant_is_live_tenant_bound_and_audited() {
-        let Some(pool) = setup_support_test_pool().await else {
-            return;
-        };
+        let pool = setup_support_test_pool().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let admin_username = format!("customer-support-admin-{suffix}");
         let admin_email = format!("{admin_username}@example.test");
@@ -103,7 +92,11 @@ mod tests {
                 SUPPORT_TEST_ADMIN_CLIENT_SECRET,
             )
             .await
-            .expect("Docker-backed application router should start"),
+            .unwrap_or_else(|error| {
+                panic!(
+                    "customer-support test application initialization failed using TEST_DATABASE_URL: {error}"
+                )
+            }),
         );
 
         let admin_login = server

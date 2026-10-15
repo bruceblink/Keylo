@@ -8,6 +8,7 @@ static DB_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 #[cfg(test)]
 mod database_tests {
     use super::*;
+    use anyhow::Context;
     use std::borrow::Cow;
 
     const PRINCIPAL_RESOURCE_MIGRATION_VERSION: i64 = 20260606090000;
@@ -61,22 +62,21 @@ mod database_tests {
     }
 
     /// 设置测试数据库
-    async fn setup_test_db() -> Result<PgPool, &'static str> {
+    async fn setup_test_db() -> anyhow::Result<PgPool> {
         let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+            .context("TEST_DATABASE_URL must be set for database integration tests")?;
 
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return Err("Database not available, skipping database tests"),
-        };
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .context("connect to the PostgreSQL test database")?;
 
         // 运行迁移
-        if db::run_migrations(&pool).await.is_err() {
-            return Err("Failed to run migrations");
-        }
+        db::run_migrations(&pool)
+            .await
+            .context("run PostgreSQL test database migrations")?;
 
         // 清理测试数据，保留表结构
-        if (sqlx::query(
+        sqlx::query(
             "TRUNCATE TABLE
                 organization_role_bindings,
                 organization_memberships,
@@ -100,27 +100,21 @@ mod database_tests {
              RESTART IDENTITY CASCADE",
         )
         .execute(&pool)
-        .await)
-            .is_err()
-        {
-            return Err("Failed to clean database data");
-        }
+        .await
+        .context("clean PostgreSQL test database")?;
 
-        if (sqlx::query(
+        sqlx::query(
             "INSERT INTO organizations (id, slug, name, kind, status)
              VALUES ('org-internal', 'internal', 'Internal Organization', 'internal', 'active')",
         )
         .execute(&pool)
-        .await)
-            .is_err()
-        {
-            return Err("Failed to restore the internal organization");
-        }
+        .await
+        .context("restore the internal organization test fixture")?;
 
         // The fixed support role is installed by a migration and is part of
         // the production contract, so restore it after the test-only cleanup
         // truncates the roles table.
-        if (sqlx::query(
+        sqlx::query(
             "INSERT INTO roles (id, name, description, assignable_to, system, scope)
              VALUES (
                  '8b1e397a-3e9e-42e8-a49f-aea4720df74f',
@@ -132,11 +126,8 @@ mod database_tests {
              )",
         )
         .execute(&pool)
-        .await)
-            .is_err()
-        {
-            return Err("Failed to restore the customer support role");
-        }
+        .await
+        .context("restore the customer support role test fixture")?;
 
         Ok(pool)
     }
@@ -144,46 +135,35 @@ mod database_tests {
     #[tokio::test]
     async fn test_database_migrations() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_database_migrations: {}", msg);
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("PostgreSQL test database setup must succeed");
 
         // 验证表是否创建成功
-        let clients_count = sqlx::query_scalar("SELECT COUNT(*) FROM clients")
+        let clients_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients")
             .fetch_one(&pool)
             .await
-            .unwrap_or(0);
+            .expect("clients table count query must succeed");
         assert_eq!(clients_count, 0);
 
-        let refresh_tokens_count = sqlx::query_scalar("SELECT COUNT(*) FROM refresh_tokens")
+        let refresh_tokens_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM refresh_tokens")
             .fetch_one(&pool)
             .await
-            .unwrap_or(0);
+            .expect("refresh_tokens table count query must succeed");
         assert_eq!(refresh_tokens_count, 0);
 
-        let blacklisted_count = sqlx::query_scalar("SELECT COUNT(*) FROM blacklisted_tokens")
+        let blacklisted_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM blacklisted_tokens")
             .fetch_one(&pool)
             .await
-            .unwrap_or(0);
+            .expect("blacklisted_tokens table count query must succeed");
         assert_eq!(blacklisted_count, 0);
     }
 
     #[tokio::test]
     async fn test_existing_single_organization_data_migrates_to_explicit_scopes() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let configured_database_url = match std::env::var("TEST_DATABASE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                println!(
-                    "Skipping legacy migration integration test: TEST_DATABASE_URL is required"
-                );
-                return;
-            }
-        };
+        let configured_database_url = std::env::var("TEST_DATABASE_URL")
+            .expect("TEST_DATABASE_URL must be set for migration integration tests");
         let maintenance_url = database_url_for_name(&configured_database_url, "postgres")
             .expect("TEST_DATABASE_URL must be a valid PostgreSQL URL");
         let database_name = format!("keylo_legacy_{}", uuid::Uuid::new_v4().simple());
@@ -370,16 +350,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_email_verification_is_idempotent_and_resets_on_email_change() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_email_verification_is_idempotent_and_resets_on_email_change: {}",
-                    msg
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let user = db::create_user(
             &pool,
             "email-verification-user",
@@ -422,16 +395,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_email_verification_tokens_are_hashed_single_use_and_revoked_on_email_change() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_email_verification_tokens_are_hashed_single_use_and_revoked_on_email_change: {}",
-                    msg
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         let user = db::create_user(
             &pool,
@@ -556,15 +522,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_organization_domain_tracks_explicit_human_classes_and_memberships() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_organization_domain_tracks_explicit_human_classes_and_memberships: {msg}"
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization = db::create_organization(
             &pool,
@@ -745,15 +705,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_organization_refresh_session_scope_mismatch_preserves_session() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_organization_refresh_session_scope_mismatch_preserves_session: {msg}"
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization = db::create_organization(
             &pool,
@@ -935,13 +889,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_organization_resources_are_isolated_by_scope() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_organization_resources_are_isolated_by_scope: {msg}");
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization_a = db::create_organization(
             &pool,
@@ -1055,13 +1005,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_service_clients_have_explicit_organization_scopes() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_service_clients_have_explicit_organization_scopes: {msg}");
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization = db::create_organization(
             &pool,
@@ -1216,15 +1162,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_device_machine_credentials_are_scoped_hashed_and_live() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_device_machine_credentials_are_scoped_hashed_and_live: {msg}"
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization_a = db::create_organization(
             &pool,
@@ -1476,15 +1416,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_platform_roles_require_internal_employee_and_fail_closed_for_legacy_bindings() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_platform_roles_require_internal_employee_and_fail_closed_for_legacy_bindings: {msg}"
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let platform_role = db::create_role_with_options(
             &pool,
@@ -1688,13 +1622,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_super_admin_bootstrap_is_an_internal_member() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_super_admin_bootstrap_is_an_internal_member: {msg}");
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let username = format!("bootstrap-admin-{suffix}");
         let config = keylo::config::Config {
@@ -1727,16 +1657,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_deleting_user_removes_linked_principal() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_deleting_user_removes_linked_principal: {}",
-                    msg
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let user = db::create_user(
             &pool,
             "deleted-principal-user",
@@ -1762,13 +1685,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_client_creation_and_validation() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_client_creation_and_validation: {}", msg);
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         // 创建客户端
         db::create_client(
@@ -1804,13 +1723,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_oidc_authorization_code_is_one_time_use() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_oidc_authorization_code_is_one_time_use: {msg}");
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let user = db::create_user(
             &pool,
             "oidc-code-user",
@@ -1863,15 +1778,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_organization_oidc_codes_are_revoked_by_lifecycle_changes() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_organization_oidc_codes_are_revoked_by_lifecycle_changes: {msg}"
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization = db::create_organization(
             &pool,
@@ -1999,13 +1908,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_upstream_oidc_callback_state_is_one_time_use() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_upstream_oidc_callback_state_is_one_time_use: {msg}");
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let source_name = format!("upstream-state-idp-{}", uuid::Uuid::new_v4());
         let source = db::identity::create_identity_source(
             &pool,
@@ -2054,13 +1959,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_identity_source_policy_controls_user_class_and_live_organization_membership() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping identity source policy test: {msg}");
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4();
         let customer = db::create_organization(
             &pool,
@@ -2176,13 +2077,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_external_identity_mapping_hashes_subject_at_rest() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_external_identity_mapping_hashes_subject_at_rest: {msg}");
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let username = format!("external-subject-user-{}", uuid::Uuid::new_v4());
         let user = db::create_user(
             &pool,
@@ -2218,13 +2115,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_refresh_token_operations() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_refresh_token_operations: {}", msg);
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         let token_id = "test-jti";
         let client_id = "test-client";
@@ -2272,16 +2165,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_consume_refresh_token_is_one_time_use() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_consume_refresh_token_is_one_time_use: {}",
-                    msg
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         let token_id = "test-consume-jti";
         let client_id = "test-client";
@@ -2319,13 +2205,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_blacklist_operations() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_blacklist_operations: {}", msg);
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         let token = "test.blacklisted.token";
         let reason = "Test blacklist";
@@ -2362,13 +2244,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_cleanup_operations() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_cleanup_operations: {}", msg);
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         db::create_client(
             &pool,
@@ -2430,13 +2308,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_audit_log_operations() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_audit_log_operations: {}", msg);
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         db::create_audit_log(
             &pool,
@@ -2459,13 +2333,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_authorization_audit_log_filters() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_authorization_audit_log_filters: {}", msg);
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         db::create_authorization_audit_log(
             &pool,
@@ -2500,13 +2370,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_authorization_audit_log_cleanup() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!("Skipping test_authorization_audit_log_cleanup: {}", msg);
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
 
         db::create_authorization_audit_log(&pool, None, "deny", None, None, None)
             .await
@@ -2537,15 +2403,9 @@ mod database_tests {
     #[tokio::test]
     async fn test_organization_managers_are_scoped_and_membership_writes_are_idempotent() {
         let _guard = DB_TEST_LOCK.lock().await;
-        let pool = match setup_test_db().await {
-            Ok(pool) => pool,
-            Err(msg) => {
-                println!(
-                    "Skipping test_organization_managers_are_scoped_and_membership_writes_are_idempotent: {msg}"
-                );
-                return;
-            }
-        };
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
         let suffix = uuid::Uuid::new_v4().simple().to_string();
 
         let owner = db::create_user(

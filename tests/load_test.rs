@@ -112,12 +112,7 @@ mod load_tests {
                 Ok(resp) => {
                     let status = resp.status_code();
                     println!("Request {} returned status: {}", i, status);
-                    assert!(
-                        status == StatusCode::BAD_REQUEST
-                            || status == StatusCode::UNAUTHORIZED
-                            || status == StatusCode::INTERNAL_SERVER_ERROR
-                            || status == StatusCode::UNPROCESSABLE_ENTITY
-                    );
+                    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
                 }
                 Err(_) => panic!("Request {} timeout", i),
             }
@@ -161,12 +156,7 @@ mod load_tests {
                 match response {
                     Ok(resp) => {
                         let status = resp.status_code();
-                        assert!(
-                            status == StatusCode::BAD_REQUEST
-                                || status == StatusCode::UNAUTHORIZED
-                                || status == StatusCode::INTERNAL_SERVER_ERROR
-                                || status == StatusCode::UNPROCESSABLE_ENTITY
-                        );
+                        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
                     }
                     Err(_) => panic!("Error request {} timeout", i),
                 }

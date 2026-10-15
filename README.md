@@ -51,7 +51,17 @@
 
 ## 🧪 测试
 
-Keylo 包含完整的测试套件，包括单元测试、集成测试、数据库测试和负载测试。
+Keylo 包含单元、HTTP、数据库、SMTP 和负载测试。真实依赖测试必须显式配置
+`TEST_DATABASE_URL` 和所需的 Mailpit 参数；缺配置、连接、迁移或初始化失败都会使测试失败，
+不会跳过断言或回退内存路由。
+
+以下分组无需 PostgreSQL 或 Mailpit：
+
+```bash
+cargo test --lib
+cargo test --test load_test
+cargo test --test integration_test tests::dependency_free::
+```
 
 ### 运行所有测试
 
@@ -65,8 +75,10 @@ Keylo 包含完整的测试套件，包括单元测试、集成测试、数据�
 ./scripts/run_tests.ps1
 ```
 
-该脚本会使用本机 Docker 启动 PostgreSQL 17 和 Mailpit，并验证真实 SMTP 投递；
-测试完成后自动清理临时服务。SMTP 生产配置和密文密码生成见
+脚本需要 Python 3，会使用本机 Docker 启动 PostgreSQL 17 和 Mailpit，验证真实 SMTP 投递、
+服务重启及测试故障退出行为；测试完成后自动清理本轮临时服务、匿名卷和凭据。
+故障检查只操作新建的 `keylo_fault_` 临时数据库，不修改配置中的测试数据库。
+SMTP 生产配置和密文密码生成见
 [密文配置](docs/operations/SECRET_ENCRYPTION.md)。
 
 ### 手动运行测试
@@ -82,14 +94,28 @@ docker run -d --name keylo-test-db \
   -e POSTGRES_DB=keylo_test \
   -v $(pwd)/.secrets/.database_password:/run/secrets/.database_password:ro \
   -p 5432:5432 postgres:17
+docker run -d --name keylo-test-mail \
+  -p 127.0.0.1:11025:1025 -p 127.0.0.1:18025:8025 \
+  axllent/mailpit:v1.21.8
 ```
 
 1. **设置环境变量**：
 
 ```bash
-export TEST_DATABASE_URL="postgres://postgres@localhost:5432/keylo_test"
+export TEST_DATABASE_URL="$(python3 - <<'PY'
+from pathlib import Path
+from urllib.parse import quote
+password = Path('.secrets/.database_password').read_text().strip()
+print(f'postgres://postgres:{quote(password, safe="")}@127.0.0.1:5432/keylo_test')
+PY
+)"
 export DATABASE_PASSWORD_ENC_FILE="./.secrets/.database_password.enc"
 export DATABASE_PASSWORD_KEY_FILE="./.secrets/.database_password.key"
+export TEST_POSTGRES_CONTAINER_NAME="keylo-test-db"
+export SMTP_TEST_HOST="127.0.0.1"
+export SMTP_TEST_PORT="11025"
+export SMTP_TEST_API_URL="http://127.0.0.1:18025/api/v1/messages"
+export SMTP_TEST_CONTAINER_NAME="keylo-test-mail"
 ```
 
 1. **运行不同类型的测试**：
@@ -107,8 +133,11 @@ cargo test --test database_integration_test
 # 负载测试
 cargo test --test load_test
 
-# 所有测试
-cargo test
+# 所有测试（数据库用例会共享 fixture，使用单线程）
+cargo test --workspace --all-targets -- --test-threads=1
+
+# 验证真实连接、迁移、初始化和认证 500 故障会使测试失败
+python3 scripts/check_test_failures.py
 ```
 
 ### 测试覆盖率

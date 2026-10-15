@@ -45,7 +45,7 @@ hTqy0z7yJ7nMrODYl2Nt3t1PjomeoUqVsDEsveR0DpFaN+ChhVldGYGgbyu/QIMr
 wwIDAQAB
 -----END PUBLIC KEY-----"#;
 
-    async fn setup_test_server() -> Option<TestServer> {
+    async fn setup_test_server() -> TestServer {
         let config = Config {
             jwt_private_key_pem: TEST_JWT_PRIVATE_KEY_PEM.to_string(),
             jwt_public_key_pem: TEST_JWT_PUBLIC_KEY_PEM.to_string(),
@@ -54,15 +54,16 @@ wwIDAQAB
             ..Default::default()
         };
         let db_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+            .expect("OAuth PostgreSQL integration tests require TEST_DATABASE_URL");
+        let router = init_app_router_with_db_and_admin(config, &db_url, "cli", "cli-secret")
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "OAuth test failed to connect, apply migrations, or initialize the application using TEST_DATABASE_URL: {error}"
+                )
+            });
 
-        match init_app_router_with_db_and_admin(config, &db_url, "cli", "cli-secret").await {
-            Ok(router) => Some(TestServer::new(router)),
-            Err(e) => {
-                println!("Skipping test: failed to initialize test server: {}", e);
-                None
-            }
-        }
+        TestServer::new(router)
     }
 
     async fn get_access_token(server: &TestServer) -> String {
@@ -81,9 +82,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_create_oauth_provider() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let provider_name = format!("github-{}", Uuid::new_v4().simple());
 
@@ -111,9 +110,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_get_oauth_providers() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
 
         let response = server
@@ -130,9 +127,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_link_oauth_account_requires_user_token() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
         let token = get_access_token(&server).await;
         let provider_name = format!("github-{}", Uuid::new_v4().simple());
 

@@ -2,7 +2,7 @@
 
 > 更新时间：2026-10-15
 >
-> 整理基线：2026-09-25；代码审查基于 `94c4565`，审查计划已由 `19dfa50` 推送。阶段 8 已完成 R1 修复及本地验证，阶段 9 为下一切片。远端 CI run `38684723853` 的 Run Tests 和 Code Coverage 已通过；Security Audit 因 `rustls 0.23.45` 的四条新漏洞失败，现已升级至 `0.23.46` 并通过相同本地审计，补丁提交的远端 CI 待确认。阶段 0–7 的交付记录继续保留；提交 `7eb85c0` 对应 GitHub Actions run `38401038528` 的历史通过结果，不代表覆盖了本次发现的路径。当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；代码审查基于 `94c4565`，审查计划已由 `19dfa50` 推送。阶段 8 已完成 R1 修复及本地验证，阶段 9 已完成真实依赖测试失败关闭与本机 Docker 验证，阶段 10 为下一切片。远端 CI run `38684723853` 的 Run Tests 和 Code Coverage 已通过；Security Audit 因 `rustls 0.23.45` 的四条新漏洞失败，现已升级至 `0.23.46` 并通过相同本地审计；补丁 `fa5bf36` 的 [run 38696219788](https://github.com/bruceblink/Keylo/actions/runs/38696219788) 已通过 Security Audit 和 Run Tests，Code Coverage 仍在运行。阶段 0–7 的交付记录继续保留；提交 `7eb85c0` 对应 GitHub Actions run `38401038528` 的历史通过结果，不代表覆盖了本次发现的路径。当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -38,14 +38,14 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 6 | OIDC 登录失败后的重试体验 | 已完成 | 只将浏览器 `WrongCredentials` 显示为可重试表单；保留已验证授权参数，不回显密码，不改变认证判定或 API 错误契约。 |
 | 7 | 接入样例的 CI 清单对齐 | 已完成 | CI 已触发资源服务样例文件变更，但验证步骤漏掉 Spring resource server；补上 Gradle 测试和 wrapper 配置触发路径，并执行失败关闭回归。 |
 | 8 | 强制改密限制覆盖统一授权入口 | 已完成 | 四个统一授权入口复用强制改密检查；新增真实数据库回归确认受限 token 拒绝、重新登录恢复、组织隔离及 service/machine 授权保持。 |
-| 9 | 真实依赖测试失败关闭 | 下一切片 | 显式配置数据库时，连接、迁移和初始化失败必须导致测试非零退出，不能回退内存路由后报告通过。 |
-| 10 | OIDC 登录的限流与账号锁定 | 后续候选 | 与已有密码登录入口共用失败计数、账号锁定及来源限流，阻止改用浏览器登录绕过限制。 |
+| 9 | 真实依赖测试失败关闭 | 已完成 | 显式配置数据库时，连接、迁移和初始化失败必须导致测试非零退出，不能回退内存路由后报告通过。 |
+| 10 | OIDC 登录的限流与账号锁定 | 下一切片 | 与已有密码登录入口共用失败计数、账号锁定及来源限流，阻止改用浏览器登录绕过限制。 |
 | 11 | MFA 验证的猜码保护 | 后续候选 | 在 TOTP、恢复码及 enrollment 确认的昂贵验证前限制账号与来源请求。 |
 | 12 | 改密后撤销旧恢复链接 | 后续候选 | 自行改密、管理员 reset 和管理员 update password 均在同一事务撤销待消费恢复 token。 |
 | 13 | JWT 轮换状态的持久化与恢复 | 后续候选 | 保存 passive key 的绝对到期时间，重启不能重新启用已过期旧 key；失败写入保持一致。 |
 | 14 | 默认生产 Compose 的启动闭环 | 后续候选 | 对齐必需配置、密钥卷权限和文档，以容器启动、readiness 及重启证明模板可用。 |
 
-阶段 8–14 来自第 11 节的现有代码缺陷。阶段 8 已修复并完成本地验证；只有阶段 9 可以直接进入实现，其余候选按表中顺序在前一切片完成后复核。MFA enrollment 并发、组织角色类型兼容性和成员暂停后的 OIDC code 撤销列为阶段 14 后的候选，见第 8.6 节。新增协议和控制台功能仍遵守第 8.2 节的进入条件。
+阶段 8–14 来自第 11 节的现有代码缺陷。阶段 8、9 已修复并完成本地验证；只有阶段 10 可以直接进入实现，其余候选按表中顺序在前一切片完成后复核。MFA enrollment 并发、组织角色类型兼容性和成员暂停后的 OIDC code 撤销列为阶段 14 后的候选，见第 8.6 节。新增协议和控制台功能仍遵守第 8.2 节的进入条件。
 
 阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 检查均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 交互约定，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
 
@@ -79,7 +79,8 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 | 验证 | 结果 |
 | --- | --- |
-| CI 安全依赖修复（2026-10-15） | [run 38684723853](https://github.com/bruceblink/Keylo/actions/runs/38684723853) 的 Security Audit 失败；本地复现为 `rustls 0.23.45` 命中 RUSTSEC-2026-0346、0347、0348、0349。仅将锁文件中的 rustls 更新为 `0.23.46`，未新增审计豁免；同一 `cargo audit --ignore RUSTSEC-2023-0071` 以 0 退出，原有 6 条非阻塞警告保留。补丁提交的远端结果待确认。 |
+| 阶段 9：真实依赖测试失败关闭（2026-10-15） | Bash Docker runner 完整通过，全量 296 项测试通过（152 单元、144 集成；另有 1 项默认 ignored 的专用故障探针），21 项故障/对照检查全部通过。PowerShell 的全量 296 项测试也通过；修复多 Python 路径选择后，单独复测脚本的实际故障调用，21 项检查通过。两套环境均使用本机 `postgres:17-alpine` 和 `axllent/mailpit:v1.21.8`：Bash PostgreSQL/SMTP/API 端口为 `35632/35225/35925`，PowerShell 为 `35532/35125/35825`。两套 runner 的容器后缀分别为 `2d832498bf3e8ee1`、`223a57bee1c8`，依赖均达到 readiness；本轮容器、匿名卷与临时凭据已清理。额外 PowerShell 故障调用使用 `35732` 端口上的独立 PostgreSQL，也已清理。fmt、workspace Clippy、actionlint、Python/Bash/PowerShell 语法和 Markdown 相对链接检查通过。阶段 9 的远端 CI 待确认。 |
+| CI 安全依赖修复（2026-10-15） | [run 38684723853](https://github.com/bruceblink/Keylo/actions/runs/38684723853) 的 Security Audit 失败；本地复现为 `rustls 0.23.45` 命中 RUSTSEC-2026-0346、0347、0348、0349。仅将锁文件中的 rustls 更新为 `0.23.46`，未新增审计豁免；同一 `cargo audit --ignore RUSTSEC-2023-0071` 以 0 退出，原有 6 条非阻塞警告保留。`fa5bf36` 的 [run 38696219788](https://github.com/bruceblink/Keylo/actions/runs/38696219788) 已确认 Security Audit 与 Run Tests 通过，Code Coverage 仍在运行。 |
 | 阶段 8：统一授权强制改密限制（2026-10-15） | 先执行新增回归，原实现因实际 200、预期 403 失败；共享检查接入后新增 3 项全部通过。`tests/authorization/password_change.rs` 由现有 `integration_test` 引入，CI 的 PostgreSQL 测试入口会执行。不可达 `TEST_DATABASE_URL` 的故障注入以 101 退出，不回退内存或跳过。fmt、workspace Clippy、Markdown 相对链接和 diff 检查通过；最终 152 单元、1 customer-support、26 database、82 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP、13 user，共 296 项 Rust 测试通过。本机 Docker 使用独立 PostgreSQL 17（宿主 `32768`）和 Mailpit `v1.21.8`（SMTP `32769`、API `32770`）；首轮 Mailpit 使用随机宿主端口，重启后端口变化导致恢复测试失败，改用固定映射后重跑 SMTP 和尚未执行的 user 套件通过。容器及匿名卷已清理；本切片不改 UI，未执行浏览器回归或确认本次远端 CI。 |
 | 代码审查与定向复现（2026-10-15，`94c4565`） | 当前库 `cargo build --lib --locked` 通过。仓库外合成账户 harness 在独立本机 Docker PostgreSQL 17 中确认：受限改密 token 得到 `allowed=true`、普通改密/管理员 reset 后旧恢复链接仍能覆盖密码、组织角色类型变更漏查绑定、成员暂停后恢复使旧 OIDC code 重新可兑换。直接调用真实 OIDC handler 确认已有账号锁不能阻止创建浏览器会话。启动加载器实验确认 1 秒 overlap 到期后旧 token 被拒绝，但重新加载配置又可验签。`docker compose config --format json` 确认生产模板缺少两个必需变量。显式使用不可达 `TEST_DATABASE_URL` 运行迁移测试，错误地得到退出码 0、1 passed；这是测试门禁缺陷的证据，不是数据库验收通过。MFA 猜码保护与 enrollment 竞争仅做静态调用链审查，未运行穷举或并发复现。测试容器及匿名卷已清理；未执行全量测试、外部 SMTP 或远端 CI。 |
 | OIDC 登录重试与 Spring Boot 资源服务 CI（2026-10-13） | 提交 `7eb85c0` 的 [GitHub Actions run 38401038528](https://github.com/bruceblink/Keylo/actions/runs/38401038528) 中，`Run Tests`、`Security Audit` 和 `Code Coverage` 全部通过。测试任务包含真实服务 Chromium 回归和 Spring Boot resource server 的 Gradle 测试。该结果关闭阶段 6、7。 |
@@ -259,7 +260,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 ### 8.5 已完成切片：强制改密限制覆盖统一授权入口
 
-状态：实现与本地验证已完成。普通 JWT 中间件和四个统一授权入口使用同一签名 claim 检查；改密后旧受限 token 仍拒绝，重新登录才获得正常授权。第 4 节记录本轮实际执行的验证，本次远端 CI 尚未确认。
+状态：实现与本地验证已完成。普通 JWT 中间件和四个统一授权入口使用同一签名 claim 检查；改密后旧受限 token 仍拒绝，重新登录才获得正常授权。第 4 节记录实际执行的验证；阶段 8 提交的远端 Run Tests 和 Code Coverage 已确认通过，安全依赖补丁另见第 4 节。
 
 依据：第 11 节 R1。用户被管理员重置密码后，现有 API 允许其用临时密码获得 `password_change_required=true` 的 access token。相同 token 在 `/protected` 被拒绝，却可以通过统一授权接口得到业务放行结果，违反恢复流程限制。
 
@@ -279,9 +280,13 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 回滚：撤销统一授权入口的受限 token 检查及对应回归即可恢复原行为；这会重新暴露 R1，不涉及数据恢复或迁移回滚，应在明确接受风险时才执行。
 
-### 8.6 后续候选的范围与验收
+### 8.6 当前切片与后续候选的范围与验收
 
-阶段 9 为下一切片，阶段 10–14 仍为修复候选，均未在本轮实现或验收；每项仍须按第 9 节独立提交。
+阶段 9 已完成实现与本地验收。真实数据库 helper 现已要求显式 `TEST_DATABASE_URL`；连接、迁移、fixture 和路由初始化错误直接失败，管理员认证 500 不再提前 return。12 项无数据库 HTTP 测试归入 `tests::dependency_free`，负载测试对缺少字段的 JSON 固定要求 422。SMTP 用例要求显式 Mailpit 参数，CI 提供真实容器 ID 以执行重启回归。
+
+测试脚本为本轮生成独立 Docker 容器和临时凭据，传播 Cargo、格式化、Clippy 和清理错误。新增 `scripts/check_test_failures.py` 运行实际测试二进制，验证各数据库套件缺配置和连接失败、迁移 checksum 错误、管理员 fixture 初始化错误及真实认证 500 的非零退出；每个探针还核对恰好运行一个测试，避免将编译错误或无匹配测试当作证据。破坏性探针只进入脚本新建的 `keylo_fault_` 临时数据库，正常数据库不参与故障写入。
+
+无产品接口、认证规则、数据库迁移或新增审计事件。回滚本切片只需撤销测试、脚本、CI 与文档改动，但会恢复对依赖失败的错误通过判定。阶段 10 为下一切片，阶段 11–14 保持后续候选；这些功能尚未在本轮实现或验收；每项仍须按第 9 节独立提交。
 
 | 顺序 | 对应问题 | 最小实现边界 | 必须能失败的验收 | 迁移、审计和回滚 |
 | --- | --- | --- | --- | --- |
@@ -326,7 +331,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## 11. 2026-10-15 代码审查记录
 
-审查基线为 `94c4565`，范围包括本地认证、OIDC、恢复、MFA、组织授权、密钥、默认部署及测试失败路径。以下为审查快照；R1 已由阶段 8 修复，其余问题仍未修复。P1 表示应优先修复的认证/运行缺陷，P2 表示随后处理的约束或验证缺陷，不把所有未实现的 IAM 功能都视作漏洞。
+审查基线为 `94c4565`，范围包括本地认证、OIDC、恢复、MFA、组织授权、密钥、默认部署及测试失败路径。以下为审查快照；R1 已由阶段 8 修复，R7 已由阶段 9 修复，其余问题仍未修复。P1 表示应优先修复的认证/运行缺陷，P2 表示随后处理的约束或验证缺陷，不把所有未实现的 IAM 功能都视作漏洞。
 
 | 编号 | 优先级 | 触发条件、影响与代码位置 | 本轮证据与覆盖缺口 |
 | --- | --- | --- | --- |
@@ -336,7 +341,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | R4 | P1 | [管理员 reset](../../src/db/user.rs#L501)、[自行改密](../../src/db/user.rs#L623) 和管理员 update password 不撤销恢复 token；[恢复消费](../../src/db/password_reset.rs#L181) 不绑定密码版本。旧链接持有人仍可覆盖已经更新的密码。 | 当前库在隔离 PostgreSQL 中实测：申请链接后自行改密，旧链接仍 Reset 且其新密码可登录；管理员 reset 后同样成立。管理员 update 路径仅静态确认；现有测试只覆盖恢复链接本身的单次消费与重放。 |
 | R5 | P1 | [启动加载 passive key](../../src/models/jwt.rs#L236) 每次按 now + overlap 重新到期；[轮换落盘](../../src/handlers/auth.rs#L1636) 只保存 PEM/kid，未保存绝对期限，而且在重复 kid 检查前已经写文件。 | 运行启动加载器实验：1 秒 overlap 到期后旧 key 消失、旧 token 拒绝；重新 `Keys::from_config` 后旧 key 与旧 token 验签恢复。未运行完整容器重启或磁盘故障实验；现有轮换测试缺少跨进程期限与失败一致性。 |
 | R6 | P1 | [默认 Compose](../../docker-compose.yml#L50) 设置 production，却未向容器传入 `OIDC_PUBLIC_ISSUER` 和 `MFA_SECRET_KEY`；[生产配置校验](../../src/config.rs#L1047) 强制要求两者，宿主 `.env` 不会自动成为容器环境。密钥目录又为只读挂载，托管轮换无法写入。 | `docker compose config --format json` 实际输出缺少两项，环境为 production，keys 卷 read_only=true。未构建并启动完整生产镜像，不能声称已完成部署验收。 |
-| R7 | P2 | [数据库 test helper](../../tests/database_integration_test.rs#L64) 将错误返回给 [测试中的 skip/return](../../tests/database_integration_test.rs#L147)；[HTTP helper](../../tests/integration_test.rs#L163) 在数据库初始化失败后回退内存，部分安全测试在管理员 500 时直接 return。 | 实际执行 `TEST_DATABASE_URL=postgres://postgres@127.0.0.1:1/review cargo test --locked --test database_integration_test test_database_migrations -- --nocapture`，输出数据库不可用却退出 0、报告 1 passed。此结果说明门禁误报，不能当作该功能通过。 |
+| R7 | P2（已修复） | [数据库 test helper](../../tests/database_integration_test.rs#L64) 将错误返回给 [测试中的 skip/return](../../tests/database_integration_test.rs#L147)；[HTTP helper](../../tests/integration_test.rs#L163) 在数据库初始化失败后回退内存，部分安全测试在管理员 500 时直接 return。 | 实际执行 `TEST_DATABASE_URL=postgres://postgres@127.0.0.1:1/review cargo test --locked --test database_integration_test test_database_migrations -- --nocapture`，输出数据库不可用却退出 0、报告 1 passed。此结果说明门禁误报。阶段 9 移除了真实套件的跳过与内存 fallback，新增 21 项故障/对照检查验证非零退出和正常断言。 |
 | R8 | P2 | [enrollment 读取并校验 seed](../../src/routes/mfa.rs#L265) 与 [按 user_id 启用](../../src/db/mfa.rs#L78) 分离；[无条件 upsert](../../src/db/mfa.rs#L16) 可在中间替换 seed，或覆盖刚启用的凭据。 | 静态交错：verify 读取 A → enroll 写 B → verify 启用 B；另一交错为 enroll 已读 pending → verify 启用 → 迟到 upsert 重置 enabled。未做并发运行复现，现有测试仅顺序操作。 |
 | R9 | P2 | [角色类型变更检查](../../src/db/rbac.rs#L73) 遗漏 organization_role_bindings；角色改为 service-only 后，既有组织 user 仍继承权限。update 与 restore 共享该检查。 | 在隔离数据库中真实执行组织 user 绑定、角色 user→service 更新后，权限查询仍为 true。现有兼容性测试只覆盖平台绑定。 |
 | R10 | P2 | [组织管理员变更成员状态](../../src/db/organization.rs#L770) 只撤销 refresh session，未像平台路径删除待兑换 OIDC code。暂停后再恢复成员，会使旧授权在其 300 秒寿命内重新可用。 | 独立数据库和真实 token handler 的 HTTP 请求确认：暂停时同一 code 兑换 400，恢复 active 后兑换 200 并返回 access token。客户端本来就持有回调 code 与 PKCE verifier，无需读取数据库；现有撤销测试只覆盖平台路径。 |

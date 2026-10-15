@@ -96,12 +96,32 @@ wwIDAQAB
         }
     }
 
-    async fn setup_email_verification_test_server() -> Option<(TestServer, RecordingMailProvider)> {
+    fn required_env(name: &str) -> String {
+        let value = std::env::var(name).unwrap_or_else(|_| {
+            panic!("{name} must be explicitly configured for user integration tests")
+        });
+        assert!(
+            !value.trim().is_empty(),
+            "{name} must not be empty for user integration tests"
+        );
+        value
+    }
+
+    fn test_database_url() -> String {
+        required_env("TEST_DATABASE_URL")
+    }
+
+    fn smtp_test_port() -> u16 {
+        required_env("SMTP_TEST_PORT")
+            .parse()
+            .expect("SMTP_TEST_PORT must be a valid port number")
+    }
+
+    async fn setup_email_verification_test_server() -> (TestServer, RecordingMailProvider) {
         let config = test_config();
-        let db_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let db_url = test_database_url();
         let provider = RecordingMailProvider::default();
-        match init_app_router_with_db_and_admin_and_mail_provider(
+        let router = init_app_router_with_db_and_admin_and_mail_provider(
             config,
             &db_url,
             "user-test-admin",
@@ -109,65 +129,48 @@ wwIDAQAB
             Arc::new(provider.clone()),
         )
         .await
-        {
-            Ok(router) => Some((TestServer::new(router), provider)),
-            Err(error) => {
-                println!(
-                    "Skipping email verification test: DB unavailable ({})",
-                    error
-                );
-                None
-            }
-        }
+        .expect("The explicitly configured PostgreSQL test database must initialize");
+        (TestServer::new(router), provider)
     }
 
-    fn smtp_test_config(port: u16, timeout_seconds: i64) -> Option<Config> {
-        let host = std::env::var("SMTP_TEST_HOST").ok()?;
+    fn smtp_test_config(host: &str, port: u16, timeout_seconds: i64) -> Config {
         let from = "Keylo Test <no-reply@example.test>".to_string();
-        Some(Config {
+        Config {
             mail_provider: "smtp".to_string(),
-            smtp_host: Some(host),
+            smtp_host: Some(host.to_string()),
             smtp_port: port,
             smtp_from: Some(from),
             smtp_tls_mode: "plain".to_string(),
             smtp_timeout_seconds: timeout_seconds,
             ..test_config()
-        })
+        }
     }
 
-    async fn setup_smtp_test_server(port: u16) -> Option<TestServer> {
-        setup_smtp_test_server_with_timeout(port, 2).await
+    async fn setup_smtp_test_server(port: u16) -> TestServer {
+        let host = required_env("SMTP_TEST_HOST");
+        setup_smtp_test_server_at(&host, port, 2).await
     }
 
-    async fn setup_smtp_test_server_with_timeout(
-        port: u16,
-        timeout_seconds: i64,
-    ) -> Option<TestServer> {
-        let Some(config) = smtp_test_config(port, timeout_seconds) else {
-            println!("Skipping SMTP account flow: SMTP_TEST_HOST is not configured");
-            return None;
-        };
-        let db_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        match init_app_router_with_db_and_admin(
+    async fn setup_smtp_test_server_with_timeout(port: u16, timeout_seconds: i64) -> TestServer {
+        setup_smtp_test_server_at("127.0.0.1", port, timeout_seconds).await
+    }
+
+    async fn setup_smtp_test_server_at(host: &str, port: u16, timeout_seconds: i64) -> TestServer {
+        let config = smtp_test_config(host, port, timeout_seconds);
+        let db_url = test_database_url();
+        let router = init_app_router_with_db_and_admin(
             config,
             &db_url,
             "user-test-admin",
             "UserTestAdmin#123",
         )
         .await
-        {
-            Ok(router) => Some(TestServer::new(router)),
-            Err(error) => {
-                println!("Skipping SMTP account flow: DB unavailable ({error})");
-                None
-            }
-        }
+        .expect("The explicitly configured PostgreSQL test database must initialize");
+        TestServer::new(router)
     }
 
     async fn wait_for_smtp_token(prefix: &str, recipient: &str, subject: &str) -> String {
-        let api_url = std::env::var("SMTP_TEST_API_URL")
-            .expect("SMTP_TEST_API_URL must be set for SMTP account flow tests");
+        let api_url = required_env("SMTP_TEST_API_URL");
         let api_base = api_url
             .strip_suffix("/messages")
             .expect("SMTP_TEST_API_URL must end with /messages");
@@ -224,16 +227,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_smtp_account_flows_deliver_and_consume_real_tokens() {
-        let Some(server) = setup_smtp_test_server(
-            std::env::var("SMTP_TEST_PORT")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(1025),
-        )
-        .await
-        else {
-            return;
-        };
+        let server = setup_smtp_test_server(smtp_test_port()).await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let username = format!("smtp-flow-{suffix}");
         let email = format!("smtp-flow-{suffix}@example.test");
@@ -339,9 +333,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_smtp_delivery_failure_revokes_password_reset_token() {
-        let Some(server) = setup_smtp_test_server(1).await else {
-            return;
-        };
+        let server = setup_smtp_test_server(1).await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let username = format!("smtp-failure-{suffix}");
         let email = format!("smtp-failure-{suffix}@example.test");
@@ -358,8 +350,7 @@ wwIDAQAB
             .as_str()
             .unwrap()
             .to_string();
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = test_database_url();
         let pool = db::init_db_pool(&database_url).await.unwrap();
         db::mark_user_email_verified(&pool, &user_id, Some("test"))
             .await
@@ -398,10 +389,7 @@ wwIDAQAB
             }
         });
 
-        let Some(server) = setup_smtp_test_server_with_timeout(port, 1).await else {
-            accept_task.abort();
-            return;
-        };
+        let server = setup_smtp_test_server_with_timeout(port, 1).await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let username = format!("smtp-timeout-{suffix}");
         let email = format!("smtp-timeout-{suffix}@example.test");
@@ -418,8 +406,7 @@ wwIDAQAB
             .as_str()
             .unwrap()
             .to_string();
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = test_database_url();
         let pool = db::init_db_pool(&database_url).await.unwrap();
         db::mark_user_email_verified(&pool, &user_id, Some("test"))
             .await
@@ -445,9 +432,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_email_verification_request_and_confirmation_are_single_use() {
-        let Some((server, provider)) = setup_email_verification_test_server().await else {
-            return;
-        };
+        let (server, provider) = setup_email_verification_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let username = format!("email-verify-{suffix}");
         let email = format!("email-verify-{suffix}@example.test");
@@ -514,9 +499,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_email_verification_delivery_failure_returns_unavailable_and_revokes_token() {
-        let Some((server, provider)) = setup_email_verification_test_server().await else {
-            return;
-        };
+        let (server, provider) = setup_email_verification_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let username = format!("email-failure-{suffix}");
         let email = format!("email-failure-{suffix}@example.test");
@@ -554,8 +537,7 @@ wwIDAQAB
         assert_eq!(failed_request.status_code(), 503);
         assert!(provider.deliveries().is_empty());
 
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = test_database_url();
         let pool = db::init_db_pool(&database_url).await.unwrap();
         let revoked_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM email_verification_tokens
@@ -571,9 +553,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_password_reset_is_non_enumerating_single_use_and_revokes_sessions() {
-        let Some((server, provider)) = setup_email_verification_test_server().await else {
-            return;
-        };
+        let (server, provider) = setup_email_verification_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let username = format!("password-reset-{suffix}");
         let email = format!("password-reset-{suffix}@example.test");
@@ -591,8 +571,7 @@ wwIDAQAB
             .unwrap()
             .to_string();
 
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = test_database_url();
         let pool = db::init_db_pool(&database_url).await.unwrap();
         assert!(db::mark_user_email_verified(&pool, &user_id, Some("test"))
             .await
@@ -717,9 +696,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_password_reset_delivery_failure_keeps_public_response_and_revokes_token() {
-        let Some((server, provider)) = setup_email_verification_test_server().await else {
-            return;
-        };
+        let (server, provider) = setup_email_verification_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let username = format!("password-failure-{suffix}");
         let email = format!("password-failure-{suffix}@example.test");
@@ -736,8 +713,7 @@ wwIDAQAB
             .as_str()
             .unwrap()
             .to_string();
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = test_database_url();
         let pool = db::init_db_pool(&database_url).await.unwrap();
         db::mark_user_email_verified(&pool, &user_id, Some("test"))
             .await
@@ -778,36 +754,23 @@ wwIDAQAB
         totp.generate(chrono::Utc::now().timestamp() as u64)
     }
 
-    async fn setup_test_server() -> Option<TestServer> {
-        println!("Setting up test server...");
+    async fn setup_test_server() -> TestServer {
         let config = test_config();
-        let db_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-
-        match init_app_router_with_db_and_admin(
+        let db_url = test_database_url();
+        let router = init_app_router_with_db_and_admin(
             config,
             &db_url,
             "user-test-admin",
             "UserTestAdmin#123",
         )
         .await
-        {
-            Ok(router) => {
-                println!("Test server initialized successfully");
-                Some(TestServer::new(router))
-            }
-            Err(e) => {
-                println!("Skipping test: DB unavailable ({})", e);
-                None
-            }
-        }
+        .expect("The explicitly configured PostgreSQL test database must initialize");
+        TestServer::new(router)
     }
 
     #[tokio::test]
     async fn test_auth_me_returns_non_empty_uid() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -854,9 +817,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_change_password_success() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
 
         // 使用时间戳生成唯一用户名
         let timestamp = std::time::SystemTime::now()
@@ -959,9 +920,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_change_password_wrong_current() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
 
         // 使用时间戳生成唯一用户名
         let timestamp = std::time::SystemTime::now()
@@ -1019,9 +978,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_change_password_too_short() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
 
         // 使用时间戳生成唯一用户名
         let timestamp = std::time::SystemTime::now()
@@ -1079,9 +1036,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_change_password_unauthorized() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
 
         // 不带token尝试更改密码
         let change_response = server
@@ -1097,9 +1052,7 @@ wwIDAQAB
 
     #[tokio::test]
     async fn test_totp_recovery_and_recent_mfa_lifecycle() {
-        let Some(server) = setup_test_server().await else {
-            return;
-        };
+        let server = setup_test_server().await;
 
         // The flow covers enrollment, one-time recovery use, token-bound MFA, and reset.
         let timestamp = std::time::SystemTime::now()

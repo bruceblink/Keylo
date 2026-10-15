@@ -123,9 +123,33 @@ mod tests {
         }
     }
 
-    /// 设置测试服务器（带数据库）
-    async fn setup_test_server() -> TestServer {
-        setup_test_server_with_config(test_config()).await
+    /// Return the explicitly configured database URL used by real-dependency HTTP tests.
+    fn required_test_database_url() -> String {
+        std::env::var("TEST_DATABASE_URL")
+            .expect("TEST_DATABASE_URL is required for database integration tests")
+    }
+
+    /// Set up the HTTP router backed by a real PostgreSQL database.
+    async fn setup_database_test_server() -> TestServer {
+        setup_database_test_server_with_config(test_config()).await
+    }
+
+    /// Set up the HTTP router backed by in-memory state for tests that do not touch the database.
+    async fn setup_memory_test_server() -> TestServer {
+        setup_memory_test_server_with_config(test_config()).await
+    }
+
+    async fn setup_memory_test_server_with_config(mut config: Config) -> TestServer {
+        config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
+        config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
+        config.environment = "test".to_string();
+        config.redis_url = None;
+        config.redis_key_prefix = format!(
+            "keylo-memory-test-{}-{}",
+            std::process::id(),
+            TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        TestServer::new(startup::init_app_router_with_config(config))
     }
 
     /// Post a browser OIDC login form with the same validated authorization fields on every attempt.
@@ -153,7 +177,7 @@ mod tests {
             .await
     }
 
-    async fn setup_test_server_with_config(mut config: Config) -> TestServer {
+    async fn setup_database_test_server_with_config(mut config: Config) -> TestServer {
         config.jwt_private_key_pem = TEST_JWT_PRIVATE_KEY_PEM.to_string();
         config.jwt_public_key_pem = TEST_JWT_PUBLIC_KEY_PEM.to_string();
         config.environment = "test".to_string();
@@ -163,23 +187,58 @@ mod tests {
             std::process::id(),
             TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = required_test_database_url();
 
-        match startup::init_app_router_with_db_and_admin(
+        let app = startup::init_app_router_with_db_and_admin(
             config.clone(),
             &database_url,
             INTEGRATION_ADMIN_CLIENT_ID,
             INTEGRATION_ADMIN_CLIENT_SECRET,
         )
         .await
-        {
-            Ok(app) => TestServer::new(app),
-            Err(_) => {
-                let app = startup::init_app_router_with_config(config);
-                TestServer::new(app)
-            }
-        }
+        .unwrap_or_else(|error| {
+            panic!("database-backed HTTP test router initialization failed: {error}")
+        });
+        TestServer::new(app)
+    }
+
+    /// Authenticate with the seeded platform admin and fail immediately on every HTTP error.
+    async fn admin_login(server: &TestServer) -> axum_test::TestResponse {
+        let response = server
+            .post("/v1/admin/token")
+            .json(&json!({
+                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
+                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
+            }))
+            .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::OK,
+            "admin token request must succeed; actual status: {}",
+            response.status_code()
+        );
+        response
+    }
+
+    #[tokio::test]
+    #[ignore = "failure probe; run only via scripts/check_test_failures.py against its temporary database"]
+    async fn probe_admin_authentication_500_fails() {
+        let database_url = required_test_database_url();
+        let parsed = url::Url::parse(&database_url).expect("failure probe needs a PostgreSQL URL");
+        assert!(
+            parsed.path().starts_with("/keylo_fault_"),
+            "failure probe may only modify its generated keylo_fault_ database"
+        );
+        let server = setup_database_test_server().await;
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed for failure probe");
+        sqlx::query("DROP TABLE clients CASCADE")
+            .execute(&pool)
+            .await
+            .expect("failure probe should drop the clients table");
+
+        let _ = self::admin_login(&server).await;
     }
 
     /// Sends one service-token request and returns its HTTP status for security-matrix tests.
@@ -200,40 +259,27 @@ mod tests {
             .status_code()
     }
 
-    /// Opens and migrates the database used by organization HTTP tests.
-    ///
-    /// An explicitly configured test database must be reachable; otherwise a
-    /// test could accidentally exercise the in-memory fallback router instead.
-    async fn setup_organization_test_pool() -> Option<sqlx::PgPool> {
-        let explicit_database_url = std::env::var("TEST_DATABASE_URL").ok();
-        let database_url = explicit_database_url
-            .clone()
-            .unwrap_or_else(|| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(error) if explicit_database_url.is_some() => {
-                panic!("TEST_DATABASE_URL must be reachable for organization tests: {error}")
-            }
-            Err(error) => {
-                eprintln!("Skipping organization HTTP test without PostgreSQL: {error}");
-                return None;
-            }
-        };
-        if let Err(error) = db::run_migrations(&pool).await {
-            if explicit_database_url.is_some() {
-                panic!("TEST_DATABASE_URL migrations must succeed for organization tests: {error}");
-            }
-            eprintln!("Skipping organization HTTP test without current migrations: {error}");
-            return None;
-        }
-        Some(pool)
+    /// Opens and migrates the explicitly configured database used by organization HTTP tests.
+    async fn setup_organization_test_pool() -> sqlx::PgPool {
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL must be reachable for organization HTTP tests");
+        db::run_migrations(&pool)
+            .await
+            .expect("TEST_DATABASE_URL migrations must succeed for organization HTTP tests");
+        pool
     }
 
     /// Run Keylo on a real loopback port so an unmodified standard OIDC client can use Discovery.
-    async fn setup_oidc_compatibility_server() -> Option<(String, tokio::task::JoinHandle<()>)> {
-        let database_url = std::env::var("TEST_DATABASE_URL").ok()?;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.ok()?;
-        let address = listener.local_addr().ok()?;
+    async fn setup_oidc_compatibility_server() -> (String, tokio::task::JoinHandle<()>) {
+        let database_url = required_test_database_url();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("compatibility server listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("compatibility server listener should have a local address");
         let issuer = format!("http://{address}");
         let mut config = test_config();
         config.server_addr = "127.0.0.1".to_string();
@@ -247,22 +293,20 @@ mod tests {
             INTEGRATION_ADMIN_CLIENT_SECRET,
         )
         .await
-        .ok()?;
+        .expect("database-backed OIDC compatibility server should initialize");
         let task = tokio::spawn(async move {
             axum::serve(listener, app)
                 .await
                 .expect("compatibility server must run");
         });
-        Some((issuer, task))
+        (issuer, task)
     }
 
     #[tokio::test]
     async fn test_standard_openidconnect_client_completes_keylo_code_pkce_flow() {
-        let Some((issuer, server_task)) = setup_oidc_compatibility_server().await else {
-            return;
-        };
+        let (issuer, server_task) = setup_oidc_compatibility_server().await;
         let result = async {
-            let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+            let database_url = required_test_database_url();
             let pool = db::init_db_pool(&database_url).await.unwrap();
             let client_id = format!(
                 "oidc-standard-client-{}",
@@ -438,10 +482,8 @@ mod tests {
         use base64::Engine as _;
         use sha2::Digest as _;
 
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization_a = db::create_organization(
             &pool,
@@ -561,13 +603,7 @@ mod tests {
             .await;
         assert_eq!(cross_org.status_code(), StatusCode::FORBIDDEN);
 
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -691,42 +727,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_health_check() {
-        let server = setup_test_server().await;
-
-        let response = server.get("/").await;
-
-        response.assert_status_ok();
-        let body: serde_json::Value = response.json();
-        assert_eq!(body["status"], "ok");
-        assert_eq!(body["service"], "keylo");
-        assert_eq!(body["setup"]["state"], "disabled");
-    }
-
-    #[tokio::test]
-    async fn test_liveness_endpoint() {
-        let server = setup_test_server().await;
-
-        let response = server.get("/healthz").await;
-
-        response.assert_status_ok();
-        let body: serde_json::Value = response.json();
-        assert_eq!(body["status"], "ok");
-        assert_eq!(body["service"], "keylo");
-    }
-
-    #[tokio::test]
-    async fn test_favicon_is_public_no_content() {
-        let server = setup_test_server().await;
-
-        let response = server.get("/favicon.ico").await;
-
-        assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
     async fn test_readiness_endpoint() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
         let response = server.get("/readyz").await;
         let body: serde_json::Value = response.json();
@@ -740,20 +742,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_jwks_endpoint() {
-        let server = setup_test_server().await;
-
-        let response = server.get("/.well-known/jwks.json").await;
-
-        response.assert_status_ok();
-        let body: serde_json::Value = response.json();
-        let keys = body["keys"].as_array().unwrap();
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0]["kty"], "RSA");
-        assert_eq!(keys[0]["alg"], "RS256");
-        assert!(keys[0]["kid"].as_str().is_some());
-        assert!(keys[0]["n"].as_str().is_some());
-        assert!(keys[0]["e"].as_str().is_some());
+    async fn test_jwt_key_management_requires_platform_admin() {
+        let server = setup_database_test_server().await;
+        let response = server
+            .post("/v1/admin/security/jwt-keys/rotate")
+            .json(&json!({"key_id": "unauthorized-rotation"}))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -771,18 +766,9 @@ mod tests {
             key_dir.join("passive-public.pem").display().to_string();
         config.jwt_passive_key_id_path = key_dir.join("passive-key-id").display().to_string();
         config.jwt_key_overlap_seconds = 300;
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let old_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -816,13 +802,7 @@ mod tests {
             .await;
         old_token_still_valid.assert_status_ok();
 
-        let new_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let new_login = self::admin_login(&server).await;
         new_login.assert_status_ok();
         let new_token = new_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -855,13 +835,7 @@ mod tests {
             rollback_body["data"]["passive_key_ids"][0],
             format!("rotation-http-second-{suffix}")
         );
-        let rollback_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let rollback_login = self::admin_login(&server).await;
         rollback_login.assert_status_ok();
         let rollback_token = rollback_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -892,9 +866,7 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
 
-        let pool = setup_organization_test_pool()
-            .await
-            .expect("rotation test database should be available");
+        let pool = setup_organization_test_pool().await;
         let audit_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM audit_logs WHERE event_type IN ('jwt_signing_key.rotated', 'jwt_signing_key.retired') AND detail LIKE $1",
         )
@@ -907,28 +879,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_jwt_key_management_requires_platform_admin() {
-        let server = setup_test_server().await;
-        let response = server
-            .post("/v1/admin/security/jwt-keys/rotate")
-            .json(&json!({"key_id": "unauthorized-rotation"}))
-            .await;
-        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
     async fn test_oidc_public_client_token_request_rejects_a_secret() {
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_body: serde_json::Value = admin_login.json();
         let admin_token = admin_body["access_token"].as_str().unwrap();
@@ -969,17 +922,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_oidc_authorize_without_session_renders_standard_browser_login_form() {
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -1041,10 +985,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_oidc_browser_login_retries_wrong_credentials_without_changing_api_errors() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let client_id = format!("oidc-browser-retry-{suffix}");
         db::create_oidc_client(
@@ -1194,10 +1136,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_oidc_browser_login_rejects_suspended_members_and_disabled_organizations() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization = db::create_organization(
             &pool,
@@ -1297,13 +1237,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_oidc_consent_denial_redirects_to_validated_client_with_state() {
-        let server = setup_test_server().await;
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
+        let server = setup_database_test_server().await;
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed");
         let client_id = format!(
             "oidc-denial-{}",
             TEST_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -1367,17 +1305,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_oidc_client_security_updates_invalidate_pending_authorization_codes() {
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -1398,12 +1327,10 @@ mod tests {
             }))
             .await;
         create.assert_status_ok();
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed");
         let username = format!("oidc-code-user-{}", uuid::Uuid::new_v4());
         let user = db::create_user(
             &pool,
@@ -1498,13 +1425,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_user_oidc_browser_session_cannot_start_authorization() {
-        let server = setup_test_server().await;
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
+        let server = setup_database_test_server().await;
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed");
         let username = format!("oidc-browser-disabled-{}", uuid::Uuid::new_v4());
         let user = db::create_user(
             &pool,
@@ -1557,13 +1482,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_password_change_revokes_refresh_and_oidc_browser_sessions() {
-        let server = setup_test_server().await;
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
+        let server = setup_database_test_server().await;
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed");
         let username = format!("password-session-user-{}", uuid::Uuid::new_v4());
         let user = db::create_user(
             &pool,
@@ -1630,13 +1553,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_password_reset_revokes_refresh_and_oidc_browser_sessions() {
-        let server = setup_test_server().await;
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
+        let server = setup_database_test_server().await;
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed");
         let username = format!("password-reset-user-{}", uuid::Uuid::new_v4());
         let user = db::create_user(
             &pool,
@@ -1666,7 +1587,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let admin = server.post("/v1/admin/token").json(&json!({"client_id": INTEGRATION_ADMIN_CLIENT_ID, "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET})).await;
+        let admin = self::admin_login(&server).await;
         admin.assert_status_ok();
         let admin_token = admin.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -1763,13 +1684,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_user_update_password_revokes_refresh_and_oidc_browser_sessions() {
-        let server = setup_test_server().await;
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
+        let server = setup_database_test_server().await;
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed");
         let username = format!("password-update-user-{}", uuid::Uuid::new_v4());
         let user = db::create_user(
             &pool,
@@ -1799,7 +1718,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let admin = server.post("/v1/admin/token").json(&json!({"client_id": INTEGRATION_ADMIN_CLIENT_ID, "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET})).await;
+        let admin = self::admin_login(&server).await;
         admin.assert_status_ok();
         let admin_token = admin.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -1833,61 +1752,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_keylo_configuration_endpoint() {
-        let config = Config {
-            server_addr: "127.0.0.1".to_string(),
-            server_port: 3456,
-            oidc_public_issuer: Some("https://identity.example.com".to_string()),
-            jwt_audiences: vec!["admin-backend".to_string(), "inventory-svc".to_string()],
-            ..test_config()
-        };
-        let server = setup_test_server_with_config(config).await;
-
-        let response = server.get("/.well-known/keylo-configuration").await;
-
-        response.assert_status_ok();
-        let body: serde_json::Value = response.json();
-        assert_eq!(body["issuer"], "keylo");
-        assert_eq!(
-            body["jwks_uri"],
-            "https://identity.example.com/.well-known/jwks.json"
-        );
-        assert_eq!(
-            body["introspection_endpoint"],
-            "https://identity.example.com/v1/auth/introspect"
-        );
-        assert_eq!(
-            body["documentation_uri"],
-            "https://identity.example.com/docs/integrations/THIRD_PARTY_INTEGRATION.md"
-        );
-        assert_eq!(
-            body["admin_token_endpoint"],
-            "https://identity.example.com/v1/admin/token"
-        );
-        assert_eq!(body["supported_signing_algorithms"], json!(["RS256"]));
-        assert_eq!(
-            body["supported_token_types"],
-            json!([
-                "access",
-                "refresh",
-                "service_access",
-                "customer_support_access"
-            ])
-        );
-        assert_eq!(
-            body["supported_audiences"],
-            json!(["admin-backend", "inventory-svc"])
-        );
-        assert!(body["supported_claims"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|claim| claim == "token_type"));
-    }
-
-    #[tokio::test]
     async fn test_invalid_auth_request() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
         let auth_payload = json!({
             "client_id": "invalid",
@@ -1896,53 +1762,12 @@ mod tests {
 
         let response = server.post("/v1/auth/token").json(&auth_payload).await;
 
-        // 如果数据库不可用，返回500；否则返回401（错误凭据）
-        let status = response.status_code();
-        assert!(status == StatusCode::INTERNAL_SERVER_ERROR || status == StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn test_access_protected_without_token() {
-        let server = setup_test_server().await;
-
-        let response = server.get("/protected").await;
-
-        // 兼容缺少 header 时的框架级 400 或统一鉴权返回的 401
-        let status = response.status_code();
-        assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn test_missing_credentials() {
-        let server = setup_test_server().await;
-
-        let empty_payload = json!({
-            "client_id": "",
-            "client_secret": ""
-        });
-
-        let response = server.post("/v1/auth/token").json(&empty_payload).await;
-
-        response.assert_status(StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn test_invalid_json_payload() {
-        let server = setup_test_server().await;
-
-        let response = server
-            .post("/v1/auth/token")
-            .bytes(Bytes::from("invalid json"))
-            .add_header("content-type", "application/json")
-            .await;
-
-        // 无效的JSON应该返回400 Bad Request
-        response.assert_status(StatusCode::BAD_REQUEST);
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn test_invalid_refresh_token() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
         let refresh_payload = json!({
             "refresh_token": "invalid.jwt.token"
@@ -1950,20 +1775,18 @@ mod tests {
 
         let response = server.post("/v1/auth/refresh").json(&refresh_payload).await;
 
-        // 无效令牌应返回401（无效令牌）；数据库不可用时返回500
+        // A malformed refresh token must be rejected independently of database availability.
         let status = response.status_code();
         assert!(
-            status == StatusCode::UNAUTHORIZED
-                || status == StatusCode::BAD_REQUEST
-                || status == StatusCode::INTERNAL_SERVER_ERROR,
-            "Expected 401/400/500, got {}",
+            status == StatusCode::UNAUTHORIZED || status == StatusCode::BAD_REQUEST,
+            "Expected 401/400, got {}",
             status
         );
     }
 
     #[tokio::test]
     async fn test_login_lockout_after_repeated_failures() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1975,11 +1798,7 @@ mod tests {
             "client_secret": "wrong-password"
         });
 
-        // 数据库不可用场景下，接口会返回500，跳过此测试
         let first = server.post("/v1/auth/token").json(&auth_payload).await;
-        if first.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
         assert_eq!(first.status_code(), StatusCode::UNAUTHORIZED);
 
         for _ in 0..4 {
@@ -2000,7 +1819,7 @@ mod tests {
             auth_rate_limit_window_seconds: 60,
             ..test_config()
         };
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2015,9 +1834,6 @@ mod tests {
 
         for _ in 0..3 {
             let response = server.post("/v1/auth/token").json(&auth_payload).await;
-            if response.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-                return;
-            }
             assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
         }
 
@@ -2031,45 +1847,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_admin_endpoints_require_auth() {
-        let server = setup_test_server().await;
-
-        // 测试黑名单管理端点
-        let blacklist_response = server
-            .post("/v1/admin/blacklist")
-            .json(&json!({"token": "test"}))
-            .await;
-
-        // 应该返回400（缺少Authorization header）或401（无权限）
-        assert!(
-            blacklist_response.status_code() == StatusCode::BAD_REQUEST
-                || blacklist_response.status_code() == StatusCode::NOT_FOUND
-                || blacklist_response.status_code() == StatusCode::UNAUTHORIZED
-        );
-
-        // 测试获取黑名单端点
-        let list_response = server.get("/v1/admin/blacklisted-tokens").await;
-
-        assert!(
-            list_response.status_code() == StatusCode::BAD_REQUEST
-                || list_response.status_code() == StatusCode::NOT_FOUND
-                || list_response.status_code() == StatusCode::UNAUTHORIZED
-        );
-
-        // 测试获取审计日志端点
-        let audit_response = server.get("/v1/admin/audit-logs").await;
-        assert!(
-            audit_response.status_code() == StatusCode::BAD_REQUEST
-                || audit_response.status_code() == StatusCode::NOT_FOUND
-                || audit_response.status_code() == StatusCode::UNAUTHORIZED
-        );
-    }
-
-    #[tokio::test]
     async fn test_audit_export_is_resumable_and_redacts_sensitive_details() {
-        let server = setup_test_server().await;
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .expect("TEST_DATABASE_URL is required for audit export integration tests");
+        let server = setup_database_test_server().await;
+        let database_url = required_test_database_url();
         let pool = db::init_db_pool(&database_url).await.unwrap();
         db::run_migrations(&pool).await.unwrap();
 
@@ -2092,13 +1872,7 @@ mod tests {
         .await
         .unwrap();
 
-        let login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let login = self::admin_login(&server).await;
         login.assert_status_ok();
         let login_body: serde_json::Value = login.json();
         let admin_token = login_body["access_token"].as_str().unwrap();
@@ -2167,7 +1941,7 @@ mod tests {
         // which would break other parallel tests that rely on cli-admin-root).
         //
         // Since is_admin_client is now stored in the DB (not from ADMIN_CLIENT_ID
-        // env var at request time), seeding a unique client via setup_test_server
+        // env var at request time), seeding a unique client via setup_database_test_server
         // gives it admin privileges independently without affecting cli-admin-root.
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2176,8 +1950,7 @@ mod tests {
         let rotate_client_id = format!("cli-rotate-test-{}", ts);
         let rotate_client_secret = "RotateTest123!";
 
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = required_test_database_url();
         let mut config = test_config();
         config.redis_key_prefix = format!(
             "keylo-test-{}-rotate-{}",
@@ -2193,7 +1966,7 @@ mod tests {
         .await
         {
             Ok(r) => r,
-            Err(_) => return,
+            Err(error) => panic!("database-backed HTTP test router initialization failed: {error}"),
         };
         let server = TestServer::new(router);
         let admin_login_resp = server
@@ -2203,10 +1976,6 @@ mod tests {
                 "client_secret": rotate_client_secret
             }))
             .await;
-
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
         admin_login_resp.assert_status_ok();
         let admin_login_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_login_body["access_token"].as_str().unwrap();
@@ -2255,17 +2024,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_rotate_client_secret_with_supplied_secret_does_not_echo_secret() {
-        let server = setup_test_server().await;
-        let login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let login_resp = self::admin_login(&server).await;
         login_resp.assert_status_ok();
         let login_body: serde_json::Value = login_resp.json();
         let access_token = login_body["access_token"].as_str().unwrap();
@@ -2303,17 +2063,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_client_management_api() {
-        let server = setup_test_server().await;
-        let login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let login_resp = self::admin_login(&server).await;
         login_resp.assert_status_ok();
         let login_body: serde_json::Value = login_resp.json();
         let access_token = login_body["access_token"].as_str().unwrap();
@@ -2381,7 +2132,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_non_admin_cannot_access_admin_user_routes() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2398,10 +2149,6 @@ mod tests {
                 "password": "Password123!"
             }))
             .await;
-
-        if register_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
         register_resp.assert_status_ok();
 
         let login_resp = server
@@ -2430,9 +2177,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_user_list_returns_stable_pagination_metadata() {
-        let server = setup_test_server().await;
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .expect("TEST_DATABASE_URL is required for user pagination integration tests");
+        let server = setup_database_test_server().await;
+        let database_url = required_test_database_url();
         let pool = db::init_db_pool(&database_url).await.unwrap();
         db::run_migrations(&pool).await.unwrap();
 
@@ -2455,13 +2201,7 @@ mod tests {
         .await
         .unwrap();
 
-        let login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let login = self::admin_login(&server).await;
         login.assert_status_ok();
         let login_body: serde_json::Value = login.json();
         let admin_token = login_body["access_token"].as_str().unwrap();
@@ -2500,9 +2240,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_principal_list_returns_stable_pagination_metadata() {
-        let server = setup_test_server().await;
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .expect("TEST_DATABASE_URL is required for principal pagination integration tests");
+        let server = setup_database_test_server().await;
+        let database_url = required_test_database_url();
         let pool = db::init_db_pool(&database_url).await.unwrap();
         db::run_migrations(&pool).await.unwrap();
 
@@ -2525,13 +2264,7 @@ mod tests {
         .await
         .unwrap();
 
-        let login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let login = self::admin_login(&server).await;
         login.assert_status_ok();
         let login_body: serde_json::Value = login.json();
         let admin_token = login_body["access_token"].as_str().unwrap();
@@ -2560,16 +2293,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_resource_list_returns_scoped_pagination_metadata() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let app = format!("pagination-app-{suffix}");
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -2607,18 +2334,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_inactive_user_cannot_get_auth_token() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -2663,18 +2381,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_can_introspect_user_access_token() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -2762,12 +2471,9 @@ mod tests {
         disable_user.assert_status_ok();
 
         let audit_logs = db::list_audit_logs(
-            &sqlx::PgPool::connect(
-                &std::env::var("TEST_DATABASE_URL")
-                    .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string()),
-            )
-            .await
-            .unwrap(),
+            &sqlx::PgPool::connect(&required_test_database_url())
+                .await
+                .unwrap(),
             20,
             0,
         )
@@ -2805,18 +2511,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_registration_metadata_and_custom_token_ttl() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -2875,18 +2572,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_registration_normalizes_scope_and_audience_lists() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -2922,18 +2610,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_registration_rejects_invalid_scope_list() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -2964,18 +2643,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_introspection_can_be_disabled_per_service() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -3025,18 +2695,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_rotate_secret_with_supplied_secret_does_not_echo_secret() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -3076,18 +2737,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_identity_source_admin_api_crud() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -3183,17 +2835,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_identity_source_policy_requires_a_matching_active_organization() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -3306,17 +2950,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_service_token_is_inactive_when_introspected() {
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_body: serde_json::Value = admin_login.json();
         let admin_token = admin_body["access_token"].as_str().unwrap();
@@ -3390,18 +3025,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_can_list_oidc_identity_source_links_without_external_subjects() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -3455,15 +3081,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_user_can_list_and_unlink_oidc_identity_without_revoking_local_sessions() {
-        let server = setup_test_server().await;
-        let pool = setup_organization_test_pool().await.unwrap();
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let server = setup_database_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -3603,18 +3223,8 @@ mod tests {
     #[tokio::test]
     async fn test_oidc_upstream_discovery_cache_invalidates_on_source_update() {
         let (issuer, discovery_hits, upstream_handle) = spawn_fake_upstream_metadata_server().await;
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            upstream_handle.abort();
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -3685,17 +3295,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_reconfiguring_oidc_identity_source_revokes_upstream_refresh_sessions() {
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -3723,12 +3324,10 @@ mod tests {
         create_source.assert_status_ok();
         let source = create_source.json::<serde_json::Value>();
         let source_id = source["id"].as_str().unwrap();
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed");
         let username = format!("upstream-reconfigure-user-{}", uuid::Uuid::new_v4());
         let user = db::create_user(
             &pool,
@@ -3814,17 +3413,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_upstream_oidc_denial_consumes_callback_state() {
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_body: serde_json::Value = admin_login.json();
         let admin_token = admin_body["access_token"].as_str().unwrap();
@@ -3849,12 +3439,10 @@ mod tests {
             .await;
         create_source.assert_status_ok();
         let source: serde_json::Value = create_source.json();
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
-        let pool = match db::init_db_pool(&database_url).await {
-            Ok(pool) => pool,
-            Err(_) => return,
-        };
+        let database_url = required_test_database_url();
+        let pool = db::init_db_pool(&database_url)
+            .await
+            .expect("TEST_DATABASE_URL database connection should succeed");
         let transaction = keylo::models::new_oidc_upstream_authorization_state();
         db::create_oidc_upstream_authorization(
             &pool,
@@ -3881,18 +3469,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_identity_source_admin_api_rejects_invalid_source_type() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
         let admin_access_token = admin_body["access_token"].as_str().unwrap();
@@ -3913,18 +3492,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_identity_source_admin_api_requires_admin_token() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let admin_login_resp = self::admin_login(&server).await;
         admin_login_resp.assert_status_ok();
 
         let list_resp = server.get("/v1/admin/identity-sources").await;
@@ -3933,17 +3503,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_organization_admin_lifecycle_api_is_scoped_and_idempotent() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -4147,10 +3709,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_organization_owner_admin_api_requires_active_context_and_live_membership() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization = db::create_organization(
             &pool,
@@ -4442,10 +4002,8 @@ mod tests {
     /// Ensures customer organization owners can manage only their own service clients.
     #[tokio::test]
     async fn test_external_customer_owner_manages_only_organization_services() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization_a = db::create_organization(
             &pool,
@@ -4772,10 +4330,8 @@ mod tests {
     /// permissions, and resource-tree while the live tenant state changes underneath it.
     #[tokio::test]
     async fn test_organization_authorization_is_live_and_cross_tenant_safe() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let app = format!("tenant-auth-{suffix}");
 
@@ -4846,13 +4402,7 @@ mod tests {
         .await
         .expect("Failed to bind organization role");
 
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -5125,10 +4675,8 @@ mod tests {
     /// Keeps an organization service token inside its signed tenant boundary.
     #[tokio::test]
     async fn test_organization_service_token_is_live_and_cross_tenant_safe() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let app = format!("tenant-service-{suffix}");
         let organization_a = db::create_organization(
@@ -5147,13 +4695,7 @@ mod tests {
         )
         .await
         .expect("Failed to create service organization B");
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -5413,10 +4955,8 @@ mod tests {
     /// Exercises the metadata-only key lifecycle and direct machine authorization path.
     #[tokio::test]
     async fn test_machine_api_key_is_explicit_scoped_rotatable_and_live() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization_a = db::create_organization(
             &pool,
@@ -5434,13 +4974,7 @@ mod tests {
         )
         .await
         .expect("Failed to create machine HTTP organization B");
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -5682,7 +5216,7 @@ mod tests {
         let mut config = test_config();
         config.auth_global_rate_limit_max_requests = 1;
         config.auth_rate_limit_max_requests = 1;
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
         let unknown_key = "keylo.00000000000000000000000000000000.11111111111111111111111111111111";
 
         let first = server
@@ -5705,10 +5239,8 @@ mod tests {
     /// tenant session while preserving the user's platform session.
     #[tokio::test]
     async fn test_organization_scoped_refresh_sessions_follow_live_lifecycle() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
-        let server = setup_test_server().await;
+        let pool = setup_organization_test_pool().await;
+        let server = setup_database_test_server().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let organization = db::create_organization(
             &pool,
@@ -5741,13 +5273,7 @@ mod tests {
         .await
         .expect("Failed to activate refresh-session membership");
 
-        let admin_login = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
+        let admin_login = self::admin_login(&server).await;
         admin_login.assert_status_ok();
         let admin_token = admin_login.json::<serde_json::Value>()["access_token"]
             .as_str()
@@ -5945,9 +5471,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_external_customer_with_admin_claims_cannot_access_platform_organizations() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
+        let pool = setup_organization_test_pool().await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let user = db::create_user(
             &pool,
@@ -5984,7 +5508,7 @@ mod tests {
             })
             .unwrap();
 
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
         let response = server
             .get("/v1/admin/organizations")
             .add_header("Authorization", format!("Bearer {token}"))
@@ -6042,45 +5566,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_setup_wizard_routes_are_disabled_by_default() {
-        let server = setup_test_server().await;
-
-        let status_resp = server.get("/setup/status").await;
-        assert_eq!(status_resp.status_code(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn test_account_recovery_page_sets_token_safe_browser_headers() {
-        let server = setup_test_server().await;
-
-        let response = server.get("/account/password-reset").await;
-        response.assert_status_ok();
-        assert_eq!(response.header("cache-control"), "no-store");
-        assert_eq!(response.header("referrer-policy"), "no-referrer");
-        assert_eq!(response.header("x-content-type-options"), "nosniff");
-        assert_eq!(response.header("x-frame-options"), "DENY");
-        assert!(response
-            .header("content-security-policy")
-            .to_str()
-            .unwrap()
-            .contains("default-src 'self'"));
-        assert!(response.text().contains("<div id=\"root\"></div>"));
-
-        let response = server.get("/account/email-verification").await;
-        response.assert_status_ok();
-        assert_eq!(response.header("cache-control"), "no-store");
-        assert_eq!(response.header("referrer-policy"), "no-referrer");
-        assert!(response.text().contains("<div id=\"root\"></div>"));
-    }
-
-    #[tokio::test]
     async fn test_setup_wizard_status_and_initialize() {
         let mut config = test_config();
         config.enable_setup_wizard = true;
         config.admin_client_id = Some("setup-admin".to_string());
         config.admin_client_secret = Some("SetupAdmin#123".to_string());
 
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
         let status_resp = server.get("/setup/status").await;
         status_resp.assert_status_ok();
@@ -6096,9 +5588,10 @@ mod tests {
                 check["key"] == "database_connection"
                     && check["ok"] == serde_json::Value::Bool(true)
             });
-        if !database_connected {
-            return;
-        }
+        assert!(
+            database_connected,
+            "setup status must report the configured database as connected"
+        );
         let migrations_check = status_body["checks"]
             .as_array()
             .unwrap()
@@ -6111,8 +5604,7 @@ mod tests {
             .unwrap()
             .contains("/.well-known/jwks.json"));
 
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = required_test_database_url();
         let database_url = build_database_url(
             database_url,
             database_password_from_env_result().unwrap_or(None),
@@ -6140,7 +5632,7 @@ mod tests {
         let mut config = test_config();
         config.enable_setup_wizard = true;
 
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
         let complete_resp = server
             .post("/setup/initialize")
@@ -6149,21 +5641,14 @@ mod tests {
                 "admin_client_secret": "SetupAdmin#456"
             }))
             .await;
-        if complete_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR
-            || complete_resp.status_code() == StatusCode::BAD_REQUEST
-            || complete_resp.status_code() == StatusCode::NOT_FOUND
-        {
-            return;
-        }
         assert!(
             complete_resp.status_code() == StatusCode::OK
-                || complete_resp.status_code() == StatusCode::FORBIDDEN
+                || complete_resp.status_code() == StatusCode::FORBIDDEN,
+            "setup initialization should succeed or report an already-completed setup, got {}",
+            complete_resp.status_code()
         );
 
         let setup_resp = server.get("/setup").await;
-        if setup_resp.status_code() == StatusCode::OK {
-            return;
-        }
         assert_eq!(setup_resp.status_code(), StatusCode::SEE_OTHER);
         assert_eq!(
             setup_resp.headers()["location"].to_str().unwrap(),
@@ -6186,34 +5671,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_index_redirects_to_setup_when_wizard_enabled_and_incomplete() {
-        let mut config = test_config();
-        config.enable_setup_wizard = true;
-
-        let server = setup_test_server_with_config(config).await;
-
-        let response = server.get("/").await;
-        if response.status_code() == StatusCode::OK {
-            return;
-        }
-        assert_eq!(response.status_code(), StatusCode::SEE_OTHER);
-        assert_eq!(response.headers()["location"].to_str().unwrap(), "/setup");
-    }
-
-    #[tokio::test]
     async fn test_untrusted_management_client_cannot_use_user_or_admin_token_flow() {
-        let server = setup_test_server().await;
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login_resp = self::admin_login(&server).await;
 
         admin_login_resp.assert_status_ok();
         let client_id = format!(
@@ -6224,8 +5684,7 @@ mod tests {
                 .as_millis()
         );
 
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://keylo_user@localhost:5432/keylo".to_string());
+        let database_url = required_test_database_url();
         let database_url = build_database_url(
             database_url,
             database_password_from_env_result().unwrap_or(None),
@@ -6266,7 +5725,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_token_requires_registered_service_client() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
         let response = server
             .post("/v1/service/token")
@@ -6278,12 +5737,6 @@ mod tests {
             }))
             .await;
 
-        if response.status_code() == StatusCode::INTERNAL_SERVER_ERROR
-            || response.status_code() == StatusCode::NOT_FOUND
-        {
-            return;
-        }
-
         assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
         let body: serde_json::Value = response.json();
         assert_eq!(body["error"], "service_client_not_authorized");
@@ -6291,15 +5744,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_token_failed_credentials_lock_and_success_clears_failures() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
+        let pool = setup_organization_test_pool().await;
         let mut config = test_config();
         config.max_failed_login_attempts = 2;
         config.login_lockout_seconds = 60;
         config.auth_rate_limit_max_requests = 100;
         config.auth_global_rate_limit_max_requests = 1_000;
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
         let service_id = format!("service-lockout-{}", uuid::Uuid::new_v4().simple());
         let allowed_scopes = vec!["read".to_string()];
         let allowed_audiences = vec!["admin-backend".to_string()];
@@ -6359,15 +5810,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_token_rate_limits_by_service_and_ip_without_secret_audit_leak() {
-        let Some(pool) = setup_organization_test_pool().await else {
-            return;
-        };
+        let pool = setup_organization_test_pool().await;
         let mut config = test_config();
         config.max_failed_login_attempts = 100;
         config.auth_rate_limit_max_requests = 2;
         config.auth_global_rate_limit_max_requests = 3;
         config.auth_rate_limit_window_seconds = 60;
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let service_a = format!("service-rate-a-{suffix}");
         let service_b = format!("service-rate-b-{suffix}");
@@ -6464,7 +5913,7 @@ mod tests {
             ..test_config()
         };
 
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
         let login_resp = server
             .post("/v1/auth/token")
@@ -6473,10 +5922,6 @@ mod tests {
                 "client_secret": "RootBootstrap#123"
             }))
             .await;
-
-        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
 
         login_resp.assert_status_ok();
         let login_body: serde_json::Value = login_resp.json();
@@ -6506,7 +5951,7 @@ mod tests {
             ..test_config()
         };
 
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
         let login_resp = server
             .post("/v1/auth/token")
@@ -6516,10 +5961,6 @@ mod tests {
                 "client_secret": password
             }))
             .await;
-
-        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
         login_resp.assert_status_ok();
         let login_body: serde_json::Value = login_resp.json();
         let refresh_token = login_body["refresh_token"].as_str().unwrap();
@@ -6568,7 +6009,7 @@ mod tests {
             ..test_config()
         };
 
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
         let login_resp = server
             .post("/v1/auth/token")
@@ -6577,10 +6018,6 @@ mod tests {
                 "client_secret": password
             }))
             .await;
-
-        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
         login_resp.assert_status_ok();
         let login_body: serde_json::Value = login_resp.json();
         let refresh_token = login_body["refresh_token"].as_str().unwrap();
@@ -6615,7 +6052,7 @@ mod tests {
             ..test_config()
         };
 
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
         let first_login_resp = server
             .post("/v1/auth/token")
@@ -6624,10 +6061,6 @@ mod tests {
                 "client_secret": password
             }))
             .await;
-
-        if first_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
         first_login_resp.assert_status_ok();
         let first_login_body: serde_json::Value = first_login_resp.json();
         let first_refresh_token = first_login_body["refresh_token"].as_str().unwrap();
@@ -6676,7 +6109,7 @@ mod tests {
             ..test_config()
         };
 
-        let server = setup_test_server_with_config(config).await;
+        let server = setup_database_test_server_with_config(config).await;
 
         let login_resp = server
             .post("/v1/auth/token")
@@ -6686,10 +6119,6 @@ mod tests {
                 "client_secret": password
             }))
             .await;
-
-        if login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
         login_resp.assert_status_ok();
         let login_body: serde_json::Value = login_resp.json();
         let access_token = login_body["access_token"].as_str().unwrap();
@@ -6834,18 +6263,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_third_party_user_migration_import_is_idempotent() {
-        let server = setup_test_server().await;
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login_resp = self::admin_login(&server).await;
 
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
@@ -6918,7 +6337,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_jit_migration_register_can_issue_access_token() {
-        let server = setup_test_server().await;
+        let server = setup_database_test_server().await;
 
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -6939,10 +6358,6 @@ mod tests {
             }))
             .await;
 
-        if response.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
-
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
         assert_eq!(body["success"], true);
@@ -6951,18 +6366,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_migration_job_submit_and_query_status() {
-        let server = setup_test_server().await;
-        let admin_login_resp = server
-            .post("/v1/admin/token")
-            .json(&json!({
-                "client_id": INTEGRATION_ADMIN_CLIENT_ID,
-                "client_secret": INTEGRATION_ADMIN_CLIENT_SECRET
-            }))
-            .await;
-
-        if admin_login_resp.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
-            return;
-        }
+        let server = setup_database_test_server().await;
+        let admin_login_resp = self::admin_login(&server).await;
 
         admin_login_resp.assert_status_ok();
         let admin_body: serde_json::Value = admin_login_resp.json();
@@ -7013,5 +6418,231 @@ mod tests {
         }
 
         assert!(final_status == "completed" || final_status == "failed");
+    }
+
+    mod dependency_free {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_health_check() {
+            let server = setup_memory_test_server().await;
+
+            let response = server.get("/").await;
+
+            response.assert_status_ok();
+            let body: serde_json::Value = response.json();
+            assert_eq!(body["status"], "ok");
+            assert_eq!(body["service"], "keylo");
+            assert_eq!(body["setup"]["state"], "disabled");
+        }
+
+        #[tokio::test]
+        async fn test_liveness_endpoint() {
+            let server = setup_memory_test_server().await;
+
+            let response = server.get("/healthz").await;
+
+            response.assert_status_ok();
+            let body: serde_json::Value = response.json();
+            assert_eq!(body["status"], "ok");
+            assert_eq!(body["service"], "keylo");
+        }
+
+        #[tokio::test]
+        async fn test_favicon_is_public_no_content() {
+            let server = setup_memory_test_server().await;
+
+            let response = server.get("/favicon.ico").await;
+
+            assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+        }
+
+        #[tokio::test]
+        async fn test_jwks_endpoint() {
+            let server = setup_memory_test_server().await;
+
+            let response = server.get("/.well-known/jwks.json").await;
+
+            response.assert_status_ok();
+            let body: serde_json::Value = response.json();
+            let keys = body["keys"].as_array().unwrap();
+            assert_eq!(keys.len(), 1);
+            assert_eq!(keys[0]["kty"], "RSA");
+            assert_eq!(keys[0]["alg"], "RS256");
+            assert!(keys[0]["kid"].as_str().is_some());
+            assert!(keys[0]["n"].as_str().is_some());
+            assert!(keys[0]["e"].as_str().is_some());
+        }
+
+        #[tokio::test]
+        async fn test_keylo_configuration_endpoint() {
+            let config = Config {
+                server_addr: "127.0.0.1".to_string(),
+                server_port: 3456,
+                oidc_public_issuer: Some("https://identity.example.com".to_string()),
+                jwt_audiences: vec!["admin-backend".to_string(), "inventory-svc".to_string()],
+                ..test_config()
+            };
+            let server = setup_memory_test_server_with_config(config).await;
+
+            let response = server.get("/.well-known/keylo-configuration").await;
+
+            response.assert_status_ok();
+            let body: serde_json::Value = response.json();
+            assert_eq!(body["issuer"], "keylo");
+            assert_eq!(
+                body["jwks_uri"],
+                "https://identity.example.com/.well-known/jwks.json"
+            );
+            assert_eq!(
+                body["introspection_endpoint"],
+                "https://identity.example.com/v1/auth/introspect"
+            );
+            assert_eq!(
+                body["documentation_uri"],
+                "https://identity.example.com/docs/integrations/THIRD_PARTY_INTEGRATION.md"
+            );
+            assert_eq!(
+                body["admin_token_endpoint"],
+                "https://identity.example.com/v1/admin/token"
+            );
+            assert_eq!(body["supported_signing_algorithms"], json!(["RS256"]));
+            assert_eq!(
+                body["supported_token_types"],
+                json!([
+                    "access",
+                    "refresh",
+                    "service_access",
+                    "customer_support_access"
+                ])
+            );
+            assert_eq!(
+                body["supported_audiences"],
+                json!(["admin-backend", "inventory-svc"])
+            );
+            assert!(body["supported_claims"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|claim| claim == "token_type"));
+        }
+
+        #[tokio::test]
+        async fn test_access_protected_without_token() {
+            let server = setup_memory_test_server().await;
+
+            let response = server.get("/protected").await;
+
+            // 兼容缺少 header 时的框架级 400 或统一鉴权返回的 401
+            let status = response.status_code();
+            assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::UNAUTHORIZED);
+        }
+
+        #[tokio::test]
+        async fn test_missing_credentials() {
+            let server = setup_memory_test_server().await;
+
+            let empty_payload = json!({
+                "client_id": "",
+                "client_secret": ""
+            });
+
+            let response = server.post("/v1/auth/token").json(&empty_payload).await;
+
+            response.assert_status(StatusCode::BAD_REQUEST);
+        }
+
+        #[tokio::test]
+        async fn test_invalid_json_payload() {
+            let server = setup_memory_test_server().await;
+
+            let response = server
+                .post("/v1/auth/token")
+                .bytes(Bytes::from("invalid json"))
+                .add_header("content-type", "application/json")
+                .await;
+
+            // 无效的JSON应该返回400 Bad Request
+            response.assert_status(StatusCode::BAD_REQUEST);
+        }
+
+        #[tokio::test]
+        async fn test_admin_endpoints_require_auth() {
+            let server = setup_memory_test_server().await;
+
+            // 测试黑名单管理端点
+            let blacklist_response = server
+                .post("/v1/admin/blacklist")
+                .json(&json!({"token": "test"}))
+                .await;
+
+            // 应该返回400（缺少Authorization header）或401（无权限）
+            assert!(
+                blacklist_response.status_code() == StatusCode::BAD_REQUEST
+                    || blacklist_response.status_code() == StatusCode::NOT_FOUND
+                    || blacklist_response.status_code() == StatusCode::UNAUTHORIZED
+            );
+
+            // 测试获取黑名单端点
+            let list_response = server.get("/v1/admin/blacklisted-tokens").await;
+
+            assert!(
+                list_response.status_code() == StatusCode::BAD_REQUEST
+                    || list_response.status_code() == StatusCode::NOT_FOUND
+                    || list_response.status_code() == StatusCode::UNAUTHORIZED
+            );
+
+            // 测试获取审计日志端点
+            let audit_response = server.get("/v1/admin/audit-logs").await;
+            assert!(
+                audit_response.status_code() == StatusCode::BAD_REQUEST
+                    || audit_response.status_code() == StatusCode::NOT_FOUND
+                    || audit_response.status_code() == StatusCode::UNAUTHORIZED
+            );
+        }
+
+        #[tokio::test]
+        async fn test_setup_wizard_routes_are_disabled_by_default() {
+            let server = setup_memory_test_server().await;
+
+            let status_resp = server.get("/setup/status").await;
+            assert_eq!(status_resp.status_code(), StatusCode::NOT_FOUND);
+        }
+
+        #[tokio::test]
+        async fn test_account_recovery_page_sets_token_safe_browser_headers() {
+            let server = setup_memory_test_server().await;
+
+            let response = server.get("/account/password-reset").await;
+            response.assert_status_ok();
+            assert_eq!(response.header("cache-control"), "no-store");
+            assert_eq!(response.header("referrer-policy"), "no-referrer");
+            assert_eq!(response.header("x-content-type-options"), "nosniff");
+            assert_eq!(response.header("x-frame-options"), "DENY");
+            assert!(response
+                .header("content-security-policy")
+                .to_str()
+                .unwrap()
+                .contains("default-src 'self'"));
+            assert!(response.text().contains("<div id=\"root\"></div>"));
+
+            let response = server.get("/account/email-verification").await;
+            response.assert_status_ok();
+            assert_eq!(response.header("cache-control"), "no-store");
+            assert_eq!(response.header("referrer-policy"), "no-referrer");
+            assert!(response.text().contains("<div id=\"root\"></div>"));
+        }
+
+        #[tokio::test]
+        async fn test_index_redirects_to_setup_when_wizard_enabled_and_incomplete() {
+            let mut config = test_config();
+            config.enable_setup_wizard = true;
+
+            let server = setup_memory_test_server_with_config(config).await;
+
+            let response = server.get("/").await;
+            assert_eq!(response.status_code(), StatusCode::SEE_OTHER);
+            assert_eq!(response.headers()["location"].to_str().unwrap(), "/setup");
+        }
     }
 }

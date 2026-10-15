@@ -55,12 +55,15 @@ $containerStarted = $false
 $mailpitContainerStarted = $false
 $tempDirCreated = $false
 $succeeded = $false
+$script:cleanupFailed = $false
 
 function Remove-TestResources {
     if ($script:containerStarted) {
         try {
             docker rm -f -v $script:testContainerName *> $null
+            if ($LASTEXITCODE -ne 0) { throw "Docker container removal failed." }
         } catch {
+            $script:cleanupFailed = $true
             Write-WarningMessage "Failed to remove Docker test container $($script:testContainerName): $($_.Exception.Message)"
         }
         $script:containerStarted = $false
@@ -69,7 +72,9 @@ function Remove-TestResources {
     if ($script:mailpitContainerStarted) {
         try {
             docker rm -f -v $script:mailpitContainerName *> $null
+            if ($LASTEXITCODE -ne 0) { throw "Docker SMTP container removal failed." }
         } catch {
+            $script:cleanupFailed = $true
             Write-WarningMessage "Failed to remove Docker SMTP test container $($script:mailpitContainerName): $($_.Exception.Message)"
         }
         $script:mailpitContainerStarted = $false
@@ -79,6 +84,7 @@ function Remove-TestResources {
         try {
             Remove-Item -LiteralPath $script:testTempDir -Recurse -Force
         } catch {
+            $script:cleanupFailed = $true
             Write-WarningMessage "Failed to remove temporary test secrets: $($_.Exception.Message)"
         }
         $script:tempDirCreated = $false
@@ -193,6 +199,7 @@ try {
     $env:SMTP_TEST_PORT = [string]$SmtpPort
     $env:SMTP_TEST_API_URL = $mailpitApiUrl
     $env:SMTP_TEST_CONTAINER_NAME = $mailpitContainerName
+    $env:TEST_POSTGRES_CONTAINER_NAME = $testContainerName
     $env:RUST_TEST_THREADS = "1"
 
     Write-Info "Running formatting checks..."
@@ -209,6 +216,15 @@ try {
     cargo test --workspace --all-targets -- --test-threads=1
     if ($LASTEXITCODE -ne 0) { throw "Workspace tests failed." }
     Write-Success "Workspace tests passed."
+
+    Write-Info "Checking that dependency and authentication failures fail the test suite..."
+    $python = Get-Command python3 -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $python) {
+        $python = Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    }
+    & $python.Source (Join-Path $PSScriptRoot "check_test_failures.py")
+    if ($LASTEXITCODE -ne 0) { throw "Test failure-path checks failed." }
+    Write-Success "Test failure-path checks passed."
     $succeeded = $true
 } catch {
     Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
@@ -219,10 +235,11 @@ try {
     Remove-Item Env:SMTP_TEST_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:SMTP_TEST_API_URL -ErrorAction SilentlyContinue
     Remove-Item Env:SMTP_TEST_CONTAINER_NAME -ErrorAction SilentlyContinue
-    Write-Success "Docker test resources cleaned up."
+    Remove-Item Env:TEST_POSTGRES_CONTAINER_NAME -ErrorAction SilentlyContinue
+    if (-not $script:cleanupFailed) { Write-Success "Docker test resources cleaned up." }
 }
 
-if (-not $succeeded) {
+if (-not $succeeded -or $script:cleanupFailed) {
     exit 1
 }
 

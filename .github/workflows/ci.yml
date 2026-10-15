@@ -190,13 +190,24 @@ jobs:
     - name: Run unit tests
       run: cargo test --lib -- --test-threads=1
 
+    - name: Run dependency-free HTTP and load tests
+      run: |
+        cargo test --test integration_test tests::dependency_free:: -- --test-threads=1
+        cargo test --test load_test -- --test-threads=1
+
     - name: Run integration tests
-      run: cargo test --test integration_test -- --test-threads=1
+      run: |
+        cargo test --test integration_test -- --skip tests::dependency_free:: --test-threads=1
+
+    - name: Run customer support integration tests
+      run: cargo test --test customer_support_integration_test -- --test-threads=1
 
     - name: Run user integration tests
       run: cargo test --test user_integration_test -- --test-threads=1
 
     - name: Run SMTP integration tests
+      env:
+        SMTP_TEST_CONTAINER_NAME: ${{ job.services.mailpit.id }}
       run: cargo test --test smtp_integration_test -- --test-threads=1
 
     - name: Run RBAC integration tests
@@ -208,8 +219,10 @@ jobs:
     - name: Run database integration tests
       run: cargo test --test database_integration_test -- --test-threads=1
 
-    - name: Run load tests
-      run: cargo test --test load_test -- --test-threads=1
+    - name: Verify integration tests fail on dependency and authentication faults
+      env:
+        TEST_POSTGRES_CONTAINER_NAME: ${{ job.services.postgres.id }}
+      run: python3 scripts/check_test_failures.py
 
     - name: Validate OIDC relying party examples
       run: |
@@ -314,6 +327,8 @@ jobs:
         psql -h localhost -U postgres -d keylo_test -v ON_ERROR_STOP=1 -c "SHOW server_version;"
 
     - name: Run tests with coverage
+      env:
+        SMTP_TEST_CONTAINER_NAME: ${{ job.services.mailpit.id }}
       run: cargo tarpaulin --out Xml
 
     - name: Upload coverage to Codecov
