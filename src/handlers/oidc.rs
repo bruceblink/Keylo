@@ -10,6 +10,10 @@ use chrono::Utc;
 use serde_json::json;
 use uuid::Uuid;
 
+use super::auth::{
+    enforce_password_login_limits, extract_client_ip, record_password_login_failure, PeerAddr,
+};
+
 use crate::{
     errors::{is_unique_violation, AuthError},
     models::{
@@ -812,17 +816,22 @@ pub async fn authorize(
     Ok(consent_page(&request, &client.name))
 }
 
-/// Authenticate a local user for an OIDC browser flow, then issue a short-lived code and HttpOnly session cookie.
+/// Authenticate a local user under the shared password-login policy, then establish a browser session and show consent.
 pub async fn login(
     State(state): State<AppState>,
+    PeerAddr(peer_addr): PeerAddr,
+    headers: HeaderMap,
     Form(request): Form<OidcLoginRequest>,
 ) -> Result<Response, AuthError> {
     let db = database(&state)?;
     let client = validated_authorization_client(&state, &request.authorization).await?;
+    let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
+    enforce_password_login_limits(&state, &request.username, &client_ip, "oidc.login").await?;
     let user = crate::db::user::get_user_by_username(db, &request.username)
         .await
         .map_err(|error| AuthError::DatabaseError(error.to_string()))?;
     let Some(user) = user.filter(|user| user.active) else {
+        record_password_login_failure(&state, &request.username, "oidc.login").await;
         return Ok(login_retry_page(
             &request.authorization,
             &client.name,
@@ -830,6 +839,7 @@ pub async fn login(
         ));
     };
     let Some(password_hash) = user.password_hash.as_deref() else {
+        record_password_login_failure(&state, &request.username, "oidc.login").await;
         return Ok(login_retry_page(
             &request.authorization,
             &client.name,
@@ -837,6 +847,7 @@ pub async fn login(
         ));
     };
     if !verify(&request.password, password_hash).unwrap_or(false) {
+        record_password_login_failure(&state, &request.username, "oidc.login").await;
         return Ok(login_retry_page(
             &request.authorization,
             &client.name,
@@ -884,6 +895,7 @@ pub async fn login(
             AuthError::InternalServerError("Failed to construct session cookie".to_string())
         })?,
     );
+    state.clear_login_failures(&request.username).await;
     Ok(response)
 }
 

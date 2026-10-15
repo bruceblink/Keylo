@@ -1,6 +1,9 @@
 #[path = "authorization/password_change.rs"]
 mod password_change_authorization;
 
+#[path = "authentication/oidc_login.rs"]
+mod oidc_login_protection;
+
 use axum::body::Bytes;
 use axum::http::StatusCode;
 use axum_test::TestServer;

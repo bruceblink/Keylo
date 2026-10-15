@@ -481,20 +481,15 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
-pub async fn auth_token(
-    State(state): State<AppState>,
-    PeerAddr(peer_addr): PeerAddr,
-    headers: HeaderMap,
-    Json(payload): Json<AuthPayload>,
-) -> Result<Json<AuthBody>, AuthError> {
-    // Check if the user sent the credentials
-    if payload.client_id.is_empty() || payload.client_secret.is_empty() {
-        return Err(AuthError::MissingCredentials);
-    }
-
-    let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
-    let user_agent = extract_user_agent(&headers);
-    let scoped_rate_key = format!("{}:{}", client_ip, payload.client_id);
+/// Apply the same source quotas and account lock to every local-password entry point.
+/// Audit prefixes are static call-site values; rate and lock keys never include the entry point.
+pub(crate) async fn enforce_password_login_limits(
+    state: &AppState,
+    principal: &str,
+    client_ip: &str,
+    audit_prefix: &'static str,
+) -> Result<(), AuthError> {
+    let scoped_rate_key = format!("{}:{}", client_ip, principal);
     let global_rate_key = format!("global:{}", client_ip);
 
     if !state
@@ -507,9 +502,9 @@ pub async fn auth_token(
     {
         state.runtime_metrics.rate_limit_rejection_observed();
         audit_event(
-            &state,
-            "auth.token.rate_limited.global",
-            Some(&payload.client_id),
+            state,
+            &format!("{audit_prefix}.rate_limited.global"),
+            Some(principal),
             Some("Global auth request rate limit exceeded"),
         )
         .await;
@@ -526,25 +521,65 @@ pub async fn auth_token(
     {
         state.runtime_metrics.rate_limit_rejection_observed();
         audit_event(
-            &state,
-            "auth.token.rate_limited",
-            Some(&payload.client_id),
+            state,
+            &format!("{audit_prefix}.rate_limited"),
+            Some(principal),
             Some("Auth request rate limit exceeded"),
         )
         .await;
         return Err(AuthError::TooManyRequests);
     }
 
-    if state.is_login_locked(&payload.client_id).await.is_some() {
+    if state.is_login_locked(principal).await.is_some() {
         audit_event(
-            &state,
-            "auth.token.locked",
-            Some(&payload.client_id),
+            state,
+            &format!("{audit_prefix}.locked"),
+            Some(principal),
             Some("Login is locked due to repeated failures"),
         )
         .await;
         return Err(AuthError::TooManyRequests);
     }
+
+    Ok(())
+}
+
+/// Count one credential failure without storing the password or the submitted form.
+pub(crate) async fn record_password_login_failure(
+    state: &AppState,
+    principal: &str,
+    audit_prefix: &'static str,
+) {
+    state
+        .record_login_failure(
+            principal,
+            state.config.max_failed_login_attempts,
+            state.config.login_lockout_seconds,
+        )
+        .await;
+    audit_event(
+        state,
+        &format!("{audit_prefix}.failed"),
+        Some(principal),
+        Some("Wrong credentials"),
+    )
+    .await;
+}
+
+pub async fn auth_token(
+    State(state): State<AppState>,
+    PeerAddr(peer_addr): PeerAddr,
+    headers: HeaderMap,
+    Json(payload): Json<AuthPayload>,
+) -> Result<Json<AuthBody>, AuthError> {
+    // Check if the user sent the credentials
+    if payload.client_id.is_empty() || payload.client_secret.is_empty() {
+        return Err(AuthError::MissingCredentials);
+    }
+
+    let client_ip = extract_client_ip(&headers, peer_addr, state.config.trust_proxy_headers);
+    let user_agent = extract_user_agent(&headers);
+    enforce_password_login_limits(&state, &payload.client_id, &client_ip, "auth.token").await?;
 
     let db = require_db(&state)?;
 
@@ -574,20 +609,7 @@ pub async fn auth_token(
     };
 
     if !is_user_valid {
-        state
-            .record_login_failure(
-                &payload.client_id,
-                state.config.max_failed_login_attempts,
-                state.config.login_lockout_seconds,
-            )
-            .await;
-        audit_event(
-            &state,
-            "auth.token.failed",
-            Some(&payload.client_id),
-            Some("Wrong credentials"),
-        )
-        .await;
+        record_password_login_failure(&state, &payload.client_id, "auth.token").await;
         return Err(AuthError::WrongCredentials);
     }
 
