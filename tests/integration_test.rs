@@ -1,3 +1,6 @@
+#[path = "authorization/password_change.rs"]
+mod password_change_authorization;
+
 use axum::body::Bytes;
 use axum::http::StatusCode;
 use axum_test::TestServer;

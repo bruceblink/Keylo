@@ -107,6 +107,7 @@ async fn principal_from_bearer(
             }
 
             let principal = resolve_access_principal(state, &claims).await?;
+            crate::middleware::auth::ensure_password_change_complete(&claims)?;
             return Ok(AuthorizationIdentity {
                 principal,
                 organization_id: claims.organization_id,

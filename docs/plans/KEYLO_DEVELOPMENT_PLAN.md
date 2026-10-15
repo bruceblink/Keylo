@@ -2,7 +2,7 @@
 
 > 更新时间：2026-10-15
 >
-> 整理基线：2026-09-25；本轮代码审查基于 `94c4565`，发现的缺陷与后续顺序见第 8.5、8.6 和 11 节。阶段 0–7 的交付记录继续保留；提交 `7eb85c0` 对应 GitHub Actions run `38401038528` 的历史通过结果，不代表覆盖了本次发现的路径。当前发布线为 `v2.1.2`。
+> 整理基线：2026-09-25；代码审查基于 `94c4565`，审查计划已由 `19dfa50` 推送。阶段 8 已完成 R1 修复及本地验证，阶段 9 为下一切片；本次远端 CI 尚未确认。阶段 0–7 的交付记录继续保留；提交 `7eb85c0` 对应 GitHub Actions run `38401038528` 的历史通过结果，不代表覆盖了本次发现的路径。当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -37,15 +37,15 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 5 | 真实后端账户恢复浏览器回归 | 已完成 | 本机独立 Docker、真实 Keylo、Mailpit 和 4 项桌面/移动浏览器测试通过；CI 的 Run Tests 与 Code Coverage 通过。 |
 | 6 | OIDC 登录失败后的重试体验 | 已完成 | 只将浏览器 `WrongCredentials` 显示为可重试表单；保留已验证授权参数，不回显密码，不改变认证判定或 API 错误契约。 |
 | 7 | 接入样例的 CI 清单对齐 | 已完成 | CI 已触发资源服务样例文件变更，但验证步骤漏掉 Spring resource server；补上 Gradle 测试和 wrapper 配置触发路径，并执行失败关闭回归。 |
-| 8 | 强制改密限制覆盖统一授权入口 | 下一切片 | 拒绝受恢复流程限制的人类 access token，覆盖 check、batch-check、effective-permissions 和 resource-tree。 |
-| 9 | 真实依赖测试失败关闭 | 后续候选 | 显式配置数据库时，连接、迁移和初始化失败必须导致测试非零退出，不能回退内存路由后报告通过。 |
+| 8 | 强制改密限制覆盖统一授权入口 | 已完成 | 四个统一授权入口复用强制改密检查；新增真实数据库回归确认受限 token 拒绝、重新登录恢复、组织隔离及 service/machine 授权保持。 |
+| 9 | 真实依赖测试失败关闭 | 下一切片 | 显式配置数据库时，连接、迁移和初始化失败必须导致测试非零退出，不能回退内存路由后报告通过。 |
 | 10 | OIDC 登录的限流与账号锁定 | 后续候选 | 与已有密码登录入口共用失败计数、账号锁定及来源限流，阻止改用浏览器登录绕过限制。 |
 | 11 | MFA 验证的猜码保护 | 后续候选 | 在 TOTP、恢复码及 enrollment 确认的昂贵验证前限制账号与来源请求。 |
 | 12 | 改密后撤销旧恢复链接 | 后续候选 | 自行改密、管理员 reset 和管理员 update password 均在同一事务撤销待消费恢复 token。 |
 | 13 | JWT 轮换状态的持久化与恢复 | 后续候选 | 保存 passive key 的绝对到期时间，重启不能重新启用已过期旧 key；失败写入保持一致。 |
 | 14 | 默认生产 Compose 的启动闭环 | 后续候选 | 对齐必需配置、密钥卷权限和文档，以容器启动、readiness 及重启证明模板可用。 |
 
-阶段 8–14 来自第 11 节的现有代码缺陷；本轮只制定修复计划，没有修改生产实现。只有阶段 8 可以直接进入实现，其余候选按表中顺序在前一切片完成后复核。MFA enrollment 并发、组织角色类型兼容性和成员暂停后的 OIDC code 撤销列为阶段 14 后的候选，见第 8.6 节。新增协议和控制台功能仍遵守第 8.2 节的进入条件。
+阶段 8–14 来自第 11 节的现有代码缺陷。阶段 8 已修复并完成本地验证；只有阶段 9 可以直接进入实现，其余候选按表中顺序在前一切片完成后复核。MFA enrollment 并发、组织角色类型兼容性和成员暂停后的 OIDC code 撤销列为阶段 14 后的候选，见第 8.6 节。新增协议和控制台功能仍遵守第 8.2 节的进入条件。
 
 阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 检查均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 交互约定，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
 
@@ -79,6 +79,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 
 | 验证 | 结果 |
 | --- | --- |
+| 阶段 8：统一授权强制改密限制（2026-10-15） | 先执行新增回归，原实现因实际 200、预期 403 失败；共享检查接入后新增 3 项全部通过。`tests/authorization/password_change.rs` 由现有 `integration_test` 引入，CI 的 PostgreSQL 测试入口会执行。不可达 `TEST_DATABASE_URL` 的故障注入以 101 退出，不回退内存或跳过。fmt、workspace Clippy、Markdown 相对链接和 diff 检查通过；最终 152 单元、1 customer-support、26 database、82 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP、13 user，共 296 项 Rust 测试通过。本机 Docker 使用独立 PostgreSQL 17（宿主 `32768`）和 Mailpit `v1.21.8`（SMTP `32769`、API `32770`）；首轮 Mailpit 使用随机宿主端口，重启后端口变化导致恢复测试失败，改用固定映射后重跑 SMTP 和尚未执行的 user 套件通过。容器及匿名卷已清理；本切片不改 UI，未执行浏览器回归或确认本次远端 CI。 |
 | 代码审查与定向复现（2026-10-15，`94c4565`） | 当前库 `cargo build --lib --locked` 通过。仓库外合成账户 harness 在独立本机 Docker PostgreSQL 17 中确认：受限改密 token 得到 `allowed=true`、普通改密/管理员 reset 后旧恢复链接仍能覆盖密码、组织角色类型变更漏查绑定、成员暂停后恢复使旧 OIDC code 重新可兑换。直接调用真实 OIDC handler 确认已有账号锁不能阻止创建浏览器会话。启动加载器实验确认 1 秒 overlap 到期后旧 token 被拒绝，但重新加载配置又可验签。`docker compose config --format json` 确认生产模板缺少两个必需变量。显式使用不可达 `TEST_DATABASE_URL` 运行迁移测试，错误地得到退出码 0、1 passed；这是测试门禁缺陷的证据，不是数据库验收通过。MFA 猜码保护与 enrollment 竞争仅做静态调用链审查，未运行穷举或并发复现。测试容器及匿名卷已清理；未执行全量测试、外部 SMTP 或远端 CI。 |
 | OIDC 登录重试与 Spring Boot 资源服务 CI（2026-10-13） | 提交 `7eb85c0` 的 [GitHub Actions run 38401038528](https://github.com/bruceblink/Keylo/actions/runs/38401038528) 中，`Run Tests`、`Security Audit` 和 `Code Coverage` 全部通过。测试任务包含真实服务 Chromium 回归和 Spring Boot resource server 的 Gradle 测试。该结果关闭阶段 6、7。 |
 | OIDC 账户恢复入口代码回归（2026-10-03） | `npm ci`、`npm run build`、原有 Chromium 7 项 UI 交互约定回归、`cargo build --bin keylo`、fmt、workspace Clippy、Markdown 链接和 `git diff --check` 通过。`scripts/run_tests.ps1 -DatabasePort 55432` 使用本机 Docker `postgres:17-alpine`（`127.0.0.1:55432` -> `5432`）与 `axllent/mailpit:v1.21.8`（SMTP `11025` -> `1025`，API `18025` -> `8025`）；readiness、150 单元、1 customer-support、26 database、77 HTTP、3 load、3 OAuth、12 RBAC、4 SMTP 和 13 user 共 289 项全部通过；测试容器、匿名卷和脚本临时密钥目录已清理。 |
@@ -255,7 +256,9 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 回滚边界：移除资源服务 CI 步骤及对应路径触发规则即可回滚；不修改样例运行逻辑、授权结果格式或生产服务行为。
 
-### 8.5 下一切片：强制改密限制覆盖统一授权入口
+### 8.5 已完成切片：强制改密限制覆盖统一授权入口
+
+状态：实现与本地验证已完成。普通 JWT 中间件和四个统一授权入口使用同一签名 claim 检查；改密后旧受限 token 仍拒绝，重新登录才获得正常授权。第 4 节记录本轮实际执行的验证，本次远端 CI 尚未确认。
 
 依据：第 11 节 R1。用户被管理员重置密码后，现有 API 允许其用临时密码获得 `password_change_required=true` 的 access token。相同 token 在 `/protected` 被拒绝，却可以通过统一授权接口得到业务放行结果，违反恢复流程限制。
 
@@ -277,7 +280,7 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 
 ### 8.6 后续候选的范围与验收
 
-这些是已发现缺陷的修复候选，不代表本轮已经实现或验收；每项仍须按第 9 节独立提交。
+阶段 9 为下一切片，阶段 10–14 仍为修复候选，均未在本轮实现或验收；每项仍须按第 9 节独立提交。
 
 | 顺序 | 对应问题 | 最小实现边界 | 必须能失败的验收 | 迁移、审计和回滚 |
 | --- | --- | --- | --- | --- |
@@ -322,11 +325,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## 11. 2026-10-15 代码审查记录
 
-审查基线为 `94c4565`，范围包括本地认证、OIDC、恢复、MFA、组织授权、密钥、默认部署及测试失败路径。本轮只修改本计划；以下问题尚未修复。P1 表示应优先修复的认证/运行缺陷，P2 表示随后处理的约束或验证缺陷，不把所有未实现的 IAM 功能都视作漏洞。
+审查基线为 `94c4565`，范围包括本地认证、OIDC、恢复、MFA、组织授权、密钥、默认部署及测试失败路径。以下为审查快照；R1 已由阶段 8 修复，其余问题仍未修复。P1 表示应优先修复的认证/运行缺陷，P2 表示随后处理的约束或验证缺陷，不把所有未实现的 IAM 功能都视作漏洞。
 
 | 编号 | 优先级 | 触发条件、影响与代码位置 | 本轮证据与覆盖缺口 |
 | --- | --- | --- | --- |
-| R1 | P1 | [统一授权的 bearer 分支](../../src/routes/authorization.rs#L98) 不检查 `password_change_required`，且由 [public router](../../src/startup.rs#L204) 挂载，未经过普通 JWT 中间件的改密限制。恢复流程 token 因而可以得到业务授权。 | 隔离数据库和完整 Router 实测：同一受限 token 调 `/protected` 得到 403，调 check 得到 `200 allowed=true`，effective-permissions 也返回权限。Spring resource server 样例使用 allowed 作业务放行。现有改密测试只验证普通受保护入口。 |
+| R1 | P1（已修复） | 审查基线的 [统一授权 bearer 分支](../../src/routes/authorization.rs#L98) 不检查 `password_change_required`，且由 [public router](../../src/startup.rs#L204) 挂载，未经过普通 JWT 中间件的改密限制。恢复流程 token 因而可以得到业务授权。 | 原实现的隔离数据库和完整 Router 实测确认 `200 allowed=true`。阶段 8 已接入共享检查；[新增严格回归](../../tests/authorization/password_change.rs) 确认四个入口 403、旧 token 持续受限，以及重新登录后的真实权限恢复。 |
 | R2 | P1 | [OIDC login](../../src/handlers/oidc.rs#L816) 直接查用户并验证密码，没有使用 [API 登录](../../src/handlers/auth.rs#L500) 的限流、失败计数和账号锁。持有合法 client/PKCE 参数即可切换入口绕过锁定。 | 使用真实 handler、AppState 和独立数据库：阈值为 1 时三次 OIDC 错误仍未锁定；预置账号锁后，正确密码仍返回 session Cookie。未运行在线穷举；现有锁定测试只覆盖 API 登录。 |
 | R3 | P1 | [MFA verify](../../src/routes/mfa.rs#L88) 和 [enrollment verify](../../src/routes/mfa.rs#L253) 没有账号或来源失败限制，持有用户 token 的攻击者可连续尝试第二因子；恢复码失败还会触发多次 bcrypt。 | 静态调用链确认，不把运行 proof 省略写成通过。现有 MFA 生命周期回归覆盖一次性消费，没有连续失败及更换 token 的账号级额度验证。 |
 | R4 | P1 | [管理员 reset](../../src/db/user.rs#L501)、[自行改密](../../src/db/user.rs#L623) 和管理员 update password 不撤销恢复 token；[恢复消费](../../src/db/password_reset.rs#L181) 不绑定密码版本。旧链接持有人仍可覆盖已经更新的密码。 | 当前库在隔离 PostgreSQL 中实测：申请链接后自行改密，旧链接仍 Reset 且其新密码可登录；管理员 reset 后同样成立。管理员 update 路径仅静态确认；现有测试只覆盖恢复链接本身的单次消费与重放。 |
@@ -337,4 +340,4 @@ cargo clippy --workspace --all-targets -- -D warnings
 | R9 | P2 | [角色类型变更检查](../../src/db/rbac.rs#L73) 遗漏 organization_role_bindings；角色改为 service-only 后，既有组织 user 仍继承权限。update 与 restore 共享该检查。 | 在隔离数据库中真实执行组织 user 绑定、角色 user→service 更新后，权限查询仍为 true。现有兼容性测试只覆盖平台绑定。 |
 | R10 | P2 | [组织管理员变更成员状态](../../src/db/organization.rs#L770) 只撤销 refresh session，未像平台路径删除待兑换 OIDC code。暂停后再恢复成员，会使旧授权在其 300 秒寿命内重新可用。 | 独立数据库和真实 token handler 的 HTTP 请求确认：暂停时同一 code 兑换 400，恢复 active 后兑换 200 并返回 access token。客户端本来就持有回调 code 与 PKCE verifier，无需读取数据库；现有撤销测试只覆盖平台路径。 |
 
-审查限制：未执行全量回归、远端 CI、外部 IdP/TLS 或真实 SMTP 供应商矩阵；静态发现需要在对应修复切片中增加能复现交错/故障的回归。本节不构成所有代码路径均无缺陷的保证，也不把合成测试凭据用于真实账户操作。
+审查限制：初次审查未执行全量回归；阶段 8 后续完成的本地 Rust 验证见第 4 节。本次远端 CI、外部 IdP/TLS 和真实 SMTP 供应商矩阵尚未确认；静态发现需要在对应修复切片中增加能复现交错/故障的回归。本节不构成所有代码路径均无缺陷的保证，也不把合成测试凭据用于真实账户操作。

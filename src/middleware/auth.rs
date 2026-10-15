@@ -27,6 +27,14 @@ fn password_change_allowed_path(path: &str) -> bool {
     )
 }
 
+/// Reject recovery-only access tokens before they can exercise normal authority.
+pub(crate) fn ensure_password_change_complete(claims: &Claims) -> Result<(), AuthError> {
+    if claims.password_change_required {
+        return Err(AuthError::PasswordChangeRequired);
+    }
+    Ok(())
+}
+
 fn service_id_from_subject(subject: &str) -> Option<&str> {
     subject.strip_prefix("service:")
 }
@@ -221,8 +229,10 @@ pub async fn auth_middleware(
         }
     }
 
-    if claims.password_change_required && !password_change_allowed_path(request.uri().path()) {
-        return Ok(AuthError::PasswordChangeRequired.into_response());
+    if !password_change_allowed_path(request.uri().path()) {
+        if let Err(error) = ensure_password_change_complete(&claims) {
+            return Ok(error.into_response());
+        }
     }
 
     // 将 claims 放入扩展，后续中间件或处理器可复用

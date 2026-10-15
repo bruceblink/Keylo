@@ -436,6 +436,8 @@ OIDC 公开端点：`GET /v1/oidc/authorize`、`POST /v1/oidc/login`、`POST /v1
 
 如果 access token 的 `password_change_required` 为 `true`，除 `/v1/auth/me`、`/v1/auth/logout`、`/v1/user/mfa/verify` 和 `/v1/user/change-password` 外的受保护接口都会返回 `403` 与 `error=password_change_required`。`POST /v1/user/change-password` 成功后清除该标记；重置密码用户不能通过 OIDC 浏览器登录绕过首次改密要求。
 
+统一授权入口 `/v1/authorize/check`、`/v1/authorize/batch-check`、`/v1/principals/me/effective-permissions` 和 `/v1/principals/me/resource-tree` 同样拒绝此类 token，错误码为 `1022`；拥有角色或目标权限不会绕过限制。改密成功后必须重新登录，旧 access token 中的受限标记仍然生效。
+
 改密成功后，Keylo 会在同一事务中撤销该用户的 refresh session 和 OIDC 浏览器会话，并写入 `user.password_changed` 审计事件；客户端必须使用新密码重新登录，旧 refresh token 与旧 OIDC 浏览器 cookie 均不能继续使用。
 
 管理员重置密码也遵循同一撤销规则，并写入 `user.password_reset` 审计事件。
