@@ -73,6 +73,26 @@ async fn eligible_user(
     Ok(by_username.map(|row| (row.get("id"), row.get("email"))))
 }
 
+/// Revoke all pending recovery proofs while the caller holds the account lock.
+///
+/// Password changes and recovery consumption use the same user-then-token lock
+/// order. The affected row count is returned for a redacted audit detail.
+pub(crate) async fn revoke_pending_password_reset_tokens(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+) -> Result<u64> {
+    let revoked = sqlx::query(
+        "UPDATE password_reset_tokens
+         SET revoked_at = COALESCE(revoked_at, NOW())
+         WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected();
+    Ok(revoked)
+}
+
 /// Issue one short-lived proof and revoke older pending proofs for the account.
 ///
 /// The account row is locked before eligibility is evaluated. Revocation and
@@ -143,6 +163,29 @@ pub async fn consume_password_reset_token(
     new_password: &str,
 ) -> Result<ConsumePasswordResetTokenResult> {
     let mut transaction = pool.begin().await?;
+    // Read the locator without locking it, then acquire the account lock before
+    // the token lock. All password mutation paths use this same order.
+    let locator =
+        sqlx::query("SELECT id, user_id FROM password_reset_tokens WHERE token_hash = $1")
+            .bind(token_hash(token))
+            .fetch_optional(&mut *transaction)
+            .await?;
+    let Some(locator) = locator else {
+        transaction.commit().await?;
+        return Ok(ConsumePasswordResetTokenResult::Invalid);
+    };
+    let token_id: String = locator.get("id");
+    let user_id: String = locator.get("user_id");
+    let account_exists = sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(&user_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .is_some();
+    if !account_exists {
+        transaction.commit().await?;
+        return Ok(ConsumePasswordResetTokenResult::Invalid);
+    }
+
     let record = sqlx::query(
         "SELECT reset_token.id,
                 reset_token.user_id,
@@ -156,10 +199,10 @@ pub async fn consume_password_reset_token(
                 account.password_hash
          FROM password_reset_tokens AS reset_token
          INNER JOIN users AS account ON account.id = reset_token.user_id
-         WHERE reset_token.token_hash = $1
-         FOR UPDATE OF reset_token, account",
+         WHERE reset_token.id = $1
+         FOR UPDATE OF reset_token",
     )
-    .bind(token_hash(token))
+    .bind(&token_id)
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(record) = record else {
@@ -167,8 +210,6 @@ pub async fn consume_password_reset_token(
         return Ok(ConsumePasswordResetTokenResult::Invalid);
     };
 
-    let token_id: String = record.get("id");
-    let user_id: String = record.get("user_id");
     let email_snapshot: String = record.get("email_snapshot");
     let expires_at: chrono::NaiveDateTime = record.get("expires_at");
     let consumed_at: Option<chrono::NaiveDateTime> = record.get("consumed_at");
@@ -236,15 +277,8 @@ pub async fn consume_password_reset_token(
     .execute(&mut *transaction)
     .await?
     .rows_affected();
-    sqlx::query(
-        "UPDATE password_reset_tokens
-         SET revoked_at = COALESCE(revoked_at, NOW())
-         WHERE user_id = $1 AND id <> $2 AND consumed_at IS NULL AND revoked_at IS NULL",
-    )
-    .bind(&user_id)
-    .bind(&token_id)
-    .execute(&mut *transaction)
-    .await?;
+    let revoked_password_reset_tokens =
+        revoke_pending_password_reset_tokens(&mut transaction, &user_id).await?;
     sqlx::query(
         "INSERT INTO audit_logs (id, event_type, actor, detail)
          VALUES ($1, $2, NULL, $3)",
@@ -252,8 +286,11 @@ pub async fn consume_password_reset_token(
     .bind(Uuid::new_v4().to_string())
     .bind("user.password_reset")
     .bind(format!(
-        "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
-        user_id, revoked_refresh_sessions, revoked_browser_sessions
+        "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}; revoked_password_reset_tokens={}",
+        user_id,
+        revoked_refresh_sessions,
+        revoked_browser_sessions,
+        revoked_password_reset_tokens
     ))
     .execute(&mut *transaction)
     .await?;

@@ -520,6 +520,190 @@ mod database_tests {
     }
 
     #[tokio::test]
+    async fn test_password_changes_revoke_pending_reset_tokens() {
+        let _guard = DB_TEST_LOCK.lock().await;
+        let pool = setup_test_db()
+            .await
+            .expect("TEST_DATABASE_URL must point to a working PostgreSQL test database");
+
+        let update_user = db::create_user(
+            &pool,
+            "password-token-update-user",
+            "password-token-update@example.test",
+            Some("UpdateOld#123"),
+        )
+        .await
+        .unwrap();
+        db::mark_user_email_verified(&pool, &update_user.id, Some("test-admin"))
+            .await
+            .unwrap();
+        let update_token = db::issue_password_reset_token(&pool, &update_user.email, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        db::update_user(
+            &pool,
+            &update_user.id,
+            None,
+            None,
+            Some("UpdateNew#123"),
+            None,
+            Some("test-admin"),
+        )
+        .await
+        .unwrap()
+        .expect("Password update must find the synthetic user");
+        assert_eq!(
+            db::consume_password_reset_token(&pool, &update_token.token, "UpdateReset#123")
+                .await
+                .unwrap(),
+            db::ConsumePasswordResetTokenResult::Invalid
+        );
+        let replacement_token = db::issue_password_reset_token(&pool, &update_user.email, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            db::consume_password_reset_token(&pool, &replacement_token.token, "UpdateReset#123")
+                .await
+                .unwrap(),
+            db::ConsumePasswordResetTokenResult::Reset { .. }
+        ));
+
+        let reset_user = db::create_user(
+            &pool,
+            "password-token-reset-user",
+            "password-token-reset@example.test",
+            Some("ResetOld#123"),
+        )
+        .await
+        .unwrap();
+        db::mark_user_email_verified(&pool, &reset_user.id, Some("test-admin"))
+            .await
+            .unwrap();
+        let reset_token = db::issue_password_reset_token(&pool, &reset_user.email, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            db::reset_user_password(&pool, &reset_user.id, "ResetNew#123", Some("test-admin"),)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            db::consume_password_reset_token(&pool, &reset_token.token, "ResetReset#123")
+                .await
+                .unwrap(),
+            db::ConsumePasswordResetTokenResult::Invalid
+        );
+
+        let change_user = db::create_user(
+            &pool,
+            "password-token-change-user",
+            "password-token-change@example.test",
+            Some("ChangeOld#123"),
+        )
+        .await
+        .unwrap();
+        db::mark_user_email_verified(&pool, &change_user.id, Some("test-admin"))
+            .await
+            .unwrap();
+        let change_token = db::issue_password_reset_token(&pool, &change_user.email, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(db::change_user_password(
+            &pool,
+            &change_user.id,
+            "ChangeOld#123",
+            "ChangeNew#123",
+            Some("test-admin"),
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            db::consume_password_reset_token(&pool, &change_token.token, "ChangeReset#123")
+                .await
+                .unwrap(),
+            db::ConsumePasswordResetTokenResult::Invalid
+        );
+
+        let failed_user = db::create_user(
+            &pool,
+            "password-token-failed-user",
+            "password-token-failed@example.test",
+            Some("FailedOld#123"),
+        )
+        .await
+        .unwrap();
+        db::mark_user_email_verified(&pool, &failed_user.id, Some("test-admin"))
+            .await
+            .unwrap();
+        let failed_token = db::issue_password_reset_token(&pool, &failed_user.email, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!db::change_user_password(
+            &pool,
+            &failed_user.id,
+            "WrongCurrent#123",
+            "FailedNew#123",
+            Some("test-admin"),
+        )
+        .await
+        .unwrap());
+        assert!(matches!(
+            db::consume_password_reset_token(&pool, &failed_token.token, "FailedReset#123")
+                .await
+                .unwrap(),
+            db::ConsumePasswordResetTokenResult::Reset { .. }
+        ));
+
+        let concurrent_user = db::create_user(
+            &pool,
+            "password-token-concurrent-user",
+            "password-token-concurrent@example.test",
+            Some("ConcurrentOld#123"),
+        )
+        .await
+        .unwrap();
+        db::mark_user_email_verified(&pool, &concurrent_user.id, Some("test-admin"))
+            .await
+            .unwrap();
+        let concurrent_token = db::issue_password_reset_token(&pool, &concurrent_user.email, 900)
+            .await
+            .unwrap()
+            .unwrap();
+        let (change_result, reset_result) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::join!(
+                    db::change_user_password(
+                        &pool,
+                        &concurrent_user.id,
+                        "ConcurrentOld#123",
+                        "ConcurrentNew#123",
+                        Some("test-admin"),
+                    ),
+                    db::consume_password_reset_token(
+                        &pool,
+                        &concurrent_token.token,
+                        "ConcurrentReset#123",
+                    ),
+                )
+            })
+            .await
+            .expect("Concurrent password mutation and recovery consumption must not deadlock");
+        assert!(change_result.is_ok());
+        assert!(reset_result.is_ok());
+        let change_succeeded = change_result.unwrap();
+        let reset_succeeded = matches!(
+            reset_result.unwrap(),
+            db::ConsumePasswordResetTokenResult::Reset { .. }
+        );
+        assert_eq!(change_succeeded, !reset_succeeded);
+    }
+
+    #[tokio::test]
     async fn test_organization_domain_tracks_explicit_human_classes_and_memberships() {
         let _guard = DB_TEST_LOCK.lock().await;
         let pool = setup_test_db()

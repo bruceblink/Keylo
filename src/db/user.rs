@@ -6,6 +6,7 @@ use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::db::password_reset::revoke_pending_password_reset_tokens;
 use crate::models::User;
 use crate::models::{is_valid_user_class, USER_CLASS_EXTERNAL_CUSTOMER};
 
@@ -325,15 +326,12 @@ pub async fn update_user(
             .bind(&user.id)
             .execute(&mut *transaction)
             .await?;
-            sqlx::query(
-                "UPDATE password_reset_tokens
-                 SET revoked_at = COALESCE(revoked_at, NOW())
-                 WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL",
-            )
-            .bind(&user.id)
-            .execute(&mut *transaction)
-            .await?;
         }
+        let revoked_password_reset_tokens = if email_changed || password.is_some() {
+            revoke_pending_password_reset_tokens(&mut transaction, &user.id).await?
+        } else {
+            0
+        };
         if active == Some(false) || password.is_some() {
             let (event_type, revoke_reason) = if active == Some(false) {
                 ("user.disabled", "user_disabled")
@@ -363,8 +361,11 @@ pub async fn update_user(
             .bind(event_type)
             .bind(actor)
             .bind(format!(
-                "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
-                user.id, revoked_refresh_sessions, revoked_browser_sessions
+                "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}; revoked_password_reset_tokens={}",
+                user.id,
+                revoked_refresh_sessions,
+                revoked_browser_sessions,
+                revoked_password_reset_tokens
             ))
             .execute(&mut *transaction)
             .await?;
@@ -498,7 +499,7 @@ pub async fn validate_user_credentials(
     Ok(None)
 }
 
-/// Reset an account password and revoke existing sessions before the new credential is usable.
+/// Reset an account password and revoke sessions and pending recovery proofs atomically.
 pub async fn reset_user_password(
     pool: &PgPool,
     user_id: &str,
@@ -521,6 +522,8 @@ pub async fn reset_user_password(
         transaction.commit().await?;
         return Ok(false);
     }
+    let revoked_password_reset_tokens =
+        revoke_pending_password_reset_tokens(&mut transaction, user_id).await?;
     let revoked_refresh_sessions = sqlx::query(
         "UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), revoke_reason = COALESCE(revoke_reason, 'password_reset') WHERE principal_id IN (SELECT id FROM principals WHERE principal_type = 'user' AND ref_id = $1) AND revoked_at IS NULL",
     )
@@ -540,8 +543,11 @@ pub async fn reset_user_password(
         .bind("user.password_reset")
         .bind(actor)
         .bind(format!(
-            "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
-            user_id, revoked_refresh_sessions, revoked_browser_sessions
+            "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}; revoked_password_reset_tokens={}",
+            user_id,
+            revoked_refresh_sessions,
+            revoked_browser_sessions,
+            revoked_password_reset_tokens
         ))
         .execute(&mut *transaction)
         .await?;
@@ -584,7 +590,7 @@ pub async fn mark_user_email_verified(
     Ok(true)
 }
 
-/// 用户更改密码（需要验证当前密码）
+/// 用户更改密码（需要验证当前密码），并原子撤销待消费恢复证明。
 pub async fn change_user_password(
     pool: &PgPool,
     user_id: &str,
@@ -636,6 +642,8 @@ pub async fn change_user_password(
         transaction.commit().await?;
         return Ok(false);
     }
+    let revoked_password_reset_tokens =
+        revoke_pending_password_reset_tokens(&mut transaction, user_id).await?;
     let revoked_refresh_sessions = sqlx::query(
         "UPDATE refresh_sessions
          SET revoked_at = COALESCE(revoked_at, NOW()),
@@ -662,8 +670,11 @@ pub async fn change_user_password(
         .bind("user.password_changed")
         .bind(actor)
         .bind(format!(
-            "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}",
-            user_id, revoked_refresh_sessions, revoked_browser_sessions
+            "user_id={}; revoked_refresh_sessions={}; revoked_oidc_browser_sessions={}; revoked_password_reset_tokens={}",
+            user_id,
+            revoked_refresh_sessions,
+            revoked_browser_sessions,
+            revoked_password_reset_tokens
         ))
         .execute(&mut *transaction)
         .await?;

@@ -2,7 +2,7 @@
 
 > 更新时间：2026-10-15
 >
-> 整理基线：2026-09-25；原始代码审查基于 `94c4565`。阶段 8–11 已完成，阶段 12 为下一切片。阶段 9 提交 `415d3d5` 的 [CI run 38698663616](https://github.com/bruceblink/Keylo/actions/runs/38698663616) 已通过 Run Tests、Security Audit 与 Code Coverage。各切片的本地及远端证据见第 4 节；当前发布线为 `v2.1.2`。
+> 整理基线：2026-11-01；原始代码审查基于 `94c4565`。阶段 8–11 已完成，阶段 12 为当前切片。阶段 9 提交 `415d3d5` 的 [CI run 38698663616](https://github.com/bruceblink/Keylo/actions/runs/38698663616) 已通过 Run Tests、Security Audit 与 Code Coverage。各切片的本地及远端证据见第 4 节；当前发布线为 `v2.1.2`。
 >
 > 本文是 Keylo 唯一维护中的开发计划和功能清单。主线设计只描述产品边界和技术规则，接口、使用、运维和历史发布文档分别承担各自职责；`docs/archive/` 不作为开发依据。
 
@@ -41,11 +41,11 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 9 | 真实依赖测试失败关闭 | 已完成 | 显式配置数据库时，连接、迁移和初始化失败必须导致测试非零退出，不能回退内存路由后报告通过。 |
 | 10 | OIDC 登录的限流与账号锁定 | 已完成 | 与已有密码登录入口共用失败计数、账号锁定及来源限流，阻止改用浏览器登录绕过限制。 |
 | 11 | MFA 验证的猜码保护 | 已完成 | TOTP、恢复码和 enrollment 确认共享稳定用户 ID 与来源 IP 请求额度，并在解密和 bcrypt 之前限流。 |
-| 12 | 改密后撤销旧恢复链接 | 下一切片 | 自行改密、管理员 reset 和管理员 update password 均在同一事务撤销待消费恢复 token。 |
+| 12 | 改密后撤销旧恢复链接 | 进行中 | 自行改密、管理员 reset 和管理员 update password 均在同一事务撤销待消费恢复 token；代码和回归用例已加入，Docker 验收待环境恢复。 |
 | 13 | JWT 轮换状态的持久化与恢复 | 后续候选 | 保存 passive key 的绝对到期时间，重启不能重新启用已过期旧 key；失败写入保持一致。 |
 | 14 | 默认生产 Compose 的启动闭环 | 后续候选 | 对齐必需配置、密钥卷权限和文档，以容器启动、readiness 及重启证明模板可用。 |
 
-阶段 8–14 来自第 11 节的现有代码缺陷。阶段 8–11 已修复并完成本地验证；只有阶段 12 可以直接进入实现，其余候选按表中顺序在前一切片完成后复核。MFA enrollment 并发、组织角色类型兼容性和成员暂停后的 OIDC code 撤销列为阶段 14 后的候选，见第 8.6 节。新增协议和控制台功能仍遵守第 8.2 节的进入条件。
+阶段 8–14 来自第 11 节的现有代码缺陷。阶段 8–11 已修复并完成本地验证；阶段 12 当前进行中，其余候选按表中顺序在前一切片完成后复核。MFA enrollment 并发、组织角色类型兼容性和成员暂停后的 OIDC code 撤销列为阶段 14 后的候选，见第 8.6 节。新增协议和控制台功能仍遵守第 8.2 节的进入条件。
 
 阶段 3 源于用户对账户恢复 UI 集成测试的明确要求。Playwright/Chromium 回归、Computer Use 本地可见窗口验收和 CI 检查均已完成。2026-10-03 的 CI run `37089762986`（提交 `1d0b616`）中，Security Audit、Run Tests 和 Code Coverage 全部通过；Run Tests 包含 `Test account recovery UI`，Codecov 上传也成功。Computer Use 检查未提交真实密码变更。浏览器测试中使用受控 API 响应的场景只证明 UI 交互约定，不替代真实 HTTP、PostgreSQL 和 Mailpit 集成测试。2026-10-03 源码核对发现 OIDC 登录页尚未提供恢复入口，因此选择阶段 4；阶段 5 只解决已有功能的验证缺口，不扩展新协议。
 
@@ -303,6 +303,8 @@ SMTP 运维文档均已完成并通过本机 Docker 全量验证。`/metrics` �
 - `/v1/user/mfa/verify` 与 `/v1/user/mfa/totp/verify` 使用同一个 `mfa:account:{uid}` 桶，以及按可信 IP 计算的 `mfa:source:{ip}` 桶；分别复用 `AUTH_RATE_LIMIT_MAX_REQUESTS`、`AUTH_GLOBAL_RATE_LIMIT_MAX_REQUESTS`，并使用 `AUTH_RATE_LIMIT_WINDOW_SECONDS` 窗口。UID 稳定键让更换 token、TOTP/恢复码切换和 enrollment 状态都共享额度。
 - 单一因子提交均计入额度，包括成功验证；超限在加载因子、解密 TOTP seed 或 bcrypt 验证恢复码前返回 429，并增加固定基数的拒绝指标。请求不写入验证码或恢复码审计信息。
 - 不新增 MFA 配置、API、数据迁移或锁定状态。已配置 Redis 的实例共享已有 Redis 限流键；非生产且未配置 Redis 时由现有 AppState 内存状态实现单进程额度，生产环境沿用现有限流规则在没有 Redis 时拒绝请求。回滚撤销两个 handler 的额度检查和文档条款，会重新开放无界猜码尝试。
+
+阶段 12（2026-11-01）当前进行中。`update_user` 的管理员改密、`reset_user_password` 的管理员 reset、`change_user_password` 的用户改密和恢复 token 消费均在同一事务内撤销待消费 `password_reset_tokens`。四条路径统一先锁用户再锁 token，审计详情只记录撤销数量，不写入 token。新增 PostgreSQL 回归覆盖三条改密路径、错误当前密码的失败回滚和改密与恢复消费并发时不死锁；本地 `cargo check`、严格 Clippy 和 153 项库测试已通过。仓库 Docker 入口因当前环境没有 `docker` 命令而未能启动 PostgreSQL 17 与 Mailpit，因此真实数据库、并发和失败清理验收仍待执行；在此之前不得把阶段 12 标为已完成。
 
 | 顺序 | 对应问题 | 最小实现边界 | 必须能失败的验收 | 迁移、审计和回滚 |
 | --- | --- | --- | --- | --- |
