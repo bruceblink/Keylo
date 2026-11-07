@@ -70,6 +70,12 @@ services:
       HTTP_LOG_BODY_MAX_BYTES: ${HTTP_LOG_BODY_MAX_BYTES:-8192}
     ports:
       - "${SERVER_PORT:-2345}:2345"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:2345/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     volumes:
       - ${JWT_KEYS_DIR:-./keys}:/app/keys
       - ./logs:/app/logs

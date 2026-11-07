@@ -138,6 +138,8 @@ jobs:
         assert service['environment']['MFA_SECRET_KEY'] == '01234567890123456789012345678901'
         keys_mount = next(item for item in service['volumes'] if item['target'] == '/app/keys')
         assert keys_mount.get('read_only') is not True
+        healthcheck = service['healthcheck']
+        assert healthcheck['test'][-1] == 'http://127.0.0.1:2345/readyz'
         PY
         docker build --target runtime --tag keylo-ci:compose-check .
 
