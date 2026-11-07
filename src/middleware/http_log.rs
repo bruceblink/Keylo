@@ -34,26 +34,33 @@ pub async fn request_response_logging_middleware(
     let max_body_bytes = state.config.http_log_body_max_bytes;
 
     let (parts, body) = request.into_parts();
-    let (request, request_body) =
-        match collect_body_for_logging(body, &headers, max_body_bytes, "request").await {
-            BodyLogResult::Collected { body, log } => {
-                (Request::from_parts(parts, Body::from(body)), log)
-            }
-            BodyLogResult::Skipped { body, log } => (Request::from_parts(parts, body), log),
-            BodyLogResult::Failed { error } => {
-                tracing::warn!(
-                    client_ip = %client_ip,
-                    method = %method,
-                    uri = %redact_uri(&uri),
-                    error = %error,
-                    "Failed to read HTTP request body for logging"
-                );
-                state
-                    .runtime_metrics
-                    .request_finished(400, started_at.elapsed().as_millis() as u64);
-                return StatusCode::BAD_REQUEST.into_response();
-            }
-        };
+    let (request, request_body) = match collect_body_for_logging(
+        body,
+        &headers,
+        max_body_bytes,
+        "request",
+        uri.path().starts_with("/v1/user/mfa/"),
+    )
+    .await
+    {
+        BodyLogResult::Collected { body, log } => {
+            (Request::from_parts(parts, Body::from(body)), log)
+        }
+        BodyLogResult::Skipped { body, log } => (Request::from_parts(parts, body), log),
+        BodyLogResult::Failed { error } => {
+            tracing::warn!(
+                client_ip = %client_ip,
+                method = %method,
+                uri = %redact_uri(&uri),
+                error = %error,
+                "Failed to read HTTP request body for logging"
+            );
+            state
+                .runtime_metrics
+                .request_finished(400, started_at.elapsed().as_millis() as u64);
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
     let request_headers = format_headers_for_log(&headers);
 
     let response = next.run(request).await;
@@ -62,8 +69,14 @@ pub async fn request_response_logging_middleware(
     let response_body_logging_allowed = should_log_response_body(&uri, &response_headers);
     let (response_parts, response_body) = response.into_parts();
     let (response, response_body) = if response_body_logging_allowed {
-        match collect_body_for_logging(response_body, &response_headers, max_body_bytes, "response")
-            .await
+        match collect_body_for_logging(
+            response_body,
+            &response_headers,
+            max_body_bytes,
+            "response",
+            false,
+        )
+        .await
         {
             BodyLogResult::Collected { body, log } => {
                 (Response::from_parts(response_parts, Body::from(body)), log)
@@ -129,6 +142,7 @@ async fn collect_body_for_logging(
     headers: &HeaderMap,
     max_body_bytes: usize,
     label: &str,
+    redact_generic_code: bool,
 ) -> BodyLogResult {
     if max_body_bytes == 0 {
         return BodyLogResult::Skipped {
@@ -158,7 +172,7 @@ async fn collect_body_for_logging(
     match body.collect().await {
         Ok(collected) => {
             let body = collected.to_bytes();
-            let log = format_body_for_log(headers, &body, max_body_bytes);
+            let log = format_body_for_log(headers, &body, max_body_bytes, redact_generic_code);
             BodyLogResult::Collected { body, log }
         }
         Err(err) => BodyLogResult::Failed {
@@ -218,6 +232,11 @@ fn format_headers_for_log(headers: &HeaderMap) -> String {
     for (name, value) in headers.iter() {
         let value = if is_sensitive_header(name) {
             REDACTED.to_string()
+        } else if name == axum::http::header::LOCATION {
+            value
+                .to_str()
+                .map(redact_location_header)
+                .unwrap_or_else(|_| "[non-utf8]".to_string())
         } else {
             value
                 .to_str()
@@ -230,7 +249,19 @@ fn format_headers_for_log(headers: &HeaderMap) -> String {
     Value::Object(values).to_string()
 }
 
-fn format_body_for_log(headers: &HeaderMap, body: &Bytes, max_body_bytes: usize) -> String {
+fn redact_location_header(value: &str) -> String {
+    let Ok(uri) = value.parse::<Uri>() else {
+        return value.to_string();
+    };
+    redact_uri(&uri)
+}
+
+fn format_body_for_log(
+    headers: &HeaderMap,
+    body: &Bytes,
+    max_body_bytes: usize,
+    redact_generic_code: bool,
+) -> String {
     if body.is_empty() {
         return String::new();
     }
@@ -247,7 +278,7 @@ fn format_body_for_log(headers: &HeaderMap, body: &Bytes, max_body_bytes: usize)
     let formatted = if content_type.contains("json") {
         match serde_json::from_slice::<Value>(body) {
             Ok(mut value) => {
-                redact_json_value(&mut value);
+                redact_json_value(&mut value, redact_generic_code);
                 serde_json::to_string(&value).unwrap_or_else(|_| "[invalid json]".to_string())
             }
             Err(_) => text_body(body).unwrap_or_else(|| non_text_body(body.len())),
@@ -292,20 +323,20 @@ fn non_text_body(len: usize) -> String {
     format!("[non-text body: {len} bytes]")
 }
 
-fn redact_json_value(value: &mut Value) {
+fn redact_json_value(value: &mut Value, redact_generic_code: bool) {
     match value {
         Value::Object(map) => {
             for (key, value) in map.iter_mut() {
-                if is_sensitive_key(key) {
+                if is_sensitive_key(key, redact_generic_code) {
                     *value = Value::String(REDACTED.to_string());
                 } else {
-                    redact_json_value(value);
+                    redact_json_value(value, redact_generic_code);
                 }
             }
         }
         Value::Array(values) => {
             for value in values {
-                redact_json_value(value);
+                redact_json_value(value, redact_generic_code);
             }
         }
         _ => {}
@@ -341,7 +372,7 @@ fn is_sensitive_header(name: &HeaderName) -> bool {
         || lower.contains("secret")
 }
 
-fn is_sensitive_key(key: &str) -> bool {
+fn is_sensitive_key(key: &str, redact_generic_code: bool) -> bool {
     let lower = key.to_ascii_lowercase();
     let lower = lower.trim_end_matches("[]");
 
@@ -363,7 +394,16 @@ fn is_sensitive_key(key: &str) -> bool {
             | "redis_password"
             | "code_verifier"
             | "credential"
-    ) || lower.ends_with("_password")
+            | "manual_entry_key"
+            | "provisioning_uri"
+            | "recovery_code"
+            | "recovery_codes"
+            | "totp_code"
+            | "verification_code"
+            | "email_verification_code"
+            | "password_reset_code"
+    ) || (redact_generic_code && matches!(lower, "code" | "authorization_code"))
+        || lower.ends_with("_password")
         || lower.ends_with("_secret")
         || lower.ends_with("_token")
         || lower.contains("cookie")
@@ -377,7 +417,7 @@ fn is_sensitive_query_or_form_key(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
     let lower = lower.trim_end_matches("[]");
 
-    is_sensitive_key(lower) || matches!(lower, "code" | "authorization_code")
+    is_sensitive_key(lower, true) || matches!(lower, "code" | "authorization_code")
 }
 
 fn truncate_for_log(value: &str, max_bytes: usize) -> String {
@@ -441,7 +481,7 @@ mod tests {
             r#"{"client_id":"cli","client_secret":"secret","code":"resource:code","admin_client_secret_configured":true,"service_token_endpoint":"/v1/service/token","authorization_url":"https://idp.example/auth","data":{"refresh_token":"token"}}"#,
         );
 
-        let formatted = format_body_for_log(&headers, &body, 2048);
+        let formatted = format_body_for_log(&headers, &body, 2048, false);
 
         assert!(formatted.contains(r#""client_secret":"***""#));
         assert!(formatted.contains(r#""refresh_token":"***""#));
@@ -463,7 +503,7 @@ mod tests {
         let body = Bytes::from("client_id=cli&client_secret=secret&code=oauth-code&scope=read");
 
         assert_eq!(
-            format_body_for_log(&headers, &body, 2048),
+            format_body_for_log(&headers, &body, 2048, false),
             "client_id=cli&client_secret=***&code=***&scope=read"
         );
     }
@@ -478,5 +518,38 @@ mod tests {
         let uri = "/setup/assets/index.js".parse::<Uri>().unwrap();
 
         assert!(!should_log_response_body(&uri, &headers));
+    }
+
+    #[test]
+    fn mfa_seed_and_recovery_codes_are_redacted_from_json() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        let body = Bytes::from(
+            r#"{"manual_entry_key":"JBSWY3DPEHPK3PXP","provisioning_uri":"otpauth://totp/Keylo:user?secret=JBSWY3DPEHPK3PXP","recovery_codes":["abc","def"],"verification_code":"123456"}"#,
+        );
+
+        let formatted = format_body_for_log(&headers, &body, 2048, true);
+
+        assert!(!formatted.contains("JBSWY3DPEHPK3PXP"));
+        assert!(!formatted.contains("abc"));
+        assert!(!formatted.contains("123456"));
+        assert!(formatted.matches(REDACTED).count() >= 4);
+    }
+
+    #[test]
+    fn oidc_authorization_code_is_redacted_from_location_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::LOCATION,
+            HeaderValue::from_static(
+                "https://client.example/callback?code=one-time-code&state=keep",
+            ),
+        );
+
+        let formatted = format_headers_for_log(&headers);
+
+        assert!(formatted.contains("code=***"));
+        assert!(formatted.contains("state=keep"));
+        assert!(!formatted.contains("one-time-code"));
     }
 }
