@@ -14,7 +14,7 @@ use crate::{
         consume_recovery_code_and_record_recent_verification,
         consume_totp_step_and_record_recent_verification, create_audit_log, delete_totp_credential,
         enable_totp_credential_with_recovery_codes, get_totp_credential,
-        has_recent_mfa_verification, save_pending_totp_credential,
+        has_recent_mfa_verification, save_pending_totp_credential_with_version,
     },
     handlers::{extract_client_ip, PeerAddr},
     models::{
@@ -270,12 +270,15 @@ async fn start_totp_enrollment(claims: Claims, State(state): State<AppState>) ->
         Ok(uri) => uri,
         Err(_) => return Err(bad_request_response("Unable to create TOTP enrollment")),
     };
-    if let Err(error) = save_pending_totp_credential(db, &user_id, &encrypted_seed).await {
-        return Err(internal_error_response(
-            "Failed to save MFA enrollment",
-            &error,
-        ));
-    }
+    match save_pending_totp_credential_with_version(
+        db, &user_id, &encrypted_seed,
+    )
+    .await
+    {
+        Ok(Some(_version)) => {}
+        Ok(None) => return Err(conflict_response("TOTP is already enabled")),
+        Err(error) => return Err(internal_error_response("Failed to save MFA enrollment", &error)),
+    };
     if let Err(error) = create_audit_log(
         db,
         "mfa.totp.enrollment_started",
@@ -332,7 +335,15 @@ async fn verify_totp_enrollment(
         None => return Err(bad_request_response("Invalid TOTP code")),
     };
     let recovery_codes = generate_recovery_codes();
-    match enable_totp_credential_with_recovery_codes(db, &user_id, step, &recovery_codes).await {
+    match enable_totp_credential_with_recovery_codes(
+        db,
+        &user_id,
+        step,
+        credential.enrollment_version,
+        &recovery_codes,
+    )
+    .await
+    {
         Ok(true) => {}
         Ok(false) => return Err(conflict_response("TOTP enrollment is no longer pending")),
         Err(error) => return Err(internal_error_response("Failed to enable TOTP", &error)),

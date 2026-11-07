@@ -16,6 +16,7 @@ pub const MFA_RECENT_VERIFICATION_SECONDS: i64 = 600;
 pub struct MfaTotpCredential {
     pub user_id: String,
     pub encrypted_seed: String,
+    pub enrollment_version: i64,
     pub enabled_at: Option<chrono::NaiveDateTime>,
     pub last_verified_step: Option<i64>,
     pub created_at: chrono::NaiveDateTime,

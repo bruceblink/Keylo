@@ -10,21 +10,35 @@ pub async fn save_pending_totp_credential(
     user_id: &str,
     encrypted_seed: &str,
 ) -> Result<()> {
-    sqlx::query(
+    save_pending_totp_credential_with_version(pool, user_id, encrypted_seed)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("TOTP is already enabled"))?;
+    Ok(())
+}
+
+/// Save a pending seed and return its generation. An enabled factor cannot be replaced.
+pub async fn save_pending_totp_credential_with_version(
+    pool: &PgPool,
+    user_id: &str,
+    encrypted_seed: &str,
+) -> Result<Option<i64>> {
+    let row = sqlx::query_as::<_, (i64,)>(
         "INSERT INTO mfa_totp_credentials (user_id, encrypted_seed)
          VALUES ($1, $2)
          ON CONFLICT (user_id) DO UPDATE
          SET encrypted_seed = EXCLUDED.encrypted_seed,
              enabled_at = NULL,
              last_verified_step = NULL,
-             updated_at = NOW()",
+             enrollment_version = mfa_totp_credentials.enrollment_version + 1,
+             updated_at = NOW()
+         WHERE mfa_totp_credentials.enabled_at IS NULL
+         RETURNING enrollment_version",
     )
     .bind(user_id)
     .bind(encrypted_seed)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-
-    Ok(())
+    Ok(row.map(|(version,)| version))
 }
 
 /// Load a user's MFA enrollment state for verification or administration.
@@ -33,7 +47,7 @@ pub async fn get_totp_credential(
     user_id: &str,
 ) -> Result<Option<MfaTotpCredential>> {
     Ok(sqlx::query_as(
-        "SELECT user_id, encrypted_seed, enabled_at, last_verified_step, created_at, updated_at
+        "SELECT user_id, encrypted_seed, enrollment_version, enabled_at, last_verified_step, created_at, updated_at
          FROM mfa_totp_credentials WHERE user_id = $1",
     )
     .bind(user_id)
@@ -43,13 +57,17 @@ pub async fn get_totp_credential(
 
 /// Mark a credential enabled only after a successful TOTP verification.
 pub async fn enable_totp_credential(pool: &PgPool, user_id: &str, step: i64) -> Result<bool> {
+    let Some(credential) = get_totp_credential(pool, user_id).await? else {
+        return Ok(false);
+    };
     let result = sqlx::query(
         "UPDATE mfa_totp_credentials
          SET enabled_at = NOW(), last_verified_step = $2, updated_at = NOW()
-         WHERE user_id = $1 AND enabled_at IS NULL",
+         WHERE user_id = $1 AND enabled_at IS NULL AND enrollment_version = $3",
     )
     .bind(user_id)
     .bind(step)
+    .bind(credential.enrollment_version)
     .execute(pool)
     .await?;
 
@@ -61,6 +79,7 @@ pub async fn enable_totp_credential_with_recovery_codes(
     pool: &PgPool,
     user_id: &str,
     step: i64,
+    enrollment_version: i64,
     recovery_codes: &[String],
 ) -> Result<bool> {
     if recovery_codes.len() != RECOVERY_CODE_COUNT {
@@ -77,10 +96,11 @@ pub async fn enable_totp_credential_with_recovery_codes(
     let enabled = sqlx::query(
         "UPDATE mfa_totp_credentials
          SET enabled_at = NOW(), last_verified_step = $2, updated_at = NOW()
-         WHERE user_id = $1 AND enabled_at IS NULL",
+         WHERE user_id = $1 AND enabled_at IS NULL AND enrollment_version = $3",
     )
     .bind(user_id)
     .bind(step)
+    .bind(enrollment_version)
     .execute(&mut *transaction)
     .await?
     .rows_affected()
