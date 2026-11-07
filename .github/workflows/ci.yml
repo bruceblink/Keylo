@@ -11,6 +11,9 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'audit.toml'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.env.example'
       - 'scripts/*.ps1'
       - 'scripts/*.sh'
       - 'scripts/*.py'
@@ -47,6 +50,9 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'audit.toml'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.env.example'
       - 'scripts/*.ps1'
       - 'scripts/*.sh'
       - 'scripts/*.py'
@@ -109,6 +115,31 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
+
+    - name: Validate production Compose and image
+      env:
+        OIDC_PUBLIC_ISSUER: https://identity.example.com
+        MFA_SECRET_KEY: 01234567890123456789012345678901
+        ADMIN_CLIENT_ID: cli-admin-root
+        ENVIRONMENT: production
+      run: |
+        set -euo pipefail
+        trap 'rm -rf .secrets /tmp/keylo-compose.json' EXIT
+        mkdir -p .secrets
+        for secret_file in .database_password .database_password.enc .database_password.key .redis.acl .redis_password.enc .redis_password.key; do
+          printf 'ci-placeholder' > ".secrets/${secret_file}"
+        done
+        docker compose config --format json > /tmp/keylo-compose.json
+        python3 - <<'PY'
+        import json
+        config = json.load(open('/tmp/keylo-compose.json', encoding='utf-8'))
+        service = config['services']['keylo']
+        assert service['environment']['OIDC_PUBLIC_ISSUER'] == 'https://identity.example.com'
+        assert service['environment']['MFA_SECRET_KEY'] == '01234567890123456789012345678901'
+        keys_mount = next(item for item in service['volumes'] if item['target'] == '/app/keys')
+        assert keys_mount.get('read_only') is not True
+        PY
+        docker build --target runtime --tag keylo-ci:compose-check .
 
     - name: Validate Markdown relative links
       shell: pwsh

@@ -50,6 +50,8 @@ services:
     environment:
       TZ: UTC
       DATABASE_URL: postgres://keylo_user@postgres:5432/keylo
+      OIDC_PUBLIC_ISSUER: ${OIDC_PUBLIC_ISSUER:?OIDC_PUBLIC_ISSUER must be set for production Compose}
+      MFA_SECRET_KEY: ${MFA_SECRET_KEY:?MFA_SECRET_KEY must be set for production Compose}
       SERVER_PORT: ${SERVER_PORT:-2345}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       ADMIN_CLIENT_ID: ${ADMIN_CLIENT_ID}
@@ -69,7 +71,7 @@ services:
     ports:
       - "${SERVER_PORT:-2345}:2345"
     volumes:
-      - ./keys:/app/keys:ro
+      - ${JWT_KEYS_DIR:-./keys}:/app/keys
       - ./logs:/app/logs
     secrets:
       - source: database_password_enc
