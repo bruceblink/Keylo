@@ -1654,6 +1654,7 @@ pub async fn auth_rotate_jwt_key(
     let (old_private, old_public) = state.jwt_keys.active_key_material();
     let (new_private, new_public) =
         crate::config::generate_rsa_key_pair().map_err(AuthError::InternalServerError)?;
+    let passive_expires_at = chrono::Utc::now().timestamp() + overlap_seconds;
 
     persist_rotation_file(
         &state.config.jwt_passive_private_key_path,
@@ -1666,12 +1667,17 @@ pub async fn auth_rotate_jwt_key(
         false,
     )?;
     persist_rotation_file(&state.config.jwt_passive_key_id_path, &old_key_id, false)?;
+    persist_rotation_file(
+        &state.config.jwt_passive_key_expires_at_path,
+        &passive_expires_at.to_string(),
+        false,
+    )?;
     persist_rotation_file(&state.config.jwt_private_key_path, &new_private, true)?;
     persist_rotation_file(&state.config.jwt_public_key_path, &new_public, false)?;
     persist_rotation_file(&state.config.jwt_key_id_path, &key_id, false)?;
     state
         .jwt_keys
-        .rotate(&key_id, &new_private, &new_public, overlap_seconds)
+        .rotate_at(&key_id, &new_private, &new_public, passive_expires_at)
         .map_err(AuthError::InternalServerError)?;
 
     let detail = format!(
@@ -1700,6 +1706,7 @@ pub async fn auth_retire_jwt_key(
     remove_rotation_file(&state.config.jwt_passive_private_key_path)?;
     remove_rotation_file(&state.config.jwt_passive_public_key_path)?;
     remove_rotation_file(&state.config.jwt_passive_key_id_path)?;
+    remove_rotation_file(&state.config.jwt_passive_key_expires_at_path)?;
     audit_jwt_key_event(
         &state,
         "jwt_signing_key.retired",
@@ -1728,6 +1735,7 @@ pub async fn auth_rollback_jwt_key(
     let (active_private, active_public) = state.jwt_keys.active_key_material();
     let active_key_id = state.jwt_keys.active_key_id();
     let overlap_seconds = state.config.jwt_key_overlap_seconds;
+    let passive_expires_at = chrono::Utc::now().timestamp() + overlap_seconds;
     persist_rotation_file(
         &state.config.jwt_passive_private_key_path,
         &active_private,
@@ -1739,12 +1747,17 @@ pub async fn auth_rollback_jwt_key(
         false,
     )?;
     persist_rotation_file(&state.config.jwt_passive_key_id_path, &active_key_id, false)?;
+    persist_rotation_file(
+        &state.config.jwt_passive_key_expires_at_path,
+        &passive_expires_at.to_string(),
+        false,
+    )?;
     persist_rotation_file(&state.config.jwt_private_key_path, &passive_private, true)?;
     persist_rotation_file(&state.config.jwt_public_key_path, &passive_public, false)?;
     persist_rotation_file(&state.config.jwt_key_id_path, &request.key_id, false)?;
     state
         .jwt_keys
-        .rollback(&request.key_id, overlap_seconds)
+        .rollback_at(&request.key_id, passive_expires_at)
         .map_err(AuthError::InternalServerError)?;
     audit_jwt_key_event(
         &state,

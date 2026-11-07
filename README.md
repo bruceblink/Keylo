@@ -347,6 +347,7 @@ Cargo.toml           # 项目依赖配置
 | `JWT_PASSIVE_PRIVATE_KEY_PATH` | `./keys/passive-private.pem` | 回滚用的 passive RSA 私钥文件路径，可选 |
 | `JWT_PASSIVE_PUBLIC_KEY_PATH` | `./keys/passive-public.pem` | overlap 期间发布的 passive RSA 公钥文件路径，可选 |
 | `JWT_PASSIVE_KEY_ID_PATH` | `./keys/passive-key-id` | passive `kid` 文件路径，可选 |
+| `JWT_PASSIVE_KEY_EXPIRES_AT_PATH` | `./keys/passive-key-expires-at` | passive 绝对 Unix 到期时间文件路径；重启时缺失则不恢复 passive key |
 | `JWT_PASSIVE_PRIVATE_KEY_PEM` | `` | passive 私钥 PEM 内容，可替代路径 |
 | `JWT_PASSIVE_PUBLIC_KEY_PEM` | `` | passive 公钥 PEM 内容，可替代路径 |
 | `JWT_PASSIVE_KEY_ID` | `` | passive `kid`，必须与 passive 公钥一起配置 |

@@ -16,11 +16,15 @@ Optional passive startup files are controlled by:
 - `JWT_PASSIVE_PRIVATE_KEY_PATH`
 - `JWT_PASSIVE_PUBLIC_KEY_PATH`
 - `JWT_PASSIVE_KEY_ID_PATH`
+- `JWT_PASSIVE_KEY_EXPIRES_AT_PATH`
 - `JWT_KEY_OVERLAP_SECONDS` (default `300`, allowed range `1..2592000`)
 
-Configure the passive id and public key together. A passive private key is only
-needed for rollback. Production deployments must provide persistent active key
-files and should back up the active/passive files before maintenance.
+Configure the passive id, public key, and absolute expiry together. The expiry
+file contains a Unix timestamp written during rotation. On restart Keylo loads
+the passive key only while that timestamp is still in the future; a missing
+expiry never falls back to the configured overlap. A passive private key is
+only needed for rollback. Production deployments must provide persistent active
+key files and should back up the active/passive files before maintenance.
 
 ## Rotate
 
@@ -76,7 +80,7 @@ Content-Type: application/json
 ```
 
 Retirement removes the passive key from runtime verification, deletes its
-persistent passive files, and records `jwt_signing_key.retired`. Tokens signed
+persistent passive files and expiry marker, and records `jwt_signing_key.retired`. Tokens signed
 with the retired key are rejected even if their normal JWT expiry has not been
 reached.
 

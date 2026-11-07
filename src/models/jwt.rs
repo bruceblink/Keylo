@@ -232,18 +232,23 @@ impl Keys {
         let passive = match (
             config.jwt_passive_key_id.as_deref(),
             config.jwt_passive_public_key_pem.as_deref(),
+            config.jwt_passive_key_expires_at,
         ) {
-            (Some(key_id), Some(public_key_pem)) => vec![KeyPair::from_pem(
-                key_id.to_string(),
-                config.jwt_passive_private_key_pem.as_deref(),
-                public_key_pem,
-                Some(chrono::Utc::now().timestamp() + config.jwt_key_overlap_seconds),
-            )?],
-            (None, None) => Vec::new(),
+            (Some(key_id), Some(public_key_pem), Some(expires_at))
+                if expires_at > chrono::Utc::now().timestamp() =>
+            {
+                vec![KeyPair::from_pem(
+                    key_id.to_string(),
+                    config.jwt_passive_private_key_pem.as_deref(),
+                    public_key_pem,
+                    Some(expires_at),
+                )?]
+            }
+            (Some(_), Some(_), Some(_)) => Vec::new(),
+            (None, None, None) => Vec::new(),
             _ => {
                 return Err(
-                    "JWT_PASSIVE_KEY_ID and JWT_PASSIVE_PUBLIC_KEY_PEM/PATH must be configured together"
-                        .to_string(),
+                    "JWT passive key requires key id, public key, and absolute expiry".to_string(),
                 )
             }
         };
@@ -324,11 +329,23 @@ impl Keys {
         public_key_pem: &str,
         overlap_seconds: i64,
     ) -> Result<(), String> {
+        let expires_at = chrono::Utc::now().timestamp() + overlap_seconds;
+        self.rotate_at(key_id, private_key_pem, public_key_pem, expires_at)
+    }
+
+    /// Promote a new signer with an explicitly persisted absolute passive expiry.
+    pub fn rotate_at(
+        &self,
+        key_id: &str,
+        private_key_pem: &str,
+        public_key_pem: &str,
+        passive_expires_at: i64,
+    ) -> Result<(), String> {
         if key_id.trim().is_empty() {
             return Err("JWT key id must not be empty".to_string());
         }
-        if overlap_seconds <= 0 {
-            return Err("JWT key overlap must be positive".to_string());
+        if passive_expires_at <= chrono::Utc::now().timestamp() {
+            return Err("JWT passive key expiry must be in the future".to_string());
         }
         let mut active = self
             .active
@@ -338,7 +355,7 @@ impl Keys {
             return Err("JWT key id must differ from the active key".to_string());
         }
         let mut previous = active.clone();
-        previous.expires_at = Some(chrono::Utc::now().timestamp() + overlap_seconds);
+        previous.expires_at = Some(passive_expires_at);
         let next = KeyPair::from_pem(
             key_id.to_string(),
             Some(private_key_pem),
@@ -364,8 +381,13 @@ impl Keys {
 
     /// Restore the passive private key as the signer while retaining the current signer for overlap.
     pub fn rollback(&self, key_id: &str, overlap_seconds: i64) -> Result<(), String> {
-        if overlap_seconds <= 0 {
-            return Err("JWT key overlap must be positive".to_string());
+        self.rollback_at(key_id, chrono::Utc::now().timestamp() + overlap_seconds)
+    }
+
+    /// Restore a retained passive key with an explicitly persisted absolute expiry.
+    pub fn rollback_at(&self, key_id: &str, passive_expires_at: i64) -> Result<(), String> {
+        if passive_expires_at <= chrono::Utc::now().timestamp() {
+            return Err("JWT passive key expiry must be in the future".to_string());
         }
         let mut active = self
             .active
@@ -383,7 +405,7 @@ impl Keys {
             return Err("JWT passive key has no private key for rollback".to_string());
         }
         let mut previous = active.clone();
-        previous.expires_at = Some(chrono::Utc::now().timestamp() + overlap_seconds);
+        previous.expires_at = Some(passive_expires_at);
         let mut promoted = passive.remove(index);
         promoted.expires_at = None;
         *active = promoted;
@@ -630,6 +652,7 @@ mod tests {
         config.jwt_passive_key_id = Some("startup-passive".to_string());
         config.jwt_passive_private_key_pem = Some(passive_private.clone());
         config.jwt_passive_public_key_pem = Some(passive_public);
+        config.jwt_passive_key_expires_at = Some(chrono::Utc::now().timestamp() + 300);
 
         let keys = Keys::from_config(&config).expect("configured passive key should load");
         assert_eq!(keys.passive_key_ids(), vec!["startup-passive"]);
@@ -647,5 +670,34 @@ mod tests {
         .expect("passive token should sign");
         keys.decode_token(&passive_token)
             .expect("startup passive key should verify tokens");
+    }
+
+    #[test]
+    fn startup_does_not_reactivate_expired_passive_key() {
+        let mut config = crate::config::Config::default();
+        let (passive_private, passive_public) =
+            crate::config::generate_rsa_key_pair().expect("passive key should generate");
+        config.jwt_passive_key_id = Some("expired-passive".to_string());
+        config.jwt_passive_private_key_pem = Some(passive_private);
+        config.jwt_passive_public_key_pem = Some(passive_public);
+        config.jwt_passive_key_expires_at = Some(chrono::Utc::now().timestamp() - 1);
+
+        let keys = Keys::from_config(&config).expect("expired passive key should be ignored");
+        assert!(keys.passive_key_ids().is_empty());
+    }
+
+    #[test]
+    fn startup_rejects_passive_key_without_persisted_expiry() {
+        let mut config = crate::config::Config::default();
+        let (passive_private, passive_public) =
+            crate::config::generate_rsa_key_pair().expect("passive key should generate");
+        config.jwt_passive_key_id = Some("unknown-expiry".to_string());
+        config.jwt_passive_private_key_pem = Some(passive_private);
+        config.jwt_passive_public_key_pem = Some(passive_public);
+
+        match Keys::from_config(&config) {
+            Ok(_) => panic!("unknown expiry must fail closed"),
+            Err(error) => assert!(error.contains("absolute expiry")),
+        }
     }
 }

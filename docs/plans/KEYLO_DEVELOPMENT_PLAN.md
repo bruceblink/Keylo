@@ -45,7 +45,7 @@ Keylo 的主线目标是让通用 IAM 更容易部署、接入、理解和排障
 | 11 | MFA 验证的猜码保护 | 已完成 | TOTP、恢复码和 enrollment 确认共享稳定用户 ID 与来源 IP 请求额度，并在解密和 bcrypt 之前限流。 |
 | 12 | 改密后撤销旧恢复链接 | 已完成 | 修复已随 `1e5a15f` 进入远端；本轮 Windows MSVC 检查、WSL Docker 全量测试和故障检查通过，补齐真实数据库与 SMTP 验收。 |
 | 13 | 认证日志敏感值脱敏 | 进行中 | 新 R12：MFA seed、恢复码、验证码和 OIDC 重定向授权码已从 HTTP 访问日志字段中脱敏；待可用 Rust 依赖环境完成真实 Router 回归。 |
-| 14 | JWT 轮换状态的持久化与恢复 | 后续候选 | R5：保存 passive key 的绝对到期时间，重启不能重新启用已过期旧 key；失败写入保持一致。 |
+| 14 | JWT 轮换状态的持久化与恢复 | 进行中 | R5：已加入 passive key 绝对到期时间持久化和启动时 fail-closed 加载；待 Rust 依赖环境完成轮换、重启、失败写入回归。 |
 | 15 | 默认生产 Compose 的启动与回归闭环 | 后续候选 | R6、R11：对齐必需配置、密钥卷权限、部署文件触发规则和实际镜像检查，以启动、readiness 及重启证明模板可用。 |
 | 16 | MFA 因子启用的并发一致性 | 后续候选 | R8：确认种子的同一代次后才能启用，迟到的启用准备请求不得覆盖已启用因子。 |
 | 17 | 角色类型变更的组织绑定检查 | 后续候选 | R9：角色 update/restore 与授予共用事务和角色锁，检查三类绑定后再修改类型。 |
@@ -395,7 +395,7 @@ Windows MSVC、本机 WSL Docker 和前端构建证据分别记录在第 4 节�
 | --- | --- | --- | --- |
 | R12a：MFA 凭据进入 HTTP 日志 | P1 | 已修复：HTTP JSON 字段脱敏覆盖 TOTP seed、provisioning URI、恢复码和验证码；既有 header/form 脱敏保持。日志中间件只替换日志副本，不修改客户端响应。 | 阶段 13。新增单元回归覆盖合成 enrollment 响应字段；真实 Router 回归待 Rust 依赖环境可用后执行。 |
 | R12b：OIDC 重定向授权码进入响应头日志 | P2 | 已修复：`Location` 头仅在日志格式化副本中解析并脱敏 `code` 查询参数，客户端收到的重定向保持原值。 | 阶段 13。新增回归确认日志隐藏 code、保留 state；真实 OIDC Router 回归待 Rust 依赖环境可用后执行。 |
-| R5：JWT 备用密钥重启后重新生效，失败写入不一致 | P1 | [启动加载](../../src/models/jwt.rs#L236) 仍按启动时间加 overlap，没有读取绝对到期时间。[轮换](../../src/handlers/auth.rs#L1658) 先更新六个文件，再由 [Keys::rotate](../../src/models/jwt.rs#L337) 检查重复 active kid；[retire](../../src/handlers/auth.rs#L1697) 先改内存再删文件。逐个文件替换不能保证整套材料和内存一致。入口要求实时平台管理权限；已启用 MFA 的人类账号还要求近期验证，管理 client 不走人类 MFA。这些限制不消除正常重启和磁盘失败影响。 | 阶段 14。先校验，再以明确的恢复步骤保存完整 keyset 和绝对期限；验证重启、重复 kid、只读目录和中途写失败。 |
+| R5：JWT 备用密钥重启后重新生效，失败写入不一致 | P1 | 已修复重启复活路径：轮换和回滚写入 passive 绝对 Unix 到期时间，启动只加载未来到期的 passive key，缺少到期标记时 fail-closed；retire 同步删除到期标记。当前仍需真实管理 HTTP 故障注入验证多文件写入失败时的一致性。 | 阶段 14。完成真实轮换、重启、重复 kid、只读目录和中途写失败回归后关闭。 |
 | R6：默认生产 Compose 缺启动配置，密钥存储不可写 | P1 | [Compose 环境](../../docker-compose.yml#L50) 默认 production，却未映射 `OIDC_PUBLIC_ISSUER` 和 `MFA_SECRET_KEY`；[issuer 校验](../../src/config.rs#L1262) 和 [MFA key 校验](../../src/config.rs#L1047) 要求两者。宿主 `.env` 不会自动注入未映射变量。[只读 keys 卷](../../docker-compose.yml#L72) 可用于固定预置密钥，但不能满足托管轮换、回滚和删除文件。 | 阶段 15。区分固定只读密钥模式与托管轮换模式，以合成生产配置完成镜像启动、readiness、重启和密钥操作；不得通过关闭生产检查让模板通过。 |
 | R11：部署文件变更没有质量 CI 保障 | P2 | [push/PR 路径过滤](../../.github/workflows/ci.yml#L3) 未列 Dockerfile 和 Compose 输入。当前 Run Tests 构建 Web 和 Rust，不构建生产镜像或启动默认 Compose；[发布流程](../../.github/workflows/release.yml) 才构建镜像。仅改部署模板可能不触发检查，应用测试通过也不能覆盖 R6。 | 随阶段 15 补齐实际部署输入和对应检查。检查路径规则、镜像构建与合成配置；本轮不查询运行中的 CI。 |
 | R8：MFA 确认未绑定种子代次 | P2 | [验证码处理](../../src/routes/mfa.rs#L315) 读取并验证 A 后，[启用写入](../../src/db/mfa.rs#L76) 只按 user_id 和 pending 状态判断，不能识别并发准备请求写入 B；[待启用记录写入](../../src/db/mfa.rs#L13) 还可覆盖刚启用的状态。重复确认和恢复码事务已有保护，但不能消除种子替换交错。 | 阶段 16。用版本或种子标识绑定读取和写入；真实 PostgreSQL 控制两种交错，不能只新增顺序测试。 |

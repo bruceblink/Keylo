@@ -31,6 +31,7 @@ const DEFAULT_JWT_KEY_ID_PATH: &str = "./keys/key-id";
 const DEFAULT_JWT_PASSIVE_PRIVATE_KEY_PATH: &str = "./keys/passive-private.pem";
 const DEFAULT_JWT_PASSIVE_PUBLIC_KEY_PATH: &str = "./keys/passive-public.pem";
 const DEFAULT_JWT_PASSIVE_KEY_ID_PATH: &str = "./keys/passive-key-id";
+const DEFAULT_JWT_PASSIVE_KEY_EXPIRES_AT_PATH: &str = "./keys/passive-key-expires-at";
 const DEFAULT_JWT_KEY_OVERLAP_SECONDS: i64 = 300;
 const DEFAULT_DATABASE_PASSWORD_ENC_PATHS: [&str; 6] = [
     "./.secrets/.database_password.enc",
@@ -636,10 +637,14 @@ pub struct Config {
     pub jwt_passive_private_key_pem: Option<String>,
     /// Identifier for the passive verification key, when configured.
     pub jwt_passive_key_id: Option<String>,
+    /// Absolute Unix timestamp at which the passive key stops being valid.
+    pub jwt_passive_key_expires_at: Option<i64>,
     /// Path used to persist the active key id during rotation.
     pub jwt_key_id_path: String,
     /// Path used to persist the passive key id during rotation.
     pub jwt_passive_key_id_path: String,
+    /// Path used to persist the passive key absolute expiry during rotation.
+    pub jwt_passive_key_expires_at_path: String,
     /// Path used to persist the passive private key during rotation.
     pub jwt_passive_private_key_path: String,
     /// Path used to persist the passive public key during rotation.
@@ -810,6 +815,10 @@ impl Config {
         );
         let jwt_passive_key_id_path =
             env_or_default_path("JWT_PASSIVE_KEY_ID_PATH", DEFAULT_JWT_PASSIVE_KEY_ID_PATH);
+        let jwt_passive_key_expires_at_path = env_or_default_path(
+            "JWT_PASSIVE_KEY_EXPIRES_AT_PATH",
+            DEFAULT_JWT_PASSIVE_KEY_EXPIRES_AT_PATH,
+        );
         let jwt_passive_key_id = read_key_id(
             "JWT_PASSIVE_KEY_ID",
             "JWT_PASSIVE_KEY_ID_PATH",
@@ -818,6 +827,12 @@ impl Config {
         );
         let jwt_passive_key_id =
             (!jwt_passive_key_id.trim().is_empty()).then_some(jwt_passive_key_id);
+        let jwt_passive_key_expires_at = read_env_or_file_with_default_path(
+            "JWT_PASSIVE_KEY_EXPIRES_AT",
+            "JWT_PASSIVE_KEY_EXPIRES_AT_PATH",
+            &jwt_passive_key_expires_at_path,
+        )
+        .and_then(|value| value.trim().parse::<i64>().ok());
         let jwt_passive_public_key_pem = read_env_or_file_with_default_path(
             "JWT_PASSIVE_PUBLIC_KEY_PEM",
             "JWT_PASSIVE_PUBLIC_KEY_PATH",
@@ -930,8 +945,10 @@ impl Config {
             jwt_passive_public_key_pem,
             jwt_passive_private_key_pem,
             jwt_passive_key_id,
+            jwt_passive_key_expires_at,
             jwt_key_id_path,
             jwt_passive_key_id_path,
+            jwt_passive_key_expires_at_path,
             jwt_passive_private_key_path,
             jwt_passive_public_key_path,
             jwt_key_overlap_seconds,
@@ -1235,6 +1252,12 @@ impl Config {
                     .to_string(),
             );
         }
+        if self.jwt_passive_key_id.is_some() && self.jwt_passive_key_expires_at.is_none() {
+            errors.push(
+                "JWT_PASSIVE_KEY_EXPIRES_AT/PATH must contain an absolute Unix expiry when a passive key is configured"
+                    .to_string(),
+            );
+        }
         if self.jwt_passive_private_key_pem.is_some()
             && (self.jwt_passive_key_id.is_none() || self.jwt_passive_public_key_pem.is_none())
         {
@@ -1443,8 +1466,10 @@ mod tests {
             jwt_passive_public_key_pem: None,
             jwt_passive_private_key_pem: None,
             jwt_passive_key_id: None,
+            jwt_passive_key_expires_at: None,
             jwt_key_id_path: "./keys/key-id".to_string(),
             jwt_passive_key_id_path: "./keys/passive-key-id".to_string(),
+            jwt_passive_key_expires_at_path: "./keys/passive-key-expires-at".to_string(),
             jwt_passive_private_key_path: "./keys/passive-private.pem".to_string(),
             jwt_passive_public_key_path: "./keys/passive-public.pem".to_string(),
             jwt_key_overlap_seconds: 300,

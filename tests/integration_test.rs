@@ -768,6 +768,8 @@ mod tests {
         config.jwt_passive_public_key_path =
             key_dir.join("passive-public.pem").display().to_string();
         config.jwt_passive_key_id_path = key_dir.join("passive-key-id").display().to_string();
+        config.jwt_passive_key_expires_at_path =
+            key_dir.join("passive-key-expires-at").display().to_string();
         config.jwt_key_overlap_seconds = 300;
         let server = setup_database_test_server_with_config(config).await;
 
